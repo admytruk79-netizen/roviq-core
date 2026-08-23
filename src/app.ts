@@ -6,6 +6,7 @@ import { ZodError } from 'zod';
 import { principalMiddleware } from './http/middleware/principal.js';
 import { healthRoutes } from './http/routes/health.js';
 import { authRoutes } from './http/routes/auth.js';
+import { coreRoutes } from './http/routes/core.js';
 import { demandRoutes } from './http/routes/demands.js';
 import { partnerRoutes } from './http/routes/partners.js';
 import { adminRoutes } from './http/routes/admin.js';
@@ -24,6 +25,7 @@ export async function buildApp() {
     await principalMiddleware(req, reply);
   });
   await app.register(authRoutes);
+  await app.register(coreRoutes);
   await app.register(demandRoutes);
   await app.register(partnerRoutes);
   await app.register(adminRoutes);
