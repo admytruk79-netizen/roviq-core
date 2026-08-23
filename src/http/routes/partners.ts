@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { pool } from '../../db/pool.js';
 import { audit } from '../../services/audit.js';
+import { raiseException, transitionCase } from '../../services/orchestration.js';
 import { requireRole } from '../middleware/principal.js';
 
 const capacityBody = z.object({
@@ -86,7 +87,27 @@ export async function partnerRoutes(app: FastifyInstance) {
       [body.outcome,id,req.principal.actorId]
     );
     if (!r.rowCount) return reply.code(404).send({ error: 'offer_not_found_or_not_owned' });
-    await audit(req.principal,'respond_offer','match_offer',id,'actor_scoped_offer',{ outcome: body.outcome });
-    return { offer: r.rows[0] };
+    const offer = r.rows[0];
+
+    let serviceCase = null;
+    if (offer.case_id) {
+      const c = await pool.query('select * from service_cases where id=$1',[offer.case_id]);
+      serviceCase = c.rows[0] ?? null;
+      if (serviceCase && body.outcome === 'accepted') {
+        await pool.query('update service_cases set current_owner_role=$1,current_owner_actor_id=$2,updated_at=now() where id=$3',[req.principal.role,req.principal.actorId,offer.case_id]);
+        const target = req.principal.role === 'diagnostic' ? 'diagnostic_in_progress' : req.principal.role === 'tow' ? 'tow_in_progress' : req.principal.role === 'parts' ? 'repair_in_progress' : 'repair_in_progress';
+        try { serviceCase = await transitionCase(req.principal,offer.case_id,target); } catch { /* domain-specific workflow may own the transition */ }
+      }
+      if (serviceCase && body.outcome === 'declined') {
+        if (serviceCase.state === 'provider_pending' && req.principal.role === 'partner') {
+          serviceCase = await transitionCase(req.principal,offer.case_id,'provider_selection',{ declinedOfferId:id });
+        } else {
+          await raiseException(offer.case_id,'OFFER_DECLINED',`${req.principal.role} declined an assigned offer.`,'warning',{ offerId:id,actorId:req.principal.actorId });
+        }
+      }
+    }
+
+    await audit(req.principal,'respond_offer','match_offer',id,'actor_scoped_offer',{ outcome: body.outcome, caseId:offer.case_id ?? null });
+    return { offer, case:serviceCase };
   });
 }
