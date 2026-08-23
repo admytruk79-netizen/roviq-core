@@ -8,6 +8,22 @@ const capacityBody = z.object({
   capacityType: z.string().min(1), quantity: z.number().nonnegative(), startAt: z.string().datetime(), endAt: z.string().datetime(), source: z.string().default('partner_declared')
 });
 
+const controlsBody = z.object({
+  routingEnabled: z.boolean().default(true),
+  acceptsOverflow: z.boolean().default(false),
+  releasesOverflow: z.boolean().default(false),
+  serviceRadiusMiles: z.number().positive().nullable().optional(),
+  operatingHours: z.record(z.unknown()).default({}),
+  acceptedJobTypes: z.array(z.string()).default([]),
+  excludedJobTypes: z.array(z.string()).default([]),
+  oemWarrantyRules: z.record(z.unknown()).default({}),
+  maxActiveJobs: z.number().int().nonnegative().nullable().optional(),
+  earliestAvailableAt: z.string().datetime().nullable().optional(),
+  loanerParticipation: z.boolean().default(false),
+  valetParticipation: z.boolean().default(false),
+  towParticipation: z.boolean().default(false)
+});
+
 export async function partnerRoutes(app: FastifyInstance) {
   app.get('/api/partners/me/capacity', { preHandler: requireRole('partner','diagnostic','tow','parts','fleet') }, async (req) => {
     const r = await pool.query('select * from capacity_snapshots where actor_id=$1 order by start_at desc limit 100', [req.principal.actorId]);
@@ -23,6 +39,33 @@ export async function partnerRoutes(app: FastifyInstance) {
     );
     await audit(req.principal,'declare_capacity','capacity_snapshot',r.rows[0].id,'actor_owned_capacity');
     return reply.code(201).send({ capacity: r.rows[0] });
+  });
+
+  app.get('/api/partners/me/controls', { preHandler: requireRole('partner','diagnostic','tow','parts','fleet') }, async (req) => {
+    const r = await pool.query('select * from partner_controls where actor_id=$1', [req.principal.actorId]);
+    return { controls: r.rows[0] ?? null };
+  });
+
+  app.patch('/api/partners/me/controls', { preHandler: requireRole('partner','diagnostic','tow','parts','fleet') }, async (req) => {
+    const b = controlsBody.parse(req.body);
+    const r = await pool.query(
+      `insert into partner_controls(actor_id,routing_enabled,accepts_overflow,releases_overflow,service_radius_miles,
+        operating_hours_json,accepted_job_types_json,excluded_job_types_json,oem_warranty_rules_json,max_active_jobs,
+        earliest_available_at,loaner_participation,valet_participation,tow_participation,updated_at)
+       values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,now())
+       on conflict(actor_id) do update set routing_enabled=excluded.routing_enabled, accepts_overflow=excluded.accepts_overflow,
+        releases_overflow=excluded.releases_overflow, service_radius_miles=excluded.service_radius_miles,
+        operating_hours_json=excluded.operating_hours_json, accepted_job_types_json=excluded.accepted_job_types_json,
+        excluded_job_types_json=excluded.excluded_job_types_json, oem_warranty_rules_json=excluded.oem_warranty_rules_json,
+        max_active_jobs=excluded.max_active_jobs, earliest_available_at=excluded.earliest_available_at,
+        loaner_participation=excluded.loaner_participation, valet_participation=excluded.valet_participation,
+        tow_participation=excluded.tow_participation, updated_at=now() returning *`,
+      [req.principal.actorId,b.routingEnabled,b.acceptsOverflow,b.releasesOverflow,b.serviceRadiusMiles ?? null,
+       JSON.stringify(b.operatingHours),JSON.stringify(b.acceptedJobTypes),JSON.stringify(b.excludedJobTypes),JSON.stringify(b.oemWarrantyRules),
+       b.maxActiveJobs ?? null,b.earliestAvailableAt ?? null,b.loanerParticipation,b.valetParticipation,b.towParticipation]
+    );
+    await audit(req.principal,'update_partner_controls','partner_controls',req.principal.actorId!,'actor_owned_controls');
+    return { controls:r.rows[0] };
   });
 
   app.get('/api/partners/me/offers', { preHandler: requireRole('partner','diagnostic','tow','parts','fleet') }, async (req) => {
