@@ -8,10 +8,14 @@
     "enabled": true,
     "head_sampling_rate": 1
   },
+  "ai": {
+    "binding": "AI"
+  },
   "vars": {
     "JWT_ISSUER": "roviq-core",
     "JWT_AUDIENCE": "roviq-apps",
     "TRIAGE_DEPLOYMENT_MODE": "shadow",
-    "TRIAGE_AUTO_CONFIDENCE_THRESHOLD": "0.90"
+    "TRIAGE_AUTO_CONFIDENCE_THRESHOLD": "0.90",
+    "TRIAGE_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
   }
 }
