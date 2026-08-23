@@ -32,6 +32,56 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.code(201).send({ offer:r.rows[0] });
   });
 
+  app.post('/api/admin/routing-policies', { preHandler: requireRole('admin') }, async (req, reply) => {
+    const body = z.object({
+      domain:z.string().min(1).default('maintenance'),
+      policyKey:z.string().min(1).default('maintenance_default'),
+      version:z.number().int().positive(),
+      configuration:z.record(z.unknown()),
+      activate:z.boolean().default(true)
+    }).parse(req.body);
+
+    const domain = await pool.query('select id from domains where code=$1',[body.domain]);
+    if (!domain.rowCount) return reply.code(400).send({ error:'unknown_domain' });
+
+    const client = await pool.connect();
+    try {
+      await client.query('begin');
+      if (body.activate) {
+        await client.query(
+          'update routing_policies set active=false,updated_at=now() where domain_id=$1 and policy_key=$2 and active=true',
+          [domain.rows[0].id,body.policyKey]
+        );
+      }
+      const r = await client.query(
+        `insert into routing_policies(domain_id,policy_key,version,active,configuration)
+         values($1,$2,$3,$4,$5)
+         on conflict(domain_id,policy_key,version)
+         do update set active=excluded.active,configuration=excluded.configuration,updated_at=now()
+         returning id,domain_id,policy_key,version,active,created_at,updated_at`,
+        [domain.rows[0].id,body.policyKey,body.version,body.activate,JSON.stringify(body.configuration)]
+      );
+      await client.query('commit');
+      await audit(req.principal,'upsert_routing_policy','routing_policy',r.rows[0].id,`${body.policyKey}:v${body.version}`,{ domain:body.domain, active:body.activate });
+      return reply.code(201).send({ policy:r.rows[0] });
+    } catch (e) {
+      await client.query('rollback');
+      throw e;
+    } finally { client.release(); }
+  });
+
+  app.get('/api/admin/routing-policies', { preHandler: requireRole('admin') }, async (req) => {
+    const query = z.object({ domain:z.string().optional(), policyKey:z.string().optional() }).parse(req.query ?? {});
+    const r = await pool.query(
+      `select rp.id,d.code as domain,rp.policy_key,rp.version,rp.active,rp.created_at,rp.updated_at
+       from routing_policies rp join domains d on d.id=rp.domain_id
+       where ($1::text is null or d.code=$1) and ($2::text is null or rp.policy_key=$2)
+       order by d.code,rp.policy_key,rp.version desc`,
+      [query.domain ?? null,query.policyKey ?? null]
+    );
+    return { policies:r.rows };
+  });
+
   app.get('/api/admin/audit', { preHandler: requireRole('admin') }, async () => {
     const r = await pool.query('select * from audit_log order by occurred_at desc limit 500');
     return { audit: r.rows };
