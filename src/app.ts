@@ -8,6 +8,8 @@ import { healthRoutes } from './http/routes/health.js';
 import { demandRoutes } from './http/routes/demands.js';
 import { partnerRoutes } from './http/routes/partners.js';
 import { adminRoutes } from './http/routes/admin.js';
+import { routingRoutes } from './http/routes/routing.js';
+import { diagnosticRoutes } from './http/routes/diagnostics.js';
 
 export async function buildApp() {
   const app = Fastify({ logger: true });
@@ -23,6 +25,8 @@ export async function buildApp() {
   await app.register(demandRoutes);
   await app.register(partnerRoutes);
   await app.register(adminRoutes);
+  await app.register(routingRoutes);
+  await app.register(diagnosticRoutes);
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof ZodError) return reply.code(400).send({ error:'validation_error', details:err.issues });
