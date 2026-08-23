@@ -22,7 +22,7 @@ export async function buildApp() {
 
   await app.register(healthRoutes);
   app.addHook('preHandler', async (req, reply) => {
-    if (req.url === '/health' || req.url === '/api/auth/login') return;
+    if (req.url === '/health' || req.url === '/ready' || req.url === '/api/auth/login') return;
     await principalMiddleware(req, reply);
   });
   await app.register(authRoutes);
