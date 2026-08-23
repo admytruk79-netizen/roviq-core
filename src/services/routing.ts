@@ -13,9 +13,19 @@ type Candidate = {
   on_time_rate: number | null;
 };
 
+type RoutingPolicy = {
+  id: string;
+  version: number;
+  configuration: {
+    weights?: Record<string, number>;
+    defaults?: Record<string, number>;
+    limits?: Record<string, number>;
+  };
+};
+
 export async function routeMaintenanceDemand(demandId: string) {
   const demandResult = await pool.query(
-    `select d.*, dom.code as domain_code from demand_requests d
+    `select d.*, dom.id as domain_id, dom.code as domain_code from demand_requests d
      join domains dom on dom.id=d.domain_id where d.id=$1`, [demandId]
   );
   if (!demandResult.rowCount) throw new Error('demand_not_found');
@@ -51,20 +61,48 @@ export async function routeMaintenanceDemand(demandId: string) {
     if (c.active_capacity <= 0 && c.earliest_available_at && new Date(c.earliest_available_at) > new Date()) {
       rejected.push({ actorId:c.actor_id, reason:'no_current_capacity' }); continue;
     }
-    const score = scoreCandidate(c);
-    eligible.push({ actorId:c.actor_id, score, basis:{ capacity:c.active_capacity, rating:c.avg_rating, onTime:c.on_time_rate } });
+    eligible.push({
+      actorId:c.actor_id,
+      signals:{ capacity:c.active_capacity, rating:c.avg_rating, onTime:c.on_time_rate }
+    });
   }
-  eligible.sort((a,b) => b.score-a.score);
-  eligible.forEach((x,i) => x.rank=i+1);
 
-  const selected = eligible[0]?.actorId ?? null;
+  const policy = await getActivePolicy(demand.domain_id, 'maintenance_default');
+  if (!policy) {
+    const decision = await pool.query(
+      `insert into routing_decisions(demand_id,eligible_actor_ids,rejected_candidates,ranking_trace,selected_actor_id,decision_basis)
+       values($1,$2,$3,$4,null,$5) returning *`,
+      [demandId, JSON.stringify(eligible.map(x=>x.actorId)), JSON.stringify(rejected), JSON.stringify([]),
+       `eligible_unranked:${requestedCapability}:policy_missing`]
+    );
+    return { decision:decision.rows[0], ranked:[], eligible, rejected, policyRequired:true };
+  }
+
+  const ranked = eligible
+    .map((c) => ({ ...c, score:scoreWithPolicy(c.signals, policy.configuration) }))
+    .sort((a,b) => b.score-a.score)
+    .map((x,i) => ({ ...x, rank:i+1 }));
+
+  const maxCandidates = positiveInteger(policy.configuration?.limits?.maxCandidates);
+  const rankedForDecision = maxCandidates ? ranked.slice(0,maxCandidates) : ranked;
+  const selected = rankedForDecision[0]?.actorId ?? null;
   const decision = await pool.query(
-    `insert into routing_decisions(demand_id,eligible_actor_ids,rejected_candidates,ranking_trace,selected_actor_id,decision_basis)
-     values($1,$2,$3,$4,$5,$6) returning *`,
-    [demandId, JSON.stringify(eligible.map(x=>x.actorId)), JSON.stringify(rejected), JSON.stringify(eligible), selected,
-      selected ? `ranked_filter:${requestedCapability}` : `no_eligible_actor:${requestedCapability}`]
+    `insert into routing_decisions(demand_id,eligible_actor_ids,rejected_candidates,ranking_trace,selected_actor_id,decision_basis,policy_id,policy_version,rule_version)
+     values($1,$2,$3,$4,$5,$6,$7,$8,$8) returning *`,
+    [demandId, JSON.stringify(eligible.map(x=>x.actorId)), JSON.stringify(rejected), JSON.stringify(rankedForDecision), selected,
+      selected ? `policy_ranked:${requestedCapability}` : `no_eligible_actor:${requestedCapability}`,
+      policy.id, policy.version]
   );
-  return { decision: decision.rows[0], ranked: eligible, rejected };
+  return { decision:decision.rows[0], ranked:rankedForDecision, rejected, policyRequired:false };
+}
+
+async function getActivePolicy(domainId: string, policyKey: string): Promise<RoutingPolicy | null> {
+  const r = await pool.query<RoutingPolicy>(
+    `select id,version,configuration from routing_policies
+     where domain_id=$1 and policy_key=$2 and active=true
+     order by version desc limit 1`, [domainId,policyKey]
+  );
+  return r.rows[0] ?? null;
 }
 
 function capabilityForDemand(demandType: string, attributes: any): string {
@@ -75,9 +113,20 @@ function capabilityForDemand(demandType: string, attributes: any): string {
   return 'repair';
 }
 
-function scoreCandidate(c: Candidate) {
-  const capacity = Math.min(Math.max(c.active_capacity,0),10) * 10;
-  const rating = (c.avg_rating ?? 3) * 10;
-  const onTime = (c.on_time_rate ?? 0.8) * 30;
-  return Math.round((capacity + rating + onTime) * 100) / 100;
+function scoreWithPolicy(signals: Record<string, number | null>, configuration: RoutingPolicy['configuration']) {
+  const weights = configuration?.weights ?? {};
+  const defaults = configuration?.defaults ?? {};
+  let score = 0;
+  for (const [signal, weight] of Object.entries(weights)) {
+    if (!Number.isFinite(weight)) continue;
+    const raw = signals[signal];
+    const fallback = defaults[signal] ?? 0;
+    const value = typeof raw === 'number' && Number.isFinite(raw) ? raw : fallback;
+    score += value * weight;
+  }
+  return Math.round(score * 10000) / 10000;
+}
+
+function positiveInteger(value: unknown) {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null;
 }
