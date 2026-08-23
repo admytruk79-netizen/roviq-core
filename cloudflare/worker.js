@@ -7,14 +7,49 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), {
 });
 
 let neonFactoryPromise;
+let pgClientPromise;
 
-async function sqlFor(env) {
+function templateToQuery(strings, values) {
+  let text = '';
+  for (let i = 0; i < strings.length; i += 1) {
+    text += strings[i];
+    if (i < values.length) text += `$${i + 1}`;
+  }
+  return { text, values };
+}
+
+async function hyperdriveSql(env) {
+  if (!pgClientPromise) pgClientPromise = import('pg').then((module) => module.Client);
+  const Client = await pgClientPromise;
+  return async (strings, ...values) => {
+    const { text, values: params } = templateToQuery(strings, values);
+    const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });
+    await client.connect();
+    try {
+      const result = await client.query(text, params);
+      return result.rows;
+    } finally {
+      await client.end();
+    }
+  };
+}
+
+async function directNeonSql(env) {
   if (!env.DATABASE_URL) throw new Error('database_not_configured');
   if (!neonFactoryPromise) {
     neonFactoryPromise = import('@neondatabase/serverless').then((module) => module.neon);
   }
   const neon = await neonFactoryPromise;
   return neon(env.DATABASE_URL);
+}
+
+async function sqlFor(env) {
+  if (env.HYPERDRIVE?.connectionString) return hyperdriveSql(env);
+  return directNeonSql(env);
+}
+
+function databaseTransport(env) {
+  return env.HYPERDRIVE?.connectionString ? 'hyperdrive-neon' : 'direct-neon';
 }
 
 function authorized(request, env) {
@@ -197,7 +232,7 @@ async function runTriage(env, body) {
       'ai_engine',
       'cloudflare-workers-ai',
       ${env.TRIAGE_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast'},
-      ${JSON.stringify({ symptoms, vehicle, observations, mode })}::jsonb,
+      ${JSON.stringify({ symptoms, vehicle, observations, mode, databaseTransport: databaseTransport(env) })}::jsonb,
       ${result.symptomSummary},
       ${JSON.stringify(result.suggestedCapabilities)}::jsonb,
       ${result.suggestedDrivability},
@@ -213,6 +248,7 @@ async function runTriage(env, body) {
     status: 200,
     assessmentId: rows[0].id,
     mode,
+    databaseTransport: databaseTransport(env),
     safetyOverride: deterministic.forceNonDrivable,
     requiresHumanReview,
     result,
@@ -222,8 +258,6 @@ async function runTriage(env, body) {
 
 export default {
   async fetch(request, env) {
-    // Keep the base health route completely independent of Neon and AI so a
-    // database/binding problem can never turn the whole Worker into error 1101.
     const url = new URL(request.url);
 
     if (url.pathname === '/' || url.pathname === '/health' || url.pathname === '/edge-health') {
@@ -231,19 +265,23 @@ export default {
         ok: true,
         service: 'roviq-core',
         runtime: 'cloudflare-worker',
-        triage: 'native-shadow'
+        triage: 'native-shadow',
+        databaseTransport: databaseTransport(env)
       });
     }
 
     try {
       if (url.pathname === '/ready') {
         const sql = await sqlFor(env);
-        const rows = await sql`select now() as database_time`;
+        const rows = await sql`select now() as database_time, current_database() as database_name, current_user as database_user`;
         return json({
           ok: true,
           service: 'roviq-core',
           database: 'reachable',
+          databaseTransport: databaseTransport(env),
           databaseTime: rows[0]?.database_time ?? null,
+          databaseName: rows[0]?.database_name ?? null,
+          databaseUser: rows[0]?.database_user ?? null,
           aiBinding: Boolean(env.AI)
         });
       }
@@ -262,6 +300,7 @@ export default {
         service: 'roviq-core',
         runtime: 'cloudflare-worker',
         database: 'neon',
+        databaseTransport: databaseTransport(env),
         aiTriage: {
           status: 'shadow',
           endpoint: '/api/triage/run'
@@ -271,6 +310,7 @@ export default {
       return json({
         ok: false,
         error: 'worker_runtime_error',
+        databaseTransport: databaseTransport(env),
         detail: String(error?.message || error)
       }, 500);
     }
