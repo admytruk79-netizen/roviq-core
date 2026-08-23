@@ -23,7 +23,9 @@ import { integrationRoutes } from './http/routes/integrations.js';
 import { triageEvaluationRoutes } from './http/routes/triage-evaluation.js';
 
 export async function buildApp() {
-  const app = Fastify({ logger: true });
+  // Pino/Fastify logging currently triggers a Worker startup incompatibility.
+  // Keep logging disabled at the Fastify layer; Cloudflare observability remains enabled.
+  const app = Fastify({ logger: false, disableRequestLogging: true });
   await app.register(cors, { origin: false });
   await app.register(helmet);
   await app.register(rateLimit, { max: 120, timeWindow: '1 minute' });
@@ -52,7 +54,7 @@ export async function buildApp() {
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof ZodError) return reply.code(400).send({ error:'validation_error', details:err.issues });
-    app.log.error(err);
+    console.error('roviq_core_error', err);
     return reply.code(500).send({ error:'internal_error' });
   });
   return app;
