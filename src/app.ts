@@ -5,6 +5,7 @@ import rateLimit from '@fastify/rate-limit';
 import { ZodError } from 'zod';
 import { principalMiddleware } from './http/middleware/principal.js';
 import { healthRoutes } from './http/routes/health.js';
+import { authRoutes } from './http/routes/auth.js';
 import { demandRoutes } from './http/routes/demands.js';
 import { partnerRoutes } from './http/routes/partners.js';
 import { adminRoutes } from './http/routes/admin.js';
@@ -19,9 +20,10 @@ export async function buildApp() {
 
   await app.register(healthRoutes);
   app.addHook('preHandler', async (req, reply) => {
-    if (req.url === '/health') return;
+    if (req.url === '/health' || req.url === '/api/auth/login') return;
     await principalMiddleware(req, reply);
   });
+  await app.register(authRoutes);
   await app.register(demandRoutes);
   await app.register(partnerRoutes);
   await app.register(adminRoutes);
