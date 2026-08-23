@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: roviq-core
+    runtime: node
+    plan: free
+    branch: main
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /ready
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: ADMIN_API_KEY
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_ISSUER
+        value: roviq-core
+      - key: JWT_AUDIENCE
+        value: roviq-apps
+      - key: ALLOW_DEV_HEADERS
+        value: "false"
