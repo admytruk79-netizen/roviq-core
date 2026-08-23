@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { pool } from '../../db/pool.js';
 import { audit } from '../../services/audit.js';
+import { createServiceCase, transitionCase } from '../../services/orchestration.js';
 import { requireRole } from '../middleware/principal.js';
 
 const createDemand = z.object({
@@ -24,8 +25,21 @@ export async function demandRoutes(app: FastifyInstance) {
        values ($1,$2,$3,$4,$5,$6,'open') returning *`,
       [domain.rows[0].id, requester, body.demandType, body.location ? JSON.stringify(body.location) : null, body.urgency, JSON.stringify(body.attributes)]
     );
-    await audit(req.principal, 'create', 'demand_request', result.rows[0].id, 'customer_intake');
-    return reply.code(201).send({ demand: result.rows[0] });
+    const demand = result.rows[0];
+    await audit(req.principal, 'create', 'demand_request', demand.id, 'customer_intake');
+
+    if (body.domain === 'maintenance') {
+      const priority = body.urgency === 'emergency' ? 'urgent' : body.urgency === 'urgent' ? 'high' : 'normal';
+      const serviceCase = await createServiceCase(req.principal, {
+        demandId:demand.id,
+        priority,
+        attributes:{ demandType:body.demandType, intakeLocation:body.location ?? null, ...body.attributes }
+      });
+      const triageCase = await transitionCase(req.principal,serviceCase.id,'triage',{ source:'customer_intake' });
+      return reply.code(201).send({ demand, case:triageCase });
+    }
+
+    return reply.code(201).send({ demand });
   });
 
   app.get('/api/demands/:id', async (req, reply) => {
