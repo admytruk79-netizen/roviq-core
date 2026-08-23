@@ -19,6 +19,8 @@ import { partsRoutes } from './http/routes/parts.js';
 import { paymentRoutes } from './http/routes/payments.js';
 import { notificationRoutes } from './http/routes/notifications.js';
 import { triageRoutes } from './http/routes/triage.js';
+import { integrationRoutes } from './http/routes/integrations.js';
+import { triageEvaluationRoutes } from './http/routes/triage-evaluation.js';
 
 export async function buildApp() {
   const app = Fastify({ logger: true });
@@ -45,6 +47,8 @@ export async function buildApp() {
   await app.register(paymentRoutes);
   await app.register(notificationRoutes);
   await app.register(triageRoutes);
+  await app.register(integrationRoutes);
+  await app.register(triageEvaluationRoutes);
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof ZodError) return reply.code(400).send({ error:'validation_error', details:err.issues });
