@@ -12,6 +12,7 @@ import { partnerRoutes } from './http/routes/partners.js';
 import { adminRoutes } from './http/routes/admin.js';
 import { routingRoutes } from './http/routes/routing.js';
 import { diagnosticRoutes } from './http/routes/diagnostics.js';
+import { caseRoutes } from './http/routes/cases.js';
 
 export async function buildApp() {
   const app = Fastify({ logger: true });
@@ -27,6 +28,7 @@ export async function buildApp() {
   await app.register(authRoutes);
   await app.register(coreRoutes);
   await app.register(demandRoutes);
+  await app.register(caseRoutes);
   await app.register(partnerRoutes);
   await app.register(adminRoutes);
   await app.register(routingRoutes);
