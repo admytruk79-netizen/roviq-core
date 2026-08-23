@@ -1,0 +1,69 @@
+import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
+import { pool } from '../../db/pool.js';
+import { audit } from '../../services/audit.js';
+import { requireRole } from '../middleware/principal.js';
+
+const findingBody = z.object({
+  findingCode: z.string().optional(),
+  summary: z.string().min(3),
+  drivability: z.enum(['drivable','limited','non_drivable','unknown']),
+  disposition: z.enum(['diagnose_only','diagnose_and_fix','route_to_shop','route_to_tow']),
+  confidence: z.number().min(0).max(1).optional(),
+  details: z.record(z.unknown()).default({})
+});
+
+export async function diagnosticRoutes(app: FastifyInstance) {
+  app.get('/api/diagnostics/me/queue', { preHandler: requireRole('diagnostic') }, async (req) => {
+    const r = await pool.query(
+      `select m.id as offer_id, m.demand_id, m.offered_at, d.demand_type, d.urgency, d.location, d.attributes
+       from matches_offers m join demand_requests d on d.id=m.demand_id
+       where m.actor_id=$1 and m.outcome in ('offered','accepted')
+       order by d.urgency desc, m.offered_at asc`, [req.principal.actorId]
+    );
+    return { queue: r.rows };
+  });
+
+  app.post('/api/diagnostics/demands/:id/findings', { preHandler: requireRole('diagnostic') }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const b = findingBody.parse(req.body);
+    const owned = await pool.query(
+      `select 1 from matches_offers where demand_id=$1 and actor_id=$2 and outcome='accepted' limit 1`,
+      [id, req.principal.actorId]
+    );
+    if (!owned.rowCount) return reply.code(403).send({ error:'diagnostic_demand_not_assigned' });
+
+    const r = await pool.query(
+      `insert into diagnostic_findings(demand_id,diagnostic_actor_id,finding_code,summary,drivability,disposition,confidence,details)
+       values($1,$2,$3,$4,$5,$6,$7,$8) returning *`,
+      [id,req.principal.actorId,b.findingCode ?? null,b.summary,b.drivability,b.disposition,b.confidence ?? null,JSON.stringify(b.details)]
+    );
+
+    const nextState = b.disposition === 'diagnose_and_fix' ? 'in_progress' : b.disposition === 'diagnose_only' ? 'diagnosed' : 'routing_required';
+    await pool.query('update demand_requests set state=$1, updated_at=now() where id=$2', [nextState,id]);
+    await pool.query(
+      `insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload)
+       values('demand_request',$1,'diagnostic_finding_recorded',$2,$3)`,
+      [id,req.principal.actorId,JSON.stringify({ findingId:r.rows[0].id, drivability:b.drivability, disposition:b.disposition })]
+    );
+    await audit(req.principal,'record_diagnostic_finding','demand_request',id,'assigned_diagnostic_only',{ disposition:b.disposition });
+    return reply.code(201).send({ finding:r.rows[0], demandState:nextState });
+  });
+
+  app.get('/api/demands/:id/diagnostic-findings', { preHandler: requireRole('admin','customer','diagnostic','partner','tow') }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (req.principal.role !== 'admin' && req.principal.role !== 'customer') {
+      const scoped = await pool.query('select 1 from matches_offers where demand_id=$1 and actor_id=$2 limit 1',[id,req.principal.actorId]);
+      if (!scoped.rowCount) return reply.code(403).send({ error:'forbidden' });
+    }
+    if (req.principal.role === 'customer') {
+      const owned = await pool.query('select 1 from demand_requests where id=$1 and requester_actor_id=$2',[id,req.principal.actorId]);
+      if (!owned.rowCount) return reply.code(403).send({ error:'forbidden' });
+    }
+    const r = await pool.query(
+      `select id,demand_id,finding_code,summary,drivability,disposition,confidence,created_at
+       from diagnostic_findings where demand_id=$1 order by created_at desc`, [id]
+    );
+    return { findings:r.rows };
+  });
+}
