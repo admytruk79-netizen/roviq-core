@@ -1,9 +1,9 @@
 import { httpServerHandler } from 'cloudflare:node';
-import { buildApp } from '../src/app.js';
+import { buildApp } from '../src/app.ts';
 
-// Cloudflare Workers (compatibility date >= 2026-08-04) provides Node.js
-// compatibility and the Node HTTP server bridge. Fastify can therefore run
-// directly in the Worker without a paid Cloudflare Container.
+// Standard Cloudflare Worker: no Container and no changes to either Local app.
+// Current Workers support Node.js HTTP server APIs, allowing Fastify to run
+// through Cloudflare's HTTP server bridge.
 const app = await buildApp();
 await app.listen({ port: 8080 });
 
