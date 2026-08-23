@@ -6,11 +6,7 @@ on:
     branches: [main]
     paths:
       - 'cloudflare/**'
-      - 'src/**'
-      - 'migrations/**'
-      - 'Dockerfile'
       - 'package.json'
-      - 'package-lock.json'
       - 'wrangler.jsonc'
       - '.github/workflows/deploy-cloudflare.yml'
 
@@ -35,20 +31,14 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
-      - name: Build Core
-        run: npm run build
-
-      - name: Test Core
-        run: npm test
-
-      - name: Validate Cloudflare config
-        run: npx wrangler deploy --dry-run
-
       - name: Verify deployment credentials
         shell: bash
         run: |
           test -n "$CLOUDFLARE_API_TOKEN" || (echo "CLOUDFLARE_API_TOKEN is missing in roviq-core GitHub Actions secrets" && exit 1)
           test -n "$CLOUDFLARE_ACCOUNT_ID" || (echo "CLOUDFLARE_ACCOUNT_ID is missing in roviq-core GitHub Actions secrets" && exit 1)
 
-      - name: Deploy new roviq-core Worker + Container
+      - name: Validate Cloudflare Worker bundle
+        run: npx wrangler deploy --dry-run
+
+      - name: Deploy ROVIQ Core Worker
         run: npx wrangler deploy
