@@ -1,4 +1,4 @@
-import { Client } from '@neondatabase/serverless';
+import { neon } from '@neondatabase/serverless';
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -11,11 +11,9 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), {
   }
 });
 
-async function withDb(env, fn) {
+function sqlFor(env) {
   if (!env.DATABASE_URL) throw new Error('database_not_configured');
-  const client = new Client(env.DATABASE_URL);
-  await client.connect();
-  try { return await fn(client); } finally { await client.end(); }
+  return neon(env.DATABASE_URL);
 }
 
 function authorized(request, env) {
@@ -62,100 +60,83 @@ async function runTriage(env, body) {
   const { caseId, symptoms, vehicle = {}, observations = {} } = body || {};
   if (!caseId || !symptoms) return { error: 'caseId_and_symptoms_required', status: 400 };
 
-  return withDb(env, async (db) => {
-    const existing = await db.query('select id from service_cases where id = $1 limit 1', [caseId]);
-    if (!existing.rows.length) return { error: 'service_case_not_found', status: 404 };
+  const sql = sqlFor(env);
+  const existing = await sql`select id from service_cases where id = ${caseId} limit 1`;
+  if (!existing.length) return { error: 'service_case_not_found', status: 404 };
 
-    const started = Date.now();
-    let raw;
-    try {
-      const response = await env.AI.run(env.TRIAGE_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
-        messages: [
-          { role: 'system', content: 'You are the ROVIQ automotive triage engine. Be conservative. Never make a definitive diagnosis, never choose a provider, and prioritize safety and drivability. Return valid JSON with symptomSummary, suggestedCapabilities, suggestedDrivability, safetyFlags, evidence, confidence, missingInformation, and suggestedActions.' },
-          { role: 'user', content: JSON.stringify({ symptoms, vehicle, observations }) }
-        ],
-        temperature: 0
-      });
-      raw = response?.response ?? response;
-      if (typeof raw === 'string') {
-        const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-        raw = JSON.parse(cleaned);
-      }
-    } catch (error) {
-      raw = {
-        symptomSummary: symptoms,
-        suggestedCapabilities: ['diagnostics'],
-        suggestedDrivability: 'unknown',
-        safetyFlags: [],
-        evidence: [],
-        confidence: 0.2,
-        missingInformation: ['Professional diagnostic assessment required'],
-        suggestedActions: [{ actionType: 'request_diagnostic_review' }],
-        fallbackReason: String(error?.message || error)
-      };
-    }
-
-    const result = normalize(raw, symptoms);
-    const deterministic = safetyRules(symptoms, observations);
-    if (deterministic.forceNonDrivable) {
-      result.suggestedDrivability = 'non_drivable';
-      result.suggestedCapabilities = [...new Set([...result.suggestedCapabilities, 'diagnostics', 'tow'])];
-    }
-    const seen = new Set();
-    result.safetyFlags = [...deterministic.flags, ...result.safetyFlags].filter((flag) => {
-      const key = `${flag.code}:${flag.severity}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
+  const started = Date.now();
+  let raw;
+  try {
+    const response = await env.AI.run(env.TRIAGE_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
+      messages: [
+        { role: 'system', content: 'You are the ROVIQ automotive triage engine. Be conservative. Never make a definitive diagnosis, never choose a provider, and prioritize safety and drivability. Return valid JSON with symptomSummary, suggestedCapabilities, suggestedDrivability, safetyFlags, evidence, confidence, missingInformation, and suggestedActions.' },
+        { role: 'user', content: JSON.stringify({ symptoms, vehicle, observations }) }
+      ],
+      temperature: 0
     });
-
-    const threshold = Number(env.TRIAGE_AUTO_CONFIDENCE_THRESHOLD || '0.90');
-    const requiresHumanReview = deterministic.forceNonDrivable || result.confidence < threshold || result.safetyFlags.some((f) => f.severity === 'critical');
-    const mode = env.TRIAGE_DEPLOYMENT_MODE || 'shadow';
-    const latencyMs = Date.now() - started;
-
-    const insert = await db.query(`
-      insert into ai_triage_assessments (
-        case_id, source, model_provider, model_name, input_snapshot,
-        symptom_summary, suggested_capabilities, suggested_drivability,
-        safety_flags, evidence, confidence, requires_human_review, status,
-        engine_version, deployment_mode, safety_override, safety_override_reason,
-        raw_model_output, latency_ms
-      ) values (
-        $1, 'ai_engine', 'cloudflare-workers-ai', $2, $3::jsonb,
-        $4, $5::jsonb, $6, $7::jsonb, $8::jsonb, $9, $10, 'proposed',
-        'native-worker-v1', $11, $12, $13, $14::jsonb, $15
-      ) returning id, created_at
-    `, [
-      caseId,
-      env.TRIAGE_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
-      JSON.stringify({ symptoms, vehicle, observations }),
-      result.symptomSummary,
-      JSON.stringify(result.suggestedCapabilities),
-      result.suggestedDrivability,
-      JSON.stringify(result.safetyFlags),
-      JSON.stringify(result.evidence),
-      result.confidence,
-      requiresHumanReview,
-      mode,
-      deterministic.forceNonDrivable,
-      deterministic.forceNonDrivable ? 'deterministic_safety_rule' : null,
-      JSON.stringify(raw || {}),
-      latencyMs
-    ]);
-
-    return {
-      status: 200,
-      assessmentId: insert.rows[0].id,
-      mode,
-      database: 'neon',
-      runtime: 'cloudflare-worker',
-      safetyOverride: deterministic.forceNonDrivable,
-      requiresHumanReview,
-      result,
-      createdAt: insert.rows[0].created_at
+    raw = response?.response ?? response;
+    if (typeof raw === 'string') {
+      const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+      raw = JSON.parse(cleaned);
+    }
+  } catch (error) {
+    raw = {
+      symptomSummary: symptoms,
+      suggestedCapabilities: ['diagnostics'],
+      suggestedDrivability: 'unknown',
+      safetyFlags: [],
+      evidence: [],
+      confidence: 0.2,
+      missingInformation: ['Professional diagnostic assessment required'],
+      suggestedActions: [{ actionType: 'request_diagnostic_review' }],
+      fallbackReason: String(error?.message || error)
     };
-  });
+  }
+
+  const result = normalize(raw, symptoms);
+  const deterministic = safetyRules(symptoms, observations);
+  if (deterministic.forceNonDrivable) {
+    result.suggestedDrivability = 'non_drivable';
+    result.suggestedCapabilities = [...new Set([...result.suggestedCapabilities, 'diagnostics', 'tow'])];
+  }
+  result.safetyFlags = [...deterministic.flags, ...result.safetyFlags];
+
+  const threshold = Number(env.TRIAGE_AUTO_CONFIDENCE_THRESHOLD || '0.90');
+  const requiresHumanReview = deterministic.forceNonDrivable || result.confidence < threshold || result.safetyFlags.some((f) => f.severity === 'critical');
+  const mode = env.TRIAGE_DEPLOYMENT_MODE || 'shadow';
+  const latencyMs = Date.now() - started;
+
+  const inserted = await sql`
+    insert into ai_triage_assessments (
+      case_id, source, model_provider, model_name, input_snapshot,
+      symptom_summary, suggested_capabilities, suggested_drivability,
+      safety_flags, evidence, confidence, requires_human_review, status,
+      engine_version, deployment_mode, safety_override, safety_override_reason,
+      raw_model_output, latency_ms
+    ) values (
+      ${caseId}, 'ai_engine', 'cloudflare-workers-ai',
+      ${env.TRIAGE_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast'},
+      ${JSON.stringify({ symptoms, vehicle, observations })}::jsonb,
+      ${result.symptomSummary}, ${JSON.stringify(result.suggestedCapabilities)}::jsonb,
+      ${result.suggestedDrivability}, ${JSON.stringify(result.safetyFlags)}::jsonb,
+      ${JSON.stringify(result.evidence)}::jsonb, ${result.confidence}, ${requiresHumanReview},
+      'proposed', 'native-worker-v2', ${mode}, ${deterministic.forceNonDrivable},
+      ${deterministic.forceNonDrivable ? 'deterministic_safety_rule' : null},
+      ${JSON.stringify(raw || {})}::jsonb, ${latencyMs}
+    ) returning id, created_at
+  `;
+
+  return {
+    status: 200,
+    assessmentId: inserted[0].id,
+    mode,
+    database: 'neon',
+    runtime: 'cloudflare-worker',
+    safetyOverride: deterministic.forceNonDrivable,
+    requiresHumanReview,
+    result,
+    createdAt: inserted[0].created_at
+  };
 }
 
 export default {
@@ -164,36 +145,24 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === '/' || url.pathname === '/health' || url.pathname === '/edge-health') {
-      return json({ ok: true, service: 'roviq-core', runtime: 'cloudflare-worker', database: 'neon', aiTriage: 'shadow' });
+      return json({ ok: true, service: 'roviq-core', runtime: 'cloudflare-worker', database: 'neon', aiTriage: 'shadow', engine: 'native-worker-v2' });
     }
 
     try {
       if (url.pathname === '/ready') {
-        const state = await withDb(env, async (db) => {
-          const r = await db.query(`select now() as database_time, current_database() as database_name, current_user as database_user`);
-          return r.rows[0];
-        });
-        return json({ ok: true, service: 'roviq-core', database: 'reachable', ...state, aiBinding: Boolean(env.AI) });
+        const sql = sqlFor(env);
+        const rows = await sql`select now() as database_time, current_database() as database_name, current_user as database_user`;
+        return json({ ok: true, service: 'roviq-core', database: 'reachable', ...rows[0], aiBinding: Boolean(env.AI) });
       }
 
       if (url.pathname === '/api/core/status') {
-        const counts = await withDb(env, async (db) => {
-          const r = await db.query(`select
-            (select count(*)::int from actors) actors,
-            (select count(*)::int from domains) domains,
-            (select count(*)::int from service_cases) service_cases,
-            (select count(*)::int from demand_requests) demand_requests,
-            (select count(*)::int from partners) partners`, []);
-          return r.rows[0];
-        }).catch(async () => withDb(env, async (db) => {
-          const r = await db.query(`select
-            (select count(*)::int from actors) actors,
-            (select count(*)::int from domains) domains,
-            (select count(*)::int from service_cases) service_cases,
-            (select count(*)::int from demand_requests) demand_requests`);
-          return r.rows[0];
-        }));
-        return json({ ok: true, service: 'roviq-core', counts });
+        const sql = sqlFor(env);
+        const rows = await sql`select
+          (select count(*)::int from actors) actors,
+          (select count(*)::int from domains) domains,
+          (select count(*)::int from service_cases) service_cases,
+          (select count(*)::int from demand_requests) demand_requests`;
+        return json({ ok: true, service: 'roviq-core', counts: rows[0] });
       }
 
       if (url.pathname === '/api/triage/run' && request.method === 'POST') {
@@ -206,14 +175,15 @@ export default {
       const match = url.pathname.match(/^\/api\/triage\/([0-9a-f-]{36})$/i);
       if (match && request.method === 'GET') {
         if (!authorized(request, env)) return json({ error: 'unauthorized' }, 401);
-        const rows = await withDb(env, async (db) => (await db.query(`
+        const sql = sqlFor(env);
+        const rows = await sql`
           select id, case_id, model_provider, model_name, symptom_summary,
                  suggested_capabilities, suggested_drivability, safety_flags, evidence,
                  confidence, requires_human_review, status, deployment_mode,
                  safety_override, latency_ms, created_at
-          from ai_triage_assessments where case_id = $1
+          from ai_triage_assessments where case_id = ${match[1]}
           order by created_at desc limit 20
-        `, [match[1]])).rows);
+        `;
         return json({ caseId: match[1], assessments: rows });
       }
 
