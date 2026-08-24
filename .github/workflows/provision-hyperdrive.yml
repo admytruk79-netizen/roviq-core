@@ -1,4 +1,4 @@
-name: Provision ROVIQ Hyperdrive
+name: Deploy ROVIQ Hyperdrive Rebuild
 
 on:
   workflow_dispatch:
@@ -8,23 +8,23 @@ on:
       - 'cloudflare/hyperdrive-worker.js'
       - 'wrangler.jsonc'
       - 'package.json'
+      - 'package-lock.json'
       - '.github/workflows/provision-hyperdrive.yml'
 
 permissions:
   contents: write
 
 concurrency:
-  group: roviq-core-hyperdrive-provision
-  cancel-in-progress: false
+  group: roviq-core-hyperdrive-rebuild
+  cancel-in-progress: true
 
 jobs:
-  provision:
+  deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      NEON_HYPERDRIVE_URL: ${{ secrets.NEON_HYPERDRIVE_URL || secrets.DATABASE_URL }}
     steps:
       - name: Checkout rebuild branch
         uses: actions/checkout@v4
@@ -36,55 +36,46 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install dependencies
+      - name: Install and synchronize dependencies
         run: npm install --no-audit --no-fund
 
-      - name: Verify required secrets
+      - name: Verify Cloudflare credentials
         shell: bash
         run: |
           test -n "$CLOUDFLARE_API_TOKEN" || (echo "CLOUDFLARE_API_TOKEN is missing" && exit 1)
           test -n "$CLOUDFLARE_ACCOUNT_ID" || (echo "CLOUDFLARE_ACCOUNT_ID is missing" && exit 1)
-          test -n "$NEON_HYPERDRIVE_URL" || (echo "NEON_HYPERDRIVE_URL or DATABASE_URL is missing" && exit 1)
-          echo "::add-mask::$NEON_HYPERDRIVE_URL"
           npx wrangler whoami
 
-      - name: Create Hyperdrive and bind Worker if needed
-        shell: bash
-        run: |
-          if grep -q '"binding": "HYPERDRIVE"' wrangler.jsonc; then
-            echo "Hyperdrive binding already present; skipping creation"
-          else
-            npx wrangler hyperdrive create roviq-core-neon \
-              --connection-string="$NEON_HYPERDRIVE_URL" \
-              --binding HYPERDRIVE \
-              --update-config \
-              --config wrangler.jsonc
-          fi
-
-      - name: Verify binding and Worker bundle
+      - name: Verify existing Hyperdrive binding
         shell: bash
         run: |
           grep -q '"binding": "HYPERDRIVE"' wrangler.jsonc
+          grep -q '"id": "38defb5eb63d4a079a46eea4f952eaf7"' wrangler.jsonc
           grep -q '"hyperdrive"' wrangler.jsonc
-          npx wrangler deploy --dry-run --config wrangler.jsonc
 
-      - name: Persist Hyperdrive binding ID on rebuild branch
+      - name: Build authoritative Core
+        run: npm run build
+
+      - name: Validate Worker bundle
+        run: npx wrangler deploy --dry-run --config wrangler.jsonc
+
+      - name: Persist synchronized package lock
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add wrangler.jsonc package-lock.json
+          git add package-lock.json
           if git diff --cached --quiet; then
-            echo "No config changes to commit"
+            echo "package-lock already synchronized"
           else
-            git commit -m "rebuild(core): bind Cloudflare Hyperdrive"
+            git commit -m "chore(rebuild): synchronize Hyperdrive dependencies"
             git push origin HEAD:rebuild/neon-core
           fi
 
       - name: Deploy Hyperdrive-backed Worker
         run: npx wrangler deploy --config wrangler.jsonc
 
-      - name: Verify live Hyperdrive readiness
+      - name: Verify live Core health and Hyperdrive readiness
         shell: bash
         run: |
           for i in $(seq 1 18); do
