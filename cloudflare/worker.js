@@ -1,6 +1,8 @@
 import { Container, getContainer } from '@cloudflare/containers';
 import { env as workerEnv } from 'cloudflare:workers';
 
+export { ContainerProxy } from '@cloudflare/containers';
+
 export class RoviqCoreContainer extends Container {
   defaultPort = 8080;
   requiredPorts = [8080];
