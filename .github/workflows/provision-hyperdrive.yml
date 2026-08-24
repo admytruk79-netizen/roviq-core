@@ -1,0 +1,90 @@
+name: Provision ROVIQ Hyperdrive
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: roviq-core-hyperdrive-provision
+  cancel-in-progress: false
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      NEON_HYPERDRIVE_URL: ${{ secrets.NEON_HYPERDRIVE_URL }}
+    steps:
+      - name: Checkout rebuild branch
+        uses: actions/checkout@v4
+        with:
+          ref: rebuild/neon-core
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Verify required secrets
+        shell: bash
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN" || (echo "CLOUDFLARE_API_TOKEN is missing" && exit 1)
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || (echo "CLOUDFLARE_ACCOUNT_ID is missing" && exit 1)
+          test -n "$NEON_HYPERDRIVE_URL" || (echo "NEON_HYPERDRIVE_URL is missing" && exit 1)
+          echo "::add-mask::$NEON_HYPERDRIVE_URL"
+          npx wrangler whoami
+
+      - name: Create Hyperdrive and bind Worker
+        shell: bash
+        run: |
+          npx wrangler hyperdrive create roviq-core-neon \
+            --connection-string="$NEON_HYPERDRIVE_URL" \
+            --binding HYPERDRIVE \
+            --update-config \
+            --config wrangler.jsonc
+
+      - name: Verify binding was written
+        shell: bash
+        run: |
+          grep -q '"binding": "HYPERDRIVE"' wrangler.jsonc
+          grep -q '"hyperdrive"' wrangler.jsonc
+          npx wrangler deploy --dry-run --config wrangler.jsonc
+
+      - name: Persist Hyperdrive binding ID on rebuild branch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add wrangler.jsonc package-lock.json
+          if git diff --cached --quiet; then
+            echo "No config changes to commit"
+          else
+            git commit -m "rebuild(core): bind Cloudflare Hyperdrive"
+            git push origin HEAD:rebuild/neon-core
+          fi
+
+      - name: Deploy Hyperdrive-backed Worker
+        run: npx wrangler deploy --config wrangler.jsonc
+
+      - name: Verify live Hyperdrive readiness
+        shell: bash
+        run: |
+          for i in $(seq 1 18); do
+            HEALTH=$(curl --silent --show-error --max-time 15 https://roviq-core.admytruk79.workers.dev/health || true)
+            READY=$(curl --silent --show-error --max-time 15 https://roviq-core.admytruk79.workers.dev/ready || true)
+            echo "health=$HEALTH"
+            echo "ready=$READY"
+            if echo "$HEALTH" | grep -q '"databaseTransport":"hyperdrive-neon"' && echo "$READY" | grep -q '"database":"reachable"'; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Hyperdrive-backed ROVIQ Core did not become ready"
+          exit 1
