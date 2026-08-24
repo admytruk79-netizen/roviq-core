@@ -4,6 +4,7 @@ import { pool } from '../../db/pool.js';
 import { createTriageAssessment, decideTriageAction, getCaseTriage, reviewTriageAssessment } from '../../services/triage.js';
 import { runTriage } from '../../services/triage-engine.js';
 import { requireRole } from '../middleware/principal.js';
+import { assertCaseAccess, loadCaseForPrincipal } from '../../services/case-access.js';
 
 export async function triageRoutes(app: FastifyInstance) {
   app.post('/api/maintenance/cases/:id/triage/run', { preHandler: requireRole('customer','admin','diagnostic','partner') }, async (req, reply) => {
@@ -45,11 +46,14 @@ export async function triageRoutes(app: FastifyInstance) {
 
   app.get('/api/maintenance/cases/:id/triage', async (req, reply) => {
     const { id } = req.params as { id:string };
-    const c = await pool.query('select customer_actor_id,current_owner_actor_id from service_cases where id=$1',[id]);
-    if (!c.rowCount) return reply.code(404).send({ error:'case_not_found' });
-    if (req.principal.role === 'customer' && c.rows[0].customer_actor_id !== req.principal.actorId) return reply.code(403).send({ error:'forbidden' });
-    if (!['admin','customer'].includes(req.principal.role) && c.rows[0].current_owner_actor_id && c.rows[0].current_owner_actor_id !== req.principal.actorId) return reply.code(403).send({ error:'forbidden' });
-    return getCaseTriage(id);
+    try {
+      const c = await loadCaseForPrincipal(req.principal,id);
+      if (!c) return reply.code(404).send({ error:'case_not_found' });
+      return getCaseTriage(id);
+    } catch (error) {
+      if (error instanceof Error && error.message === 'forbidden') return reply.code(403).send({error:'forbidden'});
+      throw error;
+    }
   });
 
   app.post('/api/triage/:id/review', { preHandler: requireRole('admin','diagnostic','partner') }, async (req, reply) => {
@@ -79,6 +83,11 @@ export async function triageRoutes(app: FastifyInstance) {
     }).parse(req.body);
     const a = await pool.query('select id,case_id from ai_triage_assessments where id=$1',[id]);
     if (!a.rowCount) return reply.code(404).send({ error:'assessment_not_found' });
+    try { await assertCaseAccess(req.principal,a.rows[0].case_id); }
+    catch (error) {
+      if (error instanceof Error && error.message === 'forbidden') return reply.code(403).send({error:'forbidden'});
+      throw error;
+    }
     const r = await pool.query(
       `insert into ai_triage_outcomes(assessment_id,case_id,confirmed_drivability,confirmed_capabilities,confirmed_fault_category,tow_required,safety_critical,diagnostic_summary,repair_summary,labeled_by_actor_id,metadata)
        values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)

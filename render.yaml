@@ -4,8 +4,8 @@ services:
     runtime: node
     plan: free
     branch: main
-    buildCommand: npm install && npm run build
-    startCommand: npm start
+    buildCommand: npm ci && npm run build
+    startCommand: npm run db:migrate:prod && npm start
     healthCheckPath: /ready
     autoDeploy: true
     envVars:

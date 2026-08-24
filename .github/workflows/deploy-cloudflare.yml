@@ -1,14 +1,7 @@
-name: Deploy ROVIQ Core to Cloudflare
+name: Deploy ROVIQ Edge Gateway to Cloudflare
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - 'cloudflare/**'
-      - 'package.json'
-      - 'wrangler.jsonc'
-      - '.github/workflows/deploy-cloudflare.yml'
 
 permissions:
   contents: read
@@ -34,7 +27,7 @@ jobs:
           node-version: 22
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Verify Cloudflare credentials
         shell: bash
@@ -46,18 +39,18 @@ jobs:
       - name: Validate Worker bundle
         run: npx wrangler deploy --dry-run --config wrangler.jsonc
 
-      - name: Deploy ROVIQ Core
+      - name: Deploy ROVIQ Edge Gateway
         run: npx wrangler deploy --config wrangler.jsonc
 
       - name: Verify production health
         shell: bash
         run: |
           for i in 1 2 3 4 5; do
-            if curl --fail --silent --show-error --max-time 15 https://roviq-core.admytruk79.workers.dev/health; then
+            if curl --fail --silent --show-error --max-time 15 https://roviq-core.admytruk79.workers.dev/ready; then
               echo
               exit 0
             fi
             sleep 5
           done
-          echo "ROVIQ Core health check failed after deploy"
+          echo "ROVIQ Edge Gateway readiness check failed after deploy"
           exit 1

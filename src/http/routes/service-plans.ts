@@ -1,0 +1,50 @@
+import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
+import { requireRole } from '../middleware/principal.js';
+import { getServicePlan, reviseServicePlan } from '../../services/service-plan.js';
+
+const revisionBody = z.object({
+  changeReason:z.string().min(3).max(1000),
+  customerSummary:z.string().min(1).max(4000).optional(),
+  estimatedTotalMinor:z.number().int().nonnegative().optional(),
+  currency:z.string().length(3).transform((value)=>value.toUpperCase()).optional(),
+  tasks:z.array(z.object({
+    taskType:z.string().min(1).max(100),
+    title:z.string().min(1).max(500),
+    instructions:z.string().max(4000).optional(),
+    dueAt:z.string().datetime().optional(),
+    estimatedAmountMinor:z.number().int().nonnegative().optional(),
+    currency:z.string().length(3).transform((value)=>value.toUpperCase()).optional(),
+    metadata:z.record(z.unknown()).optional()
+  })).max(100).optional()
+});
+
+export async function servicePlanRoutes(app:FastifyInstance) {
+  app.get('/api/maintenance/cases/:id/service-plan', async (req,reply) => {
+    const { id } = req.params as { id:string };
+    try {
+      const result = await getServicePlan(req.principal,id);
+      if (!result) return reply.code(404).send({error:'service_plan_not_found'});
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'service_plan_failed';
+      if (message === 'case_not_found' || message === 'service_plan_not_found') return reply.code(404).send({error:message});
+      if (message === 'forbidden') return reply.code(403).send({error:message});
+      throw error;
+    }
+  });
+
+  app.post('/api/admin/maintenance/cases/:id/service-plan/revisions', { preHandler:requireRole('admin') }, async (req,reply) => {
+    const { id } = req.params as { id:string };
+    const body = revisionBody.parse(req.body);
+    try {
+      const plan = await reviseServicePlan(req.principal,id,body);
+      return reply.code(201).send({plan});
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'service_plan_revision_failed';
+      if (message === 'case_not_found' || message === 'service_plan_not_found') return reply.code(404).send({error:message});
+      if (message === 'forbidden') return reply.code(403).send({error:message});
+      throw error;
+    }
+  });
+}

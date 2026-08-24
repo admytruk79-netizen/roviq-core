@@ -4,6 +4,7 @@ import { pool } from '../../db/pool.js';
 import { requireRole } from '../middleware/principal.js';
 import { createDeadline, createServiceCase, getCaseTimeline, raiseException, transitionCase, withIdempotency } from '../../services/orchestration.js';
 import { addLedgerEntry, setCustomerSnapshot, sweepExpiredDeadlines } from '../../services/operations.js';
+import { loadCaseForPrincipal } from '../../services/case-access.js';
 
 const createCaseBody = z.object({
   demandId: z.string().uuid().optional(),
@@ -20,8 +21,8 @@ export async function caseRoutes(app: FastifyInstance) {
   app.post('/api/maintenance/cases', { preHandler: requireRole('customer','admin') }, async (req, reply) => {
     const body = createCaseBody.parse(req.body);
     const key = typeof req.headers['idempotency-key'] === 'string' ? req.headers['idempotency-key'] : undefined;
-    const result = await withIdempotency(req.principal,key,'create_service_case',body,async () => {
-      const c = await createServiceCase(req.principal,body);
+    const result = await withIdempotency(req.principal,key,'create_service_case',body,async (client) => {
+      const c = await createServiceCase(req.principal,body,client);
       return { status:201, body:{ case:c } };
     });
     return reply.code(result.status).send(result.body);
@@ -29,21 +30,28 @@ export async function caseRoutes(app: FastifyInstance) {
 
   app.get('/api/maintenance/cases/:id', async (req, reply) => {
     const { id } = req.params as { id:string };
-    const r = await pool.query('select * from service_cases where id=$1',[id]);
-    if (!r.rowCount) return reply.code(404).send({ error:'case_not_found' });
-    const c = r.rows[0];
-    if (req.principal.role === 'customer' && c.customer_actor_id !== req.principal.actorId) return reply.code(403).send({ error:'forbidden' });
-    if (!['admin','customer'].includes(req.principal.role) && c.current_owner_actor_id && c.current_owner_actor_id !== req.principal.actorId) return reply.code(403).send({ error:'forbidden' });
-    const snapshot = await pool.query('select * from case_snapshots where case_id=$1',[id]);
-    return { case:c, customerSnapshot:snapshot.rows[0] ?? null };
+    try {
+      const c = await loadCaseForPrincipal(req.principal,id);
+      if (!c) return reply.code(404).send({ error:'case_not_found' });
+      const snapshot = await pool.query('select * from case_snapshots where case_id=$1',[id]);
+      const { has_provider_relation:_,has_transport_relation:__,has_parts_relation:___,has_mobility_relation:____,...caseProjection } = c;
+      return { case:caseProjection, customerSnapshot:snapshot.rows[0] ?? null };
+    } catch (error) {
+      if (error instanceof Error && error.message === 'forbidden') return reply.code(403).send({error:'forbidden'});
+      throw error;
+    }
   });
 
   app.get('/api/maintenance/cases/:id/timeline', async (req, reply) => {
     const { id } = req.params as { id:string };
-    const c = await pool.query('select customer_actor_id,current_owner_actor_id from service_cases where id=$1',[id]);
-    if (!c.rowCount) return reply.code(404).send({ error:'case_not_found' });
-    if (req.principal.role === 'customer' && c.rows[0].customer_actor_id !== req.principal.actorId) return reply.code(403).send({ error:'forbidden' });
-    return { timeline: await getCaseTimeline(id) };
+    try {
+      const c = await loadCaseForPrincipal(req.principal,id);
+      if (!c) return reply.code(404).send({ error:'case_not_found' });
+      return { timeline: await getCaseTimeline(id) };
+    } catch (error) {
+      if (error instanceof Error && error.message === 'forbidden') return reply.code(403).send({error:'forbidden'});
+      throw error;
+    }
   });
 
   app.post('/api/maintenance/cases/:id/transition', async (req, reply) => {

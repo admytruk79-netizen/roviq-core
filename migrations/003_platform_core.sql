@@ -90,14 +90,20 @@ alter table actors add column if not exists user_id uuid references users(id) on
 create index if not exists actors_org_idx on actors(organization_id,status);
 create index if not exists actors_location_idx on actors(location_id,status);
 
-insert into roles(role_key,domain,description) values
+insert into roles(role_key,domain,description)
+select seed.role_key,seed.domain,seed.description
+from (values
   ('SUPER_ADMIN',null,'Global ROVIQ visibility and override'),
   ('DOMAIN_ADMIN','maintenance','Maintenance domain administration'),
   ('DOMAIN_ADMIN','local','ROVIQ Local domain administration'),
-  ('DOMAIN_ADMIN','station','ROVIQ Station domain administration'),
+  ('DOMAIN_ADMIN','station','Station domain administration'),
   ('REGIONAL_ADMIN',null,'Country/region/multi-market administration'),
-  ('CITY_CURATOR','local','ROVIQ Local market curation'),
+  ('CITY_CURATOR','local','Local market curation'),
   ('PARTNER_ADMIN',null,'Organization-scoped partner administration'),
   ('CONTRIBUTOR','local','Own submissions and reputation'),
   ('PUBLIC_USER',null,'Public product surfaces')
-on conflict(role_key,domain) do nothing;
+) as seed(role_key,domain,description)
+where not exists (
+  select 1 from roles existing
+  where existing.role_key=seed.role_key and existing.domain is not distinct from seed.domain
+);

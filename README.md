@@ -1,6 +1,6 @@
 # ROVIQ Core
 
-ROVIQ Core is the backend orchestration layer described in **ROVIQ Master Data Architecture & Technical Specification v2.1**.
+ROVIQ Core is the authoritative backend orchestration layer described in **ROVIQ Master Data Architecture & Technical Specification v2.2**.
 
 This repository starts with the Maintenance MVP while preserving the reusable primitives required for later domains such as ROVIQ Station.
 
@@ -25,6 +25,10 @@ This repository starts with the Maintenance MVP while preserving the reusable pr
 - Audit trail
 - Maintenance-domain seed migrations
 - Isolation-focused tests
+- Service Plan aggregate with immutable revisions, tasks, commitments and approvals
+- Product catalog, price books, quotes, subscriptions, entitlements, refunds, disputes and revenue allocation primitives
+- Checksum-verified, concurrency-safe migration ledger
+- Fail-closed case access across customer, shop, diagnostic, transport, parts and fleet roles
 
 ## Routing policy boundary
 
@@ -63,6 +67,8 @@ Authorization middleware enforces actor ownership server-side; clients cannot ga
 - `GET /api/maintenance/cases/:id`
 - `GET /api/maintenance/cases/:id/timeline`
 - `POST /api/maintenance/cases/:id/transition`
+- `GET /api/maintenance/cases/:id/service-plan`
+- `POST /api/admin/maintenance/cases/:id/service-plan/revisions`
 - `GET /api/partners/me/offers`
 - `POST /api/offers/:id/respond`
 - `PATCH /api/partners/me/capacity`
@@ -73,12 +79,16 @@ Authorization middleware enforces actor ownership server-side; clients cannot ga
 - `GET /api/admin/routing-policies`
 - `GET /api/admin/audit`
 
-## Next operational layers
+## Runtime boundary
+
+Fastify Core is the only authoritative application backend and the only component that persists business commands to Neon Postgres. The Cloudflare Worker is an edge gateway: it exposes an independent edge health check and forwards `/api/*` and `/ready` to Core. Set its `CORE_API_URL` secret and verify Core before manually dispatching the edge deployment workflow. This avoids separate authorization, workflow and audit behavior at the edge.
+
+## Next MVP layers
 
 1. Tow/valet dispatch execution
 2. Loaner/fleet resource allocation
 3. Parts ordering and fulfilment lifecycle
-4. Payment provider integration against the ledger boundary
+4. Payment provider integration against quotes, allocations and the ledger boundary
 5. Notification adapters for actor-specific front ends
-6. AI triage contract with human/diagnostic escalation controls
+6. Customer approval, exception recovery and Service Plan status projection
 7. Domain adapters that reuse Core for ROVIQ Station and later operating domains

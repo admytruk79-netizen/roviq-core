@@ -2,6 +2,7 @@ import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
 import { appendCaseEvent } from './orchestration.js';
 import { audit } from './audit.js';
+import { assertCaseAccess } from './case-access.js';
 
 export async function createTriageAssessment(principal: Principal, input: {
   caseId:string; demandId?:string; source?:string; modelProvider?:string; modelName?:string;
@@ -9,9 +10,7 @@ export async function createTriageAssessment(principal: Principal, input: {
   suggestedDrivability?:string; safetyFlags?:unknown[]; evidence?:unknown[]; confidence?:number;
   requiresHumanReview?:boolean; actions?:Array<{ actionType:string; actionPayload?:Record<string,unknown> }>;
 }) {
-  const c = await pool.query('select customer_actor_id from service_cases where id=$1',[input.caseId]);
-  if (!c.rowCount) throw new Error('case_not_found');
-  if (principal.role === 'customer' && c.rows[0].customer_actor_id !== principal.actorId) throw new Error('forbidden');
+  await assertCaseAccess(principal,input.caseId);
   const r = await pool.query(
     `insert into ai_triage_assessments(case_id,demand_id,requested_by_actor_id,source,model_provider,model_name,input_snapshot,symptom_summary,suggested_capabilities,suggested_drivability,safety_flags,evidence,confidence,requires_human_review)
      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) returning *`,
@@ -33,6 +32,7 @@ export async function reviewTriageAssessment(principal: Principal, assessmentId:
   const current = await pool.query('select * from ai_triage_assessments where id=$1',[assessmentId]);
   if (!current.rowCount) throw new Error('assessment_not_found');
   const a = current.rows[0];
+  await assertCaseAccess(principal,a.case_id);
   if (a.status !== 'proposed' && a.status !== 'reviewed') throw new Error('assessment_already_final');
   const r = await pool.query(
     `update ai_triage_assessments set status=$1,reviewed_by_actor_id=$2,reviewed_at=now(),review_notes=$3 where id=$4 returning *`,
@@ -48,6 +48,7 @@ export async function decideTriageAction(principal: Principal, actionId:string, 
   const current = await pool.query(`select ta.*,aa.case_id from ai_triage_actions ta join ai_triage_assessments aa on aa.id=ta.assessment_id where ta.id=$1`,[actionId]);
   if (!current.rowCount) throw new Error('action_not_found');
   const a = current.rows[0];
+  await assertCaseAccess(principal,a.case_id);
   if (a.state !== 'suggested') throw new Error('action_already_decided');
   const r = await pool.query(
     `update ai_triage_actions set state=$1,approved_by_actor_id=$2,approved_at=now() where id=$3 returning *`,

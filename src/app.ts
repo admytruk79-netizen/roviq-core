@@ -21,6 +21,7 @@ import { notificationRoutes } from './http/routes/notifications.js';
 import { triageRoutes } from './http/routes/triage.js';
 import { integrationRoutes } from './http/routes/integrations.js';
 import { triageEvaluationRoutes } from './http/routes/triage-evaluation.js';
+import { servicePlanRoutes } from './http/routes/service-plans.js';
 
 export async function buildApp() {
   // Pino/Fastify logging currently triggers a Worker startup incompatibility.
@@ -39,6 +40,7 @@ export async function buildApp() {
   await app.register(coreRoutes);
   await app.register(demandRoutes);
   await app.register(caseRoutes);
+  await app.register(servicePlanRoutes);
   await app.register(partnerRoutes);
   await app.register(adminRoutes);
   await app.register(routingRoutes);
@@ -54,6 +56,8 @@ export async function buildApp() {
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof ZodError) return reply.code(400).send({ error:'validation_error', details:err.issues });
+    if (err instanceof Error && err.message === 'idempotency_key_reused') return reply.code(409).send({error:err.message});
+    if (err instanceof Error && err.message === 'idempotency_key_too_long') return reply.code(400).send({error:err.message});
     console.error('roviq_core_error', err);
     return reply.code(500).send({ error:'internal_error' });
   });
