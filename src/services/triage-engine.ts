@@ -74,45 +74,58 @@ export async function runTriage(principal:Principal, input:{
   return { assessmentId:assessment.id, engineVersion:ENGINE_VERSION, mode, safetyOverride, requiresHumanReview, result };
 }
 
+const TRIAGE_JSON_SHAPE = `{
+  "symptomSummary": string,
+  "suggestedCapabilities": string[],
+  "suggestedDrivability": "unknown" | "drivable" | "limited" | "non_drivable",
+  "safetyFlags": Array<{ "code": string, "severity": "info" | "warning" | "critical", "rationale": string }>,
+  "evidence": Array<{ "source": string, "statement": string }>,
+  "confidence": number between 0 and 1,
+  "missingInformation": string[],
+  "suggestedActions": Array<{ "actionType": string, "actionPayload"?: object }>
+}`;
+
 async function inferStructured(input:{ symptoms:string; vehicle:Record<string,unknown>; observations:Record<string,unknown> }):Promise<TriageResult> {
   const endpoint = process.env.TRIAGE_MODEL_ENDPOINT;
   const apiKey = process.env.TRIAGE_MODEL_API_KEY;
   const model = process.env.TRIAGE_MODEL;
-  if (!endpoint || !apiKey || !model) return conservativeFallback(input);
+  if (!endpoint || !apiKey || !model) {
+    console.error('roviq_triage_fallback', { reason:'model_not_configured' });
+    return conservativeFallback(input);
+  }
 
-  const schema = {
-    type:'object', additionalProperties:false,
-    properties:{
-      symptomSummary:{type:'string'},
-      suggestedCapabilities:{type:'array',items:{type:'string'}},
-      suggestedDrivability:{type:'string',enum:['unknown','drivable','limited','non_drivable']},
-      safetyFlags:{type:'array',items:{type:'object',additionalProperties:false,properties:{code:{type:'string'},severity:{type:'string',enum:['info','warning','critical']},rationale:{type:'string'}},required:['code','severity','rationale']}},
-      evidence:{type:'array',items:{type:'object',additionalProperties:false,properties:{source:{type:'string'},statement:{type:'string'}},required:['source','statement']}},
-      confidence:{type:'number',minimum:0,maximum:1},
-      missingInformation:{type:'array',items:{type:'string'}},
-      suggestedActions:{type:'array',items:{type:'object',additionalProperties:false,properties:{actionType:{type:'string'},actionPayload:{type:'object'}},required:['actionType']}}
-    },
-    required:['symptomSummary','suggestedCapabilities','suggestedDrivability','safetyFlags','evidence','confidence','missingInformation','suggestedActions']
-  };
-
-  const response = await fetch(endpoint,{
-    method:'POST',
-    headers:{ 'authorization':`Bearer ${apiKey}`,'content-type':'application/json', ...(process.env.TRIAGE_GATEWAY_ID ? {'cf-aig-gateway-id':process.env.TRIAGE_GATEWAY_ID} : {}) },
-    body:JSON.stringify({
-      model,
-      temperature:0,
-      messages:[
-        { role:'system', content:'You are ROVIQ automotive triage. Be conservative. Do not name or select providers. Do not claim a definitive diagnosis. Identify safety risks, drivability, missing information, and which service capabilities may be needed. Return only schema-compliant JSON.' },
-        { role:'user', content:JSON.stringify(input) }
-      ],
-      response_format:{ type:'json_schema', json_schema:schema }
-    })
-  });
-  if (!response.ok) return conservativeFallback(input);
-  const json:any = await response.json();
-  const candidate = json?.response ?? json?.choices?.[0]?.message?.content ?? json;
-  const parsed = typeof candidate === 'string' ? JSON.parse(candidate) : candidate;
-  return validateResult(parsed,input);
+  let response: Response;
+  try {
+    response = await fetch(endpoint,{
+      method:'POST',
+      headers:{ 'authorization':`Bearer ${apiKey}`,'content-type':'application/json', ...(process.env.TRIAGE_GATEWAY_ID ? {'cf-aig-gateway-id':process.env.TRIAGE_GATEWAY_ID} : {}) },
+      body:JSON.stringify({
+        model,
+        temperature:0,
+        messages:[
+          { role:'system', content:`You are ROVIQ automotive triage. Be conservative. Do not name or select providers. Do not claim a definitive diagnosis. Identify safety risks, drivability, missing information, and which service capabilities may be needed. Respond with ONLY a single JSON object matching exactly this shape, no prose, no markdown fences:\n${TRIAGE_JSON_SHAPE}` },
+          { role:'user', content:JSON.stringify(input) }
+        ]
+      })
+    });
+  } catch (error) {
+    console.error('roviq_triage_fallback', { reason:'request_failed', error:error instanceof Error ? error.message : String(error) });
+    return conservativeFallback(input);
+  }
+  if (!response.ok) {
+    console.error('roviq_triage_fallback', { reason:'non_ok_response', status:response.status, body:await response.text().catch(()=>'') });
+    return conservativeFallback(input);
+  }
+  try {
+    const json:any = await response.json();
+    const candidate = json?.response ?? json?.choices?.[0]?.message?.content ?? json;
+    const text = typeof candidate === 'string' ? candidate.trim().replace(/^```(?:json)?\s*|\s*```$/g,'') : candidate;
+    const parsed = typeof text === 'string' ? JSON.parse(text) : text;
+    return validateResult(parsed,input);
+  } catch (error) {
+    console.error('roviq_triage_fallback', { reason:'parse_failed', error:error instanceof Error ? error.message : String(error) });
+    return conservativeFallback(input);
+  }
 }
 
 function validateResult(x:any,input:any):TriageResult {
