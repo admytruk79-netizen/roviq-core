@@ -53,10 +53,7 @@ jobs:
           grep -q '"id": "38defb5eb63d4a079a46eea4f952eaf7"' wrangler.jsonc
           grep -q '"hyperdrive"' wrangler.jsonc
 
-      - name: Build authoritative Core
-        run: npm run build
-
-      - name: Validate Worker bundle
+      - name: Validate authoritative Worker Core bundle
         run: npx wrangler deploy --dry-run --config wrangler.jsonc
 
       - name: Persist synchronized package lock
