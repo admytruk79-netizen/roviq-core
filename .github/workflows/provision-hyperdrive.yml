@@ -2,6 +2,13 @@ name: Provision ROVIQ Hyperdrive
 
 on:
   workflow_dispatch:
+  push:
+    branches: [rebuild/neon-core]
+    paths:
+      - 'cloudflare/hyperdrive-worker.js'
+      - 'wrangler.jsonc'
+      - 'package.json'
+      - '.github/workflows/provision-hyperdrive.yml'
 
 permissions:
   contents: write
@@ -17,7 +24,7 @@ jobs:
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      NEON_HYPERDRIVE_URL: ${{ secrets.NEON_HYPERDRIVE_URL }}
+      NEON_HYPERDRIVE_URL: ${{ secrets.NEON_HYPERDRIVE_URL || secrets.DATABASE_URL }}
     steps:
       - name: Checkout rebuild branch
         uses: actions/checkout@v4
@@ -37,20 +44,24 @@ jobs:
         run: |
           test -n "$CLOUDFLARE_API_TOKEN" || (echo "CLOUDFLARE_API_TOKEN is missing" && exit 1)
           test -n "$CLOUDFLARE_ACCOUNT_ID" || (echo "CLOUDFLARE_ACCOUNT_ID is missing" && exit 1)
-          test -n "$NEON_HYPERDRIVE_URL" || (echo "NEON_HYPERDRIVE_URL is missing" && exit 1)
+          test -n "$NEON_HYPERDRIVE_URL" || (echo "NEON_HYPERDRIVE_URL or DATABASE_URL is missing" && exit 1)
           echo "::add-mask::$NEON_HYPERDRIVE_URL"
           npx wrangler whoami
 
-      - name: Create Hyperdrive and bind Worker
+      - name: Create Hyperdrive and bind Worker if needed
         shell: bash
         run: |
-          npx wrangler hyperdrive create roviq-core-neon \
-            --connection-string="$NEON_HYPERDRIVE_URL" \
-            --binding HYPERDRIVE \
-            --update-config \
-            --config wrangler.jsonc
+          if grep -q '"binding": "HYPERDRIVE"' wrangler.jsonc; then
+            echo "Hyperdrive binding already present; skipping creation"
+          else
+            npx wrangler hyperdrive create roviq-core-neon \
+              --connection-string="$NEON_HYPERDRIVE_URL" \
+              --binding HYPERDRIVE \
+              --update-config \
+              --config wrangler.jsonc
+          fi
 
-      - name: Verify binding was written
+      - name: Verify binding and Worker bundle
         shell: bash
         run: |
           grep -q '"binding": "HYPERDRIVE"' wrangler.jsonc
