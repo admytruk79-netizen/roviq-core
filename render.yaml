@@ -14,9 +14,9 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: ADMIN_API_KEY
-        sync: false
+        generateValue: true
       - key: JWT_SECRET
-        sync: false
+        generateValue: true
       - key: JWT_ISSUER
         value: roviq-core
       - key: JWT_AUDIENCE
