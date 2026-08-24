@@ -3,21 +3,12 @@
   "name": "roviq-core",
   "main": "cloudflare/worker.js",
   "compatibility_date": "2026-08-24",
-  "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
   },
-  "ai": {
-    "binding": "AI"
-  },
   "vars": {
-    "JWT_ISSUER": "roviq-core",
-    "JWT_AUDIENCE": "roviq-apps",
-    "TRIAGE_DEPLOYMENT_MODE": "shadow",
-    "TRIAGE_AUTO_CONFIDENCE_THRESHOLD": "0.90",
-    "TRIAGE_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-    "DEPLOY_REVISION": "native-worker-2026-08-24-2"
+    "DEPLOY_REVISION": "rebuild-neon-core-phase0"
   }
 }
