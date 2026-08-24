@@ -29,6 +29,13 @@ This repository starts with the Maintenance MVP while preserving the reusable pr
 - Product catalog, price books, quotes, subscriptions, entitlements, refunds, disputes and revenue allocation primitives
 - Checksum-verified, concurrency-safe migration ledger
 - Fail-closed case access across customer, shop, diagnostic, transport, parts and fleet roles
+- Tow/valet transport dispatch, assignment and status tracking
+- Loaner/fleet mobility resource allocation and state management
+- Parts ordering, supplier assignment, reservation and fulfilment lifecycle
+- Payments, refunds, partner payouts and per-case financial rollups
+- Notification outbox with templates, per-channel delivery and retry attempts
+- AI triage engine with human review, ground-truth capture and shadow/auto promotion evaluation
+- External integration gateway: registered clients, webhook subscriptions and delivery tracking
 
 ## Routing policy boundary
 
@@ -78,17 +85,26 @@ Authorization middleware enforces actor ownership server-side; clients cannot ga
 - `POST /api/admin/routing-policies`
 - `GET /api/admin/routing-policies`
 - `GET /api/admin/audit`
+- `POST /api/admin/transport`, `POST /api/admin/transport/:id/assign`, `GET /api/transport/:id`, `POST /api/transport/:id/status`
+- `POST /api/admin/mobility/resources`, `GET /api/mobility/resources/available`, `POST /api/maintenance/cases/:id/mobility`, `POST /api/mobility/:id/state`
+- `POST /api/maintenance/cases/:caseId/parts-orders`, `POST /api/parts/orders/:id/reserve`, `POST /api/parts/orders/:id/status`, `PUT /api/parts/inventory`
+- `POST /api/admin/payments`, `POST /api/admin/payments/:id/state`, `POST /api/admin/payments/:id/refunds`, `POST /api/admin/payouts`, `GET /api/admin/cases/:id/financials`
+- `POST /api/admin/notifications/process`, `GET /api/admin/notifications/outbox`, `POST /api/admin/notifications/templates`
+- `POST /api/maintenance/cases/:id/triage/run`, `POST /api/triage/:id/review`, `POST /api/admin/triage/evaluate`, `PUT /api/admin/triage/promotion-policy`
+- `POST /api/admin/integrations/clients`, `POST /api/admin/integrations/webhooks`, `POST /api/admin/integrations/deliver`
 
 ## Runtime boundary
 
 Fastify Core is the only authoritative application backend and the only component that persists business commands to Neon Postgres. The Cloudflare Worker is an edge gateway: it exposes an independent edge health check and forwards `/api/*` and `/ready` to Core. Set its `CORE_API_URL` secret and verify Core before manually dispatching the edge deployment workflow. This avoids separate authorization, workflow and audit behavior at the edge.
 
-## Next MVP layers
+## Deployment
 
-1. Tow/valet dispatch execution
-2. Loaner/fleet resource allocation
-3. Parts ordering and fulfilment lifecycle
-4. Payment provider integration against quotes, allocations and the ledger boundary
-5. Notification adapters for actor-specific front ends
-6. Customer approval, exception recovery and Service Plan status projection
-7. Domain adapters that reuse Core for ROVIQ Station and later operating domains
+Live on Render (free tier): `https://roviq-core.onrender.com`. Backed by Neon Postgres; migrations run automatically on boot via `npm run db:migrate:prod`. A Cloudflare Worker + Containers path also exists (`wrangler.jsonc`, `Dockerfile`) but requires a paid Workers plan for the Containers image registry — Render is the currently verified free deploy path.
+
+## Remaining work
+
+Tow/valet dispatch, loaner/fleet allocation, parts fulfilment, payments, notifications, AI triage and the integration gateway are all implemented (see routes above). What's left:
+
+1. Domain adapters that reuse Core for ROVIQ Station and later operating domains
+2. Functional test coverage for the newer domains (transport, mobility, parts, payments, notifications, triage, integrations currently have no dedicated tests — only case-access/isolation are covered)
+3. Upgrading the Cloudflare Containers deploy path once the account is on a paid Workers plan, so edge deployment stops depending on Render
