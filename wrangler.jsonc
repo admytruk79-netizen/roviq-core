@@ -12,6 +12,12 @@
   "ai": {
     "binding": "AI"
   },
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "38defb5eb63d4a079a46eea4f952eaf7"
+    }
+  ],
   "vars": {
     "DEPLOY_REVISION": "rebuild-neon-core-hyperdrive-v1"
   }
