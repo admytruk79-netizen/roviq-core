@@ -8,7 +8,8 @@ const schema = z.object({
   JWT_SECRET: z.string().min(32),
   JWT_ISSUER: z.string().default('roviq-core'),
   JWT_AUDIENCE: z.string().default('roviq-apps'),
-  ALLOW_DEV_HEADERS: z.enum(['true','false']).default('false').transform(v => v === 'true')
+  ALLOW_DEV_HEADERS: z.enum(['true','false']).default('false').transform(v => v === 'true'),
+  REQUIRED_MIGRATION: z.string().default('016_service_plan_commerce.sql')
 });
 
 export const env = schema.parse(process.env);
