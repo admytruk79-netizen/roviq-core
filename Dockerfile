@@ -14,4 +14,4 @@ RUN npm install --omit=dev --no-audit --no-fund && npm cache clean --force
 COPY --from=build /app/dist ./dist
 COPY migrations ./migrations
 EXPOSE 8080
-CMD ["sh","-c","npm run db:migrate:prod && npm start"]
+CMD ["npm","start"]
