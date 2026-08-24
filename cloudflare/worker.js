@@ -1,5 +1,3 @@
-import { neon } from '@neondatabase/serverless';
-
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status,
   headers: {
@@ -11,8 +9,14 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), {
   }
 });
 
-function sqlFor(env) {
+let neonFactoryPromise;
+
+async function sqlFor(env) {
   if (!env.DATABASE_URL) throw new Error('database_not_configured');
+  if (!neonFactoryPromise) {
+    neonFactoryPromise = import('@neondatabase/serverless').then((module) => module.neon);
+  }
+  const neon = await neonFactoryPromise;
   return neon(env.DATABASE_URL);
 }
 
@@ -60,7 +64,7 @@ async function runTriage(env, body) {
   const { caseId, symptoms, vehicle = {}, observations = {} } = body || {};
   if (!caseId || !symptoms) return { error: 'caseId_and_symptoms_required', status: 400 };
 
-  const sql = sqlFor(env);
+  const sql = await sqlFor(env);
   const existing = await sql`select id from service_cases where id = ${caseId} limit 1`;
   if (!existing.length) return { error: 'service_case_not_found', status: 404 };
 
@@ -120,7 +124,7 @@ async function runTriage(env, body) {
       ${result.symptomSummary}, ${JSON.stringify(result.suggestedCapabilities)}::jsonb,
       ${result.suggestedDrivability}, ${JSON.stringify(result.safetyFlags)}::jsonb,
       ${JSON.stringify(result.evidence)}::jsonb, ${result.confidence}, ${requiresHumanReview},
-      'proposed', 'native-worker-v2', ${mode}, ${deterministic.forceNonDrivable},
+      'proposed', 'native-worker-v3', ${mode}, ${deterministic.forceNonDrivable},
       ${deterministic.forceNonDrivable ? 'deterministic_safety_rule' : null},
       ${JSON.stringify(raw || {})}::jsonb, ${latencyMs}
     ) returning id, created_at
@@ -145,18 +149,18 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === '/' || url.pathname === '/health' || url.pathname === '/edge-health') {
-      return json({ ok: true, service: 'roviq-core', runtime: 'cloudflare-worker', database: 'neon', aiTriage: 'shadow', engine: 'native-worker-v2' });
+      return json({ ok: true, service: 'roviq-core', runtime: 'cloudflare-worker', database: 'neon', aiTriage: 'shadow', engine: 'native-worker-v3' });
     }
 
     try {
       if (url.pathname === '/ready') {
-        const sql = sqlFor(env);
+        const sql = await sqlFor(env);
         const rows = await sql`select now() as database_time, current_database() as database_name, current_user as database_user`;
         return json({ ok: true, service: 'roviq-core', database: 'reachable', ...rows[0], aiBinding: Boolean(env.AI) });
       }
 
       if (url.pathname === '/api/core/status') {
-        const sql = sqlFor(env);
+        const sql = await sqlFor(env);
         const rows = await sql`select
           (select count(*)::int from actors) actors,
           (select count(*)::int from domains) domains,
@@ -175,7 +179,7 @@ export default {
       const match = url.pathname.match(/^\/api\/triage\/([0-9a-f-]{36})$/i);
       if (match && request.method === 'GET') {
         if (!authorized(request, env)) return json({ error: 'unauthorized' }, 401);
-        const sql = sqlFor(env);
+        const sql = await sqlFor(env);
         const rows = await sql`
           select id, case_id, model_provider, model_name, symptom_summary,
                  suggested_capabilities, suggested_drivability, safety_flags, evidence,
