@@ -2,7 +2,8 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "roviq-core",
   "main": "cloudflare/worker.js",
-  "compatibility_date": "2026-08-23",
+  "compatibility_date": "2026-08-24",
+  "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "observability": {
     "enabled": true,
@@ -17,30 +18,5 @@
     "TRIAGE_DEPLOYMENT_MODE": "shadow",
     "TRIAGE_AUTO_CONFIDENCE_THRESHOLD": "0.90",
     "TRIAGE_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
-  },
-  "containers": [
-    {
-      "class_name": "RoviqCoreContainer",
-      "image": "./Dockerfile",
-      "max_instances": 3,
-      "instance_type": "lite",
-      "constraints": {
-        "regions": ["ENAM"]
-      }
-    }
-  ],
-  "durable_objects": {
-    "bindings": [
-      {
-        "name": "ROVIQ_CORE_CONTAINER",
-        "class_name": "RoviqCoreContainer"
-      }
-    ]
-  },
-  "migrations": [
-    {
-      "tag": "v1",
-      "new_sqlite_classes": ["RoviqCoreContainer"]
-    }
-  ]
+  }
 }
