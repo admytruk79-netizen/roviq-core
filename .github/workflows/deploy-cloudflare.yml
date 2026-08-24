@@ -4,12 +4,6 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths:
-      - 'cloudflare/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'wrangler.jsonc'
-      - '.github/workflows/deploy-cloudflare.yml'
 
 permissions:
   contents: read
@@ -26,8 +20,10 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
-      - name: Checkout
+      - name: Checkout current main
         uses: actions/checkout@v4
+        with:
+          ref: main
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -36,6 +32,17 @@ jobs:
 
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
+
+      - name: Show deployment source
+        shell: bash
+        run: |
+          echo "commit=$(git rev-parse HEAD)"
+          grep -q "@neondatabase/serverless" cloudflare/worker.js
+          if grep -q "Fastify\|@cloudflare/containers" cloudflare/worker.js; then
+            echo "Refusing to deploy stale Fastify/container Worker entrypoint"
+            exit 1
+          fi
+          cat wrangler.jsonc
 
       - name: Verify Cloudflare credentials
         shell: bash
@@ -47,7 +54,7 @@ jobs:
       - name: Validate native Worker bundle
         run: npx wrangler deploy --dry-run --config wrangler.jsonc
 
-      - name: Deploy ROVIQ Core Worker
+      - name: Deploy native ROVIQ Core Worker
         run: npx wrangler deploy --config wrangler.jsonc
 
       - name: Verify Core and Neon
