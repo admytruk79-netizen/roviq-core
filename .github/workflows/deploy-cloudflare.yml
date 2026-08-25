@@ -1,17 +1,9 @@
-name: Deploy Full ROVIQ Core MVP to Cloudflare
+name: Deploy ROVIQ Core Worker
 
 on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths:
-      - 'src/**'
-      - 'migrations/**'
-      - 'cloudflare/**'
-      - 'Dockerfile'
-      - 'package.json'
-      - 'wrangler.jsonc'
-      - '.github/workflows/deploy-cloudflare.yml'
 
 permissions:
   contents: read
@@ -23,27 +15,34 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
-      - name: Checkout
+      - name: Checkout current main
         uses: actions/checkout@v4
+        with:
+          ref: main
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      - name: Verify Docker
-        run: docker info >/dev/null
-
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
-      - name: Build full Core
-        run: npm run build
+      - name: Show deployment source
+        shell: bash
+        run: |
+          echo "commit=$(git rev-parse HEAD)"
+          grep -q "@neondatabase/serverless" cloudflare/worker.js
+          if grep -q "Fastify\|@cloudflare/containers" cloudflare/worker.js; then
+            echo "Refusing to deploy stale Fastify/container Worker entrypoint"
+            exit 1
+          fi
+          cat wrangler.jsonc
 
       - name: Verify Cloudflare credentials
         shell: bash
@@ -52,24 +51,24 @@ jobs:
           test -n "$CLOUDFLARE_ACCOUNT_ID" || (echo "CLOUDFLARE_ACCOUNT_ID is missing" && exit 1)
           npx wrangler whoami
 
-      - name: Validate Cloudflare configuration
+      - name: Validate native Worker bundle
         run: npx wrangler deploy --dry-run --config wrangler.jsonc
 
-      - name: Deploy full ROVIQ Core MVP
+      - name: Deploy native ROVIQ Core Worker
         run: npx wrangler deploy --config wrangler.jsonc
 
-      - name: Verify full Core health and Neon readiness
+      - name: Verify Core and Neon
         shell: bash
         run: |
-          for i in $(seq 1 30); do
-            HEALTH=$(curl --silent --show-error --max-time 20 https://roviq-core.admytruk79.workers.dev/health || true)
-            READY=$(curl --silent --show-error --max-time 20 https://roviq-core.admytruk79.workers.dev/ready || true)
+          for i in $(seq 1 12); do
+            HEALTH=$(curl --silent --show-error --max-time 15 https://roviq-core.admytruk79.workers.dev/health || true)
+            READY=$(curl --silent --show-error --max-time 15 https://roviq-core.admytruk79.workers.dev/ready || true)
             echo "health=$HEALTH"
             echo "ready=$READY"
-            if echo "$HEALTH" | grep -q '"ok"' && echo "$READY" | grep -q '"ok"'; then
+            if echo "$HEALTH" | grep -q '"ok":true' && echo "$READY" | grep -q '"database":"reachable"'; then
               exit 0
             fi
-            sleep 10
+            sleep 5
           done
-          echo "ROVIQ Core container did not become healthy and Neon-ready"
+          echo "ROVIQ Core did not become healthy and Neon-ready"
           exit 1
