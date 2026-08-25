@@ -1,1 +1,1 @@
-export { default } from './core-worker-v2.js';
+export { default } from './core-worker-v2-fixed.js';
