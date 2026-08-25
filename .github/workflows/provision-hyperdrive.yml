@@ -25,6 +25,7 @@ jobs:
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WORKER_URL: https://roviq-core-rebuild.admytruk79.workers.dev
     steps:
       - name: Checkout rebuild branch
         uses: actions/checkout@v4
@@ -46,12 +47,13 @@ jobs:
           test -n "$CLOUDFLARE_ACCOUNT_ID" || (echo "CLOUDFLARE_ACCOUNT_ID is missing" && exit 1)
           npx wrangler whoami
 
-      - name: Verify existing Hyperdrive binding
+      - name: Verify Hyperdrive and Workers AI bindings
         shell: bash
         run: |
+          grep -q '"name": "roviq-core-rebuild"' wrangler.jsonc
           grep -q '"binding": "HYPERDRIVE"' wrangler.jsonc
           grep -q '"id": "38defb5eb63d4a079a46eea4f952eaf7"' wrangler.jsonc
-          grep -q '"hyperdrive"' wrangler.jsonc
+          grep -q '"binding": "AI"' wrangler.jsonc
 
       - name: Validate authoritative Worker Core bundle
         run: npx wrangler deploy --dry-run --config wrangler.jsonc
@@ -69,21 +71,25 @@ jobs:
             git push origin HEAD:rebuild/neon-core
           fi
 
-      - name: Deploy Hyperdrive-backed Worker
+      - name: Deploy isolated Hyperdrive-backed Worker
         run: npx wrangler deploy --config wrangler.jsonc
 
-      - name: Verify live Core health and Hyperdrive readiness
+      - name: Verify live Core, Neon, and AI
         shell: bash
         run: |
           for i in $(seq 1 18); do
-            HEALTH=$(curl --silent --show-error --max-time 15 https://roviq-core.admytruk79.workers.dev/health || true)
-            READY=$(curl --silent --show-error --max-time 15 https://roviq-core.admytruk79.workers.dev/ready || true)
+            HEALTH=$(curl --silent --show-error --max-time 20 "$WORKER_URL/health" || true)
+            READY=$(curl --silent --show-error --max-time 20 "$WORKER_URL/ready" || true)
+            AI=$(curl --silent --show-error --max-time 30 "$WORKER_URL/api/ai/ping" || true)
             echo "health=$HEALTH"
             echo "ready=$READY"
-            if echo "$HEALTH" | grep -q '"databaseTransport":"hyperdrive-neon"' && echo "$READY" | grep -q '"database":"reachable"'; then
+            echo "ai=$AI"
+            if echo "$HEALTH" | grep -q '"databaseTransport":"hyperdrive-neon"' \
+              && echo "$READY" | grep -q '"database":"reachable"' \
+              && echo "$AI" | grep -q '"ok":true'; then
               exit 0
             fi
             sleep 5
           done
-          echo "Hyperdrive-backed ROVIQ Core did not become ready"
+          echo "Isolated ROVIQ Core did not become fully ready"
           exit 1
