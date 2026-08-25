@@ -111,12 +111,18 @@ jobs:
       - name: Verify live ROVIQ business flow v2
         shell: bash
         run: |
-          RESPONSE=$(curl --fail-with-body --silent --show-error --max-time 120 \
+          BODY_FILE=$(mktemp)
+          STATUS=$(curl --silent --show-error --max-time 120 \
+            -o "$BODY_FILE" -w '%{http_code}' \
             -X POST "$WORKER_URL/api/internal/e2e/service-case" \
             -H "Authorization: Bearer $ROVIQ_E2E_TOKEN" \
             -H 'Content-Type: application/json' \
             --data '{}')
-          echo "$RESPONSE"
+          RESPONSE=$(cat "$BODY_FILE")
+          rm -f "$BODY_FILE"
+          echo "status=$STATUS"
+          echo "response=$RESPONSE"
+          test "$STATUS" = "201" || exit 1
           echo "$RESPONSE" | grep -q '"ok":true'
           echo "$RESPONSE" | grep -q '"state":"completed"'
           echo "$RESPONSE" | grep -q '"status":"completed"'
