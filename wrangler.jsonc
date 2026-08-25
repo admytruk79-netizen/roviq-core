@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "roviq-core-rebuild",
-  "main": "cloudflare/access-worker.js",
+  "main": "cloudflare/operations-worker.js",
   "compatibility_date": "2026-08-24",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
@@ -19,6 +19,6 @@
     }
   ],
   "vars": {
-    "DEPLOY_REVISION": "rebuild-neon-core-auth-v1"
+    "DEPLOY_REVISION": "rebuild-neon-core-operations-v1"
   }
 }
