@@ -21,7 +21,7 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -74,6 +74,13 @@ jobs:
       - name: Deploy isolated Hyperdrive-backed Worker
         run: npx wrangler deploy --config wrangler.jsonc
 
+      - name: Install rotating internal E2E token
+        shell: bash
+        run: |
+          E2E_TOKEN=$(openssl rand -hex 32)
+          echo "ROVIQ_E2E_TOKEN=$E2E_TOKEN" >> "$GITHUB_ENV"
+          printf '%s' "$E2E_TOKEN" | npx wrangler secret put ROVIQ_E2E_TOKEN --name roviq-core-rebuild
+
       - name: Verify live Core, Neon, and AI
         shell: bash
         run: |
@@ -93,3 +100,19 @@ jobs:
           done
           echo "Isolated ROVIQ Core did not become fully ready"
           exit 1
+
+      - name: Verify live ROVIQ business flow
+        shell: bash
+        run: |
+          RESPONSE=$(curl --fail-with-body --silent --show-error --max-time 120 \
+            -X POST "$WORKER_URL/api/internal/e2e/service-case" \
+            -H "Authorization: Bearer $ROVIQ_E2E_TOKEN" \
+            -H 'Content-Type: application/json' \
+            --data '{}')
+          echo "$RESPONSE"
+          echo "$RESPONSE" | grep -q '"ok":true'
+          echo "$RESPONSE" | grep -q '"state":"completed"'
+          echo "$RESPONSE" | grep -q '"status":"completed"'
+          echo "$RESPONSE" | grep -q 'SERVICE_PLAN_APPROVED'
+          echo "$RESPONSE" | grep -q 'ROUTING_COMPLETED'
+          echo "$RESPONSE" | grep -q 'CASE_COMPLETED'
