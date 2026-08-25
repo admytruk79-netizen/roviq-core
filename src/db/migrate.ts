@@ -3,6 +3,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { pool } from './pool.js';
+import { hashPassword } from '../services/auth.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const migrationsDir = path.resolve(here, '../../migrations');
@@ -61,6 +62,28 @@ try {
   }
 
   console.log(`ROVIQ migrations complete: ${applied} applied, ${files.length - applied} already current.`);
+
+  const bootstrapEmail = process.env.BOOTSTRAP_ADMIN_EMAIL;
+  const bootstrapPassword = process.env.BOOTSTRAP_ADMIN_PASSWORD;
+  if (bootstrapEmail && bootstrapPassword) {
+    const existingAdmin = await client.query(`select 1 from principal_identities where role='admin' limit 1`);
+    if (!existingAdmin.rowCount) {
+      if (bootstrapPassword.length < 12) {
+        console.error('Bootstrap admin skipped: BOOTSTRAP_ADMIN_PASSWORD must be at least 12 characters.');
+      } else {
+        const { salt, hash } = hashPassword(bootstrapPassword);
+        await client.query(
+          `insert into principal_identities(email,role,password_salt,password_hash)
+           values(lower($1),'admin',$2,$3)
+           on conflict(email) do nothing`,
+          [bootstrapEmail, salt, hash]
+        );
+        console.log(`Bootstrap admin identity ensured for ${bootstrapEmail.toLowerCase()}.`);
+      }
+    } else {
+      console.log('Bootstrap admin skipped: an admin identity already exists.');
+    }
+  }
 } finally {
   await client.query('select pg_advisory_unlock($1::bigint)', [advisoryLockId]).catch(() => undefined);
   client.release();
