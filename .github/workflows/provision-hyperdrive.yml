@@ -6,6 +6,7 @@ on:
     branches: [rebuild/neon-core]
     paths:
       - 'cloudflare/hyperdrive-worker.js'
+      - 'cloudflare/production-worker.js'
       - 'wrangler.jsonc'
       - 'package.json'
       - 'package-lock.json'
@@ -51,6 +52,7 @@ jobs:
         shell: bash
         run: |
           grep -q '"name": "roviq-core-rebuild"' wrangler.jsonc
+          grep -q '"main": "cloudflare/production-worker.js"' wrangler.jsonc
           grep -q '"binding": "HYPERDRIVE"' wrangler.jsonc
           grep -q '"id": "38defb5eb63d4a079a46eea4f952eaf7"' wrangler.jsonc
           grep -q '"binding": "AI"' wrangler.jsonc
@@ -88,12 +90,15 @@ jobs:
             HEALTH=$(curl --silent --show-error --max-time 20 "$WORKER_URL/health" || true)
             READY=$(curl --silent --show-error --max-time 20 "$WORKER_URL/ready" || true)
             AI=$(curl --silent --show-error --max-time 30 "$WORKER_URL/api/ai/ping" || true)
+            PROD=$(curl --silent --show-error --max-time 20 "$WORKER_URL/api/core/production-capabilities" || true)
             echo "health=$HEALTH"
             echo "ready=$READY"
             echo "ai=$AI"
+            echo "production=$PROD"
             if echo "$HEALTH" | grep -q '"databaseTransport":"hyperdrive-neon"' \
               && echo "$READY" | grep -q '"database":"reachable"' \
-              && echo "$AI" | grep -q '"ok":true'; then
+              && echo "$AI" | grep -q '"ok":true' \
+              && echo "$PROD" | grep -q '"layer":"production-core-v1"'; then
               exit 0
             fi
             sleep 5
@@ -116,3 +121,18 @@ jobs:
           echo "$RESPONSE" | grep -q 'SERVICE_PLAN_APPROVED'
           echo "$RESPONSE" | grep -q 'ROUTING_COMPLETED'
           echo "$RESPONSE" | grep -q 'CASE_COMPLETED'
+
+      - name: Verify production intake and routing
+        shell: bash
+        run: |
+          RESPONSE=$(curl --fail-with-body --silent --show-error --max-time 120 \
+            -X POST "$WORKER_URL/api/internal/e2e/production-core" \
+            -H "Authorization: Bearer $ROVIQ_E2E_TOKEN" \
+            -H 'Content-Type: application/json' \
+            --data '{}')
+          echo "$RESPONSE"
+          echo "$RESPONSE" | grep -q '"ok":true'
+          echo "$RESPONSE" | grep -q '"vehicle"'
+          echo "$RESPONSE" | grep -q '"demand"'
+          echo "$RESPONSE" | grep -q '"servicePlan"'
+          echo "$RESPONSE" | grep -q '"routingDecision"'
