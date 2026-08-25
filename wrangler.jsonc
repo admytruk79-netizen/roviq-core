@@ -12,6 +12,16 @@
   "ai": {
     "binding": "AI"
   },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["RoviqCoreContainer"]
+    },
+    {
+      "tag": "v2",
+      "deleted_classes": ["RoviqCoreContainer"]
+    }
+  ],
   "vars": {
     "JWT_ISSUER": "roviq-core",
     "JWT_AUDIENCE": "roviq-apps",
