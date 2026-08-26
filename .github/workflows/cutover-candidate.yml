@@ -1,0 +1,156 @@
+name: Verify ROVIQ Production Candidate
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [rebuild/neon-core]
+    paths:
+      - 'wrangler.candidate.jsonc'
+      - 'cloudflare/core-worker-v2.js'
+      - 'cloudflare/production-worker.js'
+      - 'cloudflare/access-worker.js'
+      - 'cloudflare/operations-worker.js'
+      - 'cloudflare/idempotency-worker.js'
+      - 'migrations/**'
+      - 'scripts/validate-migrations.mjs'
+      - '.github/workflows/cutover-candidate.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: roviq-core-production-candidate
+  cancel-in-progress: true
+
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WORKER_URL: https://roviq-core-candidate.admytruk79.workers.dev
+    steps:
+      - name: Checkout rebuild branch
+        uses: actions/checkout@v4
+        with:
+          ref: rebuild/neon-core
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Validate migration integrity
+        run: node scripts/validate-migrations.mjs
+
+      - name: Verify candidate config
+        shell: bash
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          grep -q '"name": "roviq-core-candidate"' wrangler.candidate.jsonc
+          grep -q '"main": "cloudflare/idempotency-worker.js"' wrangler.candidate.jsonc
+          grep -q '"binding": "HYPERDRIVE"' wrangler.candidate.jsonc
+          grep -q '"id": "38defb5eb63d4a079a46eea4f952eaf7"' wrangler.candidate.jsonc
+          grep -q '"binding": "AI"' wrangler.candidate.jsonc
+          npx wrangler deploy --dry-run --config wrangler.candidate.jsonc
+
+      - name: Deploy production candidate
+        run: npx wrangler deploy --config wrangler.candidate.jsonc
+
+      - name: Ensure candidate JWT signing secret
+        shell: bash
+        run: |
+          SECRET_LIST=$(npx wrangler secret list --name roviq-core-candidate)
+          if ! echo "$SECRET_LIST" | grep -q 'ROVIQ_JWT_SECRET'; then
+            JWT_SECRET=$(openssl rand -hex 48)
+            printf '%s' "$JWT_SECRET" | npx wrangler secret put ROVIQ_JWT_SECRET --name roviq-core-candidate
+          fi
+
+      - name: Install candidate E2E token and wait for propagation
+        shell: bash
+        run: |
+          E2E_TOKEN=$(openssl rand -hex 32)
+          echo "::add-mask::$E2E_TOKEN"
+          echo "ROVIQ_E2E_TOKEN=$E2E_TOKEN" >> "$GITHUB_ENV"
+          printf '%s' "$E2E_TOKEN" | npx wrangler secret put ROVIQ_E2E_TOKEN --name roviq-core-candidate
+          BODY_FILE=$(mktemp)
+          STATUS=000
+          for i in $(seq 1 20); do
+            STATUS=$(curl --silent --show-error --max-time 10 -o "$BODY_FILE" -w '%{http_code}' \
+              "$WORKER_URL/api/internal/e2e/auth-check" \
+              -H "Authorization: Bearer $E2E_TOKEN" || true)
+            if [ "$STATUS" = "200" ]; then break; fi
+            sleep 2
+          done
+          rm -f "$BODY_FILE"
+          test "$STATUS" = "200"
+
+      - name: Verify candidate infrastructure and migration parity
+        shell: bash
+        run: |
+          EXPECTED=$(find migrations -maxdepth 1 -type f -name '[0-9][0-9][0-9]*.sql' | wc -l | tr -d ' ')
+          HEALTH=$(curl --fail-with-body --silent --show-error --max-time 30 "$WORKER_URL/health")
+          READY=$(curl --fail-with-body --silent --show-error --max-time 30 "$WORKER_URL/ready")
+          AI=$(curl --fail-with-body --silent --show-error --max-time 45 "$WORKER_URL/api/ai/ping")
+          echo "$HEALTH" | grep -q '"databaseTransport":"hyperdrive-neon"'
+          echo "$READY" | grep -q '"database":"reachable"'
+          echo "$READY" | grep -q "\"migration_count\":$EXPECTED"
+          echo "$AI" | grep -q '"ok":true'
+
+      - name: Verify candidate full service case
+        shell: bash
+        run: |
+          RESPONSE=$(curl --fail-with-body --silent --show-error --max-time 150 \
+            -X POST "$WORKER_URL/api/internal/e2e/service-case" \
+            -H "Authorization: Bearer $ROVIQ_E2E_TOKEN" \
+            -H 'Content-Type: application/json' --data '{}')
+          echo "$RESPONSE" | grep -q '"ok":true'
+          echo "$RESPONSE" | grep -q 'CASE_COMPLETED'
+
+      - name: Verify candidate production intake and routing
+        shell: bash
+        run: |
+          RESPONSE=$(curl --fail-with-body --silent --show-error --max-time 120 \
+            -X POST "$WORKER_URL/api/internal/e2e/production-core" \
+            -H "Authorization: Bearer $ROVIQ_E2E_TOKEN" \
+            -H 'Content-Type: application/json' --data '{}')
+          echo "$RESPONSE" | grep -q '"ok":true'
+          echo "$RESPONSE" | grep -q '"routingDecision"'
+
+      - name: Verify candidate auth projection
+        shell: bash
+        run: |
+          RESPONSE=$(curl --fail-with-body --silent --show-error --max-time 90 \
+            -X POST "$WORKER_URL/api/internal/e2e/auth-projection" \
+            -H "Authorization: Bearer $ROVIQ_E2E_TOKEN" \
+            -H 'Content-Type: application/json' --data '{}')
+          echo "$RESPONSE" | grep -q '"jwtVerified":true'
+          echo "$RESPONSE" | grep -q '"projection":"admin"'
+
+      - name: Verify candidate operations and recovery
+        shell: bash
+        run: |
+          RESPONSE=$(curl --fail-with-body --silent --show-error --max-time 180 \
+            -X POST "$WORKER_URL/api/internal/e2e/operations" \
+            -H "Authorization: Bearer $ROVIQ_E2E_TOKEN" \
+            -H 'Content-Type: application/json' --data '{}')
+          echo "$RESPONSE" | grep -q '"ok":true'
+          echo "$RESPONSE" | grep -q '"allAvailable":true'
+          echo "$RESPONSE" | grep -q '"state":"captured"'
+          echo "$RESPONSE" | grep -q '"state":"resolved"'
+
+      - name: Verify candidate idempotency replay
+        shell: bash
+        run: |
+          RESPONSE=$(curl --fail-with-body --silent --show-error --max-time 90 \
+            -X POST "$WORKER_URL/api/internal/e2e/idempotency" \
+            -H "Authorization: Bearer $ROVIQ_E2E_TOKEN" \
+            -H 'Content-Type: application/json' --data '{}')
+          echo "$RESPONSE" | grep -q '"ok":true'
+          echo "$RESPONSE" | grep -q '"second":"replayed"'
+          echo "$RESPONSE" | grep -q '"sameMarker":true'
