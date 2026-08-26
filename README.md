@@ -95,11 +95,16 @@ Authorization middleware enforces actor ownership server-side; clients cannot ga
 
 ## Runtime boundary
 
-Fastify Core is the only authoritative application backend and the only component that persists business commands to Neon Postgres. The Cloudflare Worker is an edge gateway: it exposes an independent edge health check and forwards `/api/*` and `/ready` to Core. Set its `CORE_API_URL` secret and verify Core before manually dispatching the edge deployment workflow. This avoids separate authorization, workflow and audit behavior at the edge.
+Fastify Core (`src/`) is the only authoritative application backend and the only component that persists business commands to Neon Postgres. It deploys to Render. The Cloudflare Worker (`cloudflare/worker.js`) is an edge gateway: it answers its own health checks (`/health`, `/edge-health`, `/ready`) and runs AI-assisted triage directly against Workers AI (writing results straight to Neon, since triage is edge model-execution per the business plan), and forwards every other `/api/*` request to Core via the `CORE_API_URL` var in `wrangler.jsonc`. Core remains the only place authorization, workflow and audit behavior is decided; the edge does not duplicate business rules.
 
 ## Deployment
 
-Live on Render (free tier): `https://roviq-core.onrender.com`. Backed by Neon Postgres; migrations run automatically on boot via `npm run db:migrate:prod`. A Cloudflare Worker + Containers path also exists (`wrangler.jsonc`, `Dockerfile`) but requires a paid Workers plan for the Containers image registry — Render is the currently verified free deploy path.
+Two components, one system of record (Neon Postgres):
+
+- **Core** (`src/`, Fastify): deploys to Render (`render.yaml`) at `https://roviq-core.onrender.com`. Migrations run automatically on boot via `npm run db:migrate:prod`. Render's `DATABASE_URL` env var is set manually in the Render dashboard and must be kept in sync whenever the Neon password rotates.
+- **Edge** (`cloudflare/worker.js`): deploys via `.github/workflows/deploy-cloudflare.yml` on every push to `main`. Its `DATABASE_URL` secret (for AI triage writes) is pushed via `.github/workflows/rotate-database-secret.yml`, reading the `NEON_DATABASE_URL` repository secret. Also keep this in sync on password rotation.
+
+Both components need the same current Neon password in two different places — there is no single rotation switch yet. Rotating the Neon password requires updating both.
 
 ## Remaining work
 
@@ -107,4 +112,4 @@ Tow/valet dispatch, loaner/fleet allocation, parts fulfilment, payments, notific
 
 1. Domain adapters that reuse Core for ROVIQ Station and later operating domains
 2. Functional test coverage for the newer domains (transport, mobility, parts, payments, notifications, triage, integrations currently have no dedicated tests — only case-access/isolation are covered)
-3. Upgrading the Cloudflare Containers deploy path once the account is on a paid Workers plan, so edge deployment stops depending on Render
+3. A single-switch DB credential rotation (e.g. Core reads its own `DATABASE_URL` from the same source the edge rotation workflow updates) so a Neon password reset doesn't require touching two separate secrets

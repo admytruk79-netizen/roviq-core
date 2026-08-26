@@ -191,6 +191,28 @@ export default {
         return json({ caseId: match[1], assessments: rows });
       }
 
+      if (url.pathname.startsWith('/api/')) {
+        if (!env.CORE_API_URL) return json({ error: 'core_api_not_configured' }, 503);
+        const upstream = new URL(url.pathname + url.search, env.CORE_API_URL);
+        const upstreamRequest = new Request(upstream, {
+          method: request.method,
+          headers: request.headers,
+          body: ['GET', 'HEAD'].includes(request.method) ? undefined : await request.clone().arrayBuffer()
+        });
+        const upstreamResponse = await fetch(upstreamRequest);
+        const responseBody = await upstreamResponse.arrayBuffer();
+        return new Response(responseBody, {
+          status: upstreamResponse.status,
+          headers: {
+            'content-type': upstreamResponse.headers.get('content-type') || 'application/json; charset=utf-8',
+            'cache-control': 'no-store',
+            'access-control-allow-origin': '*',
+            'access-control-allow-headers': 'content-type,x-admin-api-key,authorization',
+            'access-control-allow-methods': 'GET,POST,OPTIONS'
+          }
+        });
+      }
+
       return json({ error: 'not_found', service: 'roviq-core' }, 404);
     } catch (error) {
       return json({ ok: false, error: 'core_runtime_error', detail: String(error?.message || error) }, 500);
