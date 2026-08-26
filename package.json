@@ -10,8 +10,9 @@
     "start": "node dist/server.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "db:migrate": "tsx src/db/migrate.ts",
-    "db:migrate:prod": "node dist/db/migrate.js",
+    "db:validate-migrations": "node scripts/validate-migrations.mjs",
+    "db:migrate": "npm run db:validate-migrations && tsx src/db/migrate.ts",
+    "db:migrate:prod": "node scripts/validate-migrations.mjs && node dist/db/migrate.js",
     "cf:dev": "wrangler dev",
     "cf:deploy": "wrangler deploy"
   },
