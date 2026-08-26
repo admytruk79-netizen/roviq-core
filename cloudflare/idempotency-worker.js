@@ -49,28 +49,42 @@ async function maintenanceDomainId(client) {
 
 async function reserve(env, key, fingerprint, route) {
   return await withClient(env, async (client) => {
-    const domainId = await maintenanceDomainId(client);
-    await client.query(`select pg_advisory_xact_lock(hashtext($1))`, [key]);
-    const existing = await client.query(`select * from transactions where idempotency_key=$1 limit 1`, [key]);
-    if (existing.rowCount) {
-      const row = existing.rows[0];
-      const terms = row.terms || {};
-      if (terms.fingerprint && terms.fingerprint !== fingerprint) return { type: 'conflict' };
-      if (row.state === 'completed' && terms.response) return { type: 'replay', response: terms.response };
-      const age = Date.now() - new Date(row.updated_at || row.created_at).getTime();
-      if (row.state === 'processing' && age < IDEMPOTENCY_TTL_MS) return { type: 'processing' };
-      await client.query(
-        `update transactions set state='processing',terms=$1::jsonb,updated_at=now() where id=$2`,
-        [JSON.stringify({ fingerprint, route, startedAt: new Date().toISOString() }), row.id]
-      );
-      return { type: 'reserved', id: row.id };
+    await client.query('begin');
+    try {
+      const domainId = await maintenanceDomainId(client);
+      await client.query(`select pg_advisory_xact_lock(hashtext($1))`, [key]);
+      const existing = await client.query(`select * from transactions where idempotency_key=$1 limit 1`, [key]);
+      let result;
+      if (existing.rowCount) {
+        const row = existing.rows[0];
+        const terms = row.terms || {};
+        if (terms.fingerprint && terms.fingerprint !== fingerprint) result = { type: 'conflict' };
+        else if (row.state === 'completed' && terms.response) result = { type: 'replay', response: terms.response };
+        else {
+          const age = Date.now() - new Date(row.updated_at || row.created_at).getTime();
+          if (row.state === 'processing' && age < IDEMPOTENCY_TTL_MS) result = { type: 'processing' };
+          else {
+            await client.query(
+              `update transactions set state='processing',terms=$1::jsonb,updated_at=now() where id=$2`,
+              [JSON.stringify({ fingerprint, route, startedAt: new Date().toISOString() }), row.id]
+            );
+            result = { type: 'reserved', id: row.id };
+          }
+        }
+      } else {
+        const inserted = await client.query(
+          `insert into transactions(domain_id,transaction_type,state,idempotency_key,terms)
+           values($1,'idempotency','processing',$2,$3::jsonb) returning id`,
+          [domainId, key, JSON.stringify({ fingerprint, route, startedAt: new Date().toISOString() })]
+        );
+        result = { type: 'reserved', id: inserted.rows[0].id };
+      }
+      await client.query('commit');
+      return result;
+    } catch (error) {
+      await client.query('rollback').catch(() => undefined);
+      throw error;
     }
-    const inserted = await client.query(
-      `insert into transactions(domain_id,transaction_type,state,idempotency_key,terms)
-       values($1,'idempotency','processing',$2,$3::jsonb) returning id`,
-      [domainId, key, JSON.stringify({ fingerprint, route, startedAt: new Date().toISOString() })]
-    );
-    return { type: 'reserved', id: inserted.rows[0].id };
   });
 }
 
@@ -129,6 +143,17 @@ async function runIdempotencySelfTest(request, env) {
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+
+    if (url.pathname === '/api/internal/e2e/auth-check' && request.method === 'GET') {
+      try {
+        requireInternalAuth(request, env);
+        return json({ ok: true, internalAuth: 'ready' });
+      } catch (error) {
+        const message = String(error?.message || error);
+        return json({ ok: false, error: message }, message === 'unauthorized' ? 401 : 503);
+      }
+    }
+
     if (url.pathname === '/api/internal/e2e/idempotency' && request.method === 'POST') {
       try { return await runIdempotencySelfTest(request, env); }
       catch (error) { return json({ ok: false, error: String(error?.message || error) }, 503); }
