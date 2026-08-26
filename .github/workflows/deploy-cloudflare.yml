@@ -65,10 +65,26 @@ jobs:
             READY=$(curl --silent --show-error --max-time 15 https://roviq-core.admytruk79.workers.dev/ready || true)
             echo "health=$HEALTH"
             echo "ready=$READY"
-            if echo "$HEALTH" | grep -q '"ok":true' && echo "$READY" | grep -q '"database":"reachable"'; then
+            if echo "$HEALTH" | grep -q '"engine":"native-worker-v3"' && echo "$READY" | grep -q '"database":"reachable"'; then
               exit 0
+            fi
+            if echo "$HEALTH" | grep -qi "hyperdrive\|businessFlow"; then
+              echo "Response does not match cloudflare/worker.js on main — a stray Worker script is likely bleeding into production traffic."
+              exit 1
             fi
             sleep 5
           done
           echo "ROVIQ Core did not become healthy and Neon-ready"
+          exit 1
+
+      - name: Verify edge proxy reaches Core
+        shell: bash
+        run: |
+          PROBE=$(curl --silent --show-error --max-time 15 https://roviq-core.admytruk79.workers.dev/api/__proxy_probe__ || true)
+          echo "probe=$PROBE"
+          if echo "$PROBE" | grep -q '"statusCode":404' && echo "$PROBE" | grep -q '"error":"Not Found"'; then
+            echo "Edge proxy reached Core (Fastify's own 404 for an unmatched route)."
+            exit 0
+          fi
+          echo "Edge proxy did not reach Core as expected — got: $PROBE"
           exit 1
