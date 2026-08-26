@@ -56,7 +56,10 @@ The API listens on `http://localhost:8080` by default.
 
 ## End-to-end tests
 
-`npm test` (used by CI) only runs fast unit tests with no external dependencies — `tests/isolation.test.ts` and `tests/case-access.test.ts`. `tests/e2e-maintenance-case.e2e.test.ts` proves the actual customer-to-outcome vertical slice works: it drives a real Fastify app instance through intake, automated routing, provider offer/acceptance, a Service Plan quote revision, payment capture, auto-completion, and a fail-closed isolation check for an unrelated customer, then asserts the full event timeline is auditable.
+`npm test` (used by CI) only runs fast unit tests with no external dependencies — `tests/isolation.test.ts` and `tests/case-access.test.ts`. Two suites drive a real Fastify app instance end-to-end:
+
+- `tests/e2e-maintenance-case.e2e.test.ts`: intake, automated routing, provider offer/acceptance, a Service Plan quote revision, payment capture, auto-completion, and a fail-closed isolation check for an unrelated customer, then asserts the full event timeline is auditable.
+- `tests/e2e-transport-dispatch.e2e.test.ts`: tow dispatch from creation through admin assignment, provider capability enforcement (`409 provider_not_transport_capable`), an invalid status-skip rejection (`409 invalid_dispatch_transition`), dispatch-level access control for an unassigned provider (`403 dispatch_forbidden`), the full `accepted → en_route → arrived → vehicle_loaded → in_transit → delivered` lifecycle (which auto-transitions the case `tow_pending → tow_in_progress` and resolves the transport-assignment deadline), and the tow-to-repair case handoff.
 
 It needs a real Postgres database (Neon's connection semantics differ enough from a plain `pg.Pool` that a real Postgres, not a mock, is required) and is excluded from `npm test` — CI has no database available. Run it locally against a **fresh** database (leftover actors from a previous run change automated-routing rankings and make the test flaky):
 
@@ -130,4 +133,4 @@ Required repository secrets for this workflow: `NEON_DATABASE_URL`, `CLOUDFLARE_
 Tow/valet dispatch, loaner/fleet allocation, parts fulfilment, payments, notifications, AI triage and the integration gateway are all implemented (see routes above). What's left:
 
 1. Domain adapters that reuse Core for ROVIQ Station and later operating domains
-2. Functional test coverage for the newer domains (transport, mobility, parts, payments, notifications, triage, integrations currently have no dedicated tests — only case-access/isolation are covered)
+2. Functional test coverage for the remaining domains (mobility, parts, payments, notifications, triage, integrations currently have no dedicated tests — maintenance and transport are covered end-to-end, case-access/isolation are covered by unit tests)
