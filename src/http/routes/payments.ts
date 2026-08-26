@@ -8,7 +8,11 @@ export async function paymentRoutes(app: FastifyInstance) {
   app.post('/api/admin/payments', { preHandler: requireRole('admin') }, async (req, reply) => {
     const body = z.object({ caseId:z.string().uuid(), amount:z.number().nonnegative(), currency:z.string().length(3).default('USD'), description:z.string().optional(), provider:z.string().default('manual'), providerIntentId:z.string().optional(), metadata:z.record(z.unknown()).optional() }).parse(req.body);
     try { return reply.code(201).send({ payment:await createPaymentIntent(req.principal,body) }); }
-    catch (e) { if (e instanceof Error && e.message==='case_not_found') return reply.code(404).send({ error:e.message }); throw e; }
+    catch (e) {
+      if (e instanceof Error && e.message==='case_not_found') return reply.code(404).send({ error:e.message });
+      if (e instanceof Error && e.message==='quote_not_approved') return reply.code(409).send({ error:e.message });
+      throw e;
+    }
   });
 
   app.get('/api/maintenance/cases/:id/payments', async (req, reply) => {

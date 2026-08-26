@@ -8,6 +8,17 @@ export async function createPaymentIntent(principal: Principal, input:{ caseId:s
   const c = await pool.query('select * from service_cases where id=$1',[input.caseId]);
   if (!c.rowCount) throw new Error('case_not_found');
   const customerActorId = c.rows[0].customer_actor_id ?? null;
+
+  const plan = await pool.query('select id,current_revision from service_plans where case_id=$1',[input.caseId]);
+  if (plan.rowCount) {
+    const approval = await pool.query(
+      `select state from case_approvals where case_id=$1 and service_plan_id=$2 and revision=$3 and approval_type='quote'
+       order by created_at desc limit 1`,
+      [input.caseId,plan.rows[0].id,plan.rows[0].current_revision]
+    );
+    if (!approval.rowCount || approval.rows[0].state !== 'approved') throw new Error('quote_not_approved');
+  }
+
   const r = await pool.query(
     `insert into payment_intents(case_id,customer_actor_id,provider,provider_intent_id,amount,currency,description,metadata)
      values($1,$2,$3,$4,$5,$6,$7,$8) returning *`,
