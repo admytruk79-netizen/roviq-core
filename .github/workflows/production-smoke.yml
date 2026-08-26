@@ -2,6 +2,10 @@ name: ROVIQ Production Smoke
 
 on:
   workflow_dispatch:
+  push:
+    branches: [rebuild/neon-core]
+    paths:
+      - '.github/workflows/production-smoke.yml'
   schedule:
     - cron: '17 */6 * * *'
 
