@@ -1,0 +1,36 @@
+name: ROVIQ Production Smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 */6 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: roviq-core-production-smoke
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PROD_URL: https://roviq-core.admytruk79.workers.dev
+    steps:
+      - name: Verify production health and capabilities
+        shell: bash
+        run: |
+          HEALTH=$(curl --fail-with-body --silent --show-error --max-time 20 "$PROD_URL/health")
+          READY=$(curl --fail-with-body --silent --show-error --max-time 20 "$PROD_URL/ready")
+          AI=$(curl --fail-with-body --silent --show-error --max-time 35 "$PROD_URL/api/ai/ping")
+          PROD=$(curl --fail-with-body --silent --show-error --max-time 20 "$PROD_URL/api/core/production-capabilities")
+          OPS=$(curl --fail-with-body --silent --show-error --max-time 20 "$PROD_URL/api/core/operations-capabilities")
+
+          echo "$HEALTH" | grep -q '"ok":true'
+          echo "$HEALTH" | grep -q '"databaseTransport":"hyperdrive-neon"'
+          echo "$READY" | grep -q '"database":"reachable"'
+          echo "$AI" | grep -q '"ok":true'
+          echo "$PROD" | grep -q '"layer":"production-core-v1"'
+          echo "$OPS" | grep -q '"layer":"operations-core-v1"'
