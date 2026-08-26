@@ -54,6 +54,20 @@ npm run dev
 
 The API listens on `http://localhost:8080` by default.
 
+## End-to-end tests
+
+`npm test` (used by CI) only runs fast unit tests with no external dependencies — `tests/isolation.test.ts` and `tests/case-access.test.ts`. `tests/e2e-maintenance-case.e2e.test.ts` proves the actual customer-to-outcome vertical slice works: it drives a real Fastify app instance through intake, automated routing, provider offer/acceptance, a Service Plan quote revision, payment capture, auto-completion, and a fail-closed isolation check for an unrelated customer, then asserts the full event timeline is auditable.
+
+It needs a real Postgres database (Neon's connection semantics differ enough from a plain `pg.Pool` that a real Postgres, not a mock, is required) and is excluded from `npm test` — CI has no database available. Run it locally against a **fresh** database (leftover actors from a previous run change automated-routing rankings and make the test flaky):
+
+```bash
+createdb roviq_test
+DATABASE_URL=postgresql://localhost/roviq_test ADMIN_API_KEY=test-key JWT_SECRET=$(openssl rand -hex 32) ALLOW_DEV_HEADERS=true npm run db:migrate
+DATABASE_URL=postgresql://localhost/roviq_test ADMIN_API_KEY=test-key JWT_SECRET=<same-secret-as-above> ALLOW_DEV_HEADERS=true npm run test:e2e
+```
+
+Known gap surfaced by this test: there is no API endpoint that records a `case_approvals` row (the table and its read path in `getServicePlan` exist, but nothing writes to it) — the plan's "customer approvals are explicit and versioned" requirement isn't wired up yet for the quote-approval step specifically, even though case state transitions and payment capture are.
+
 ## Authentication
 
 Production requests use signed JWT identity. Development/bootstrap headers can be enabled explicitly with `ALLOW_DEV_HEADERS=true`.
