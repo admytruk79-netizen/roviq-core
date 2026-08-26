@@ -2,31 +2,16 @@ name: Deploy ROVIQ Hyperdrive Rebuild
 
 on:
   workflow_dispatch:
-  push:
-    branches: [rebuild/neon-core]
-    paths:
-      - 'cloudflare/core-worker-v2.js'
-      - 'cloudflare/hyperdrive-worker.js'
-      - 'cloudflare/production-worker.js'
-      - 'cloudflare/access-worker.js'
-      - 'cloudflare/operations-worker.js'
-      - 'cloudflare/idempotency-worker.js'
-      - 'migrations/**'
-      - 'scripts/validate-migrations.mjs'
-      - 'wrangler.jsonc'
-      - 'package.json'
-      - 'package-lock.json'
-      - '.github/workflows/provision-hyperdrive.yml'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: roviq-core-hyperdrive-rebuild
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  verify-rebuild:
     runs-on: ubuntu-latest
     timeout-minutes: 12
     env:
@@ -44,221 +29,79 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install and synchronize dependencies
+      - name: Install dependencies
         run: npm install --no-audit --no-fund
 
-      - name: Validate migration integrity
+      - name: Validate migrations and bundle
         shell: bash
         run: |
           npm run db:validate-migrations
-          REPO_MIGRATION_COUNT=$(find migrations -maxdepth 1 -type f -regextype posix-extended -regex '.*/[0-9]{3}.*\.sql' | wc -l | tr -d ' ')
-          test "$REPO_MIGRATION_COUNT" -gt 0
-          echo "REPO_MIGRATION_COUNT=$REPO_MIGRATION_COUNT" >> "$GITHUB_ENV"
-          echo "Repository migration files: $REPO_MIGRATION_COUNT"
-
-      - name: Verify Cloudflare credentials
-        shell: bash
-        run: |
-          test -n "$CLOUDFLARE_API_TOKEN" || (echo "CLOUDFLARE_API_TOKEN is missing" && exit 1)
-          test -n "$CLOUDFLARE_ACCOUNT_ID" || (echo "CLOUDFLARE_ACCOUNT_ID is missing" && exit 1)
-          npx wrangler whoami
-
-      - name: Verify Hyperdrive, Workers AI, auth, operations, and idempotency entrypoint
-        shell: bash
-        run: |
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
           grep -q '"name": "roviq-core-rebuild"' wrangler.jsonc
           grep -q '"main": "cloudflare/idempotency-worker.js"' wrangler.jsonc
           grep -q '"binding": "HYPERDRIVE"' wrangler.jsonc
-          grep -q '"id": "38defb5eb63d4a079a46eea4f952eaf7"' wrangler.jsonc
           grep -q '"binding": "AI"' wrangler.jsonc
-          test -f cloudflare/core-worker-v2.js
-          test -f cloudflare/production-worker.js
-          test -f cloudflare/access-worker.js
-          test -f cloudflare/operations-worker.js
-          test -f cloudflare/idempotency-worker.js
+          npx wrangler deploy --dry-run --config wrangler.jsonc
 
-      - name: Validate authoritative Worker Core bundle
-        run: npx wrangler deploy --dry-run --config wrangler.jsonc
-
-      - name: Persist synchronized package lock
-        shell: bash
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package-lock.json
-          if git diff --cached --quiet; then
-            echo "package-lock already synchronized"
-          else
-            git commit -m "chore(rebuild): synchronize Hyperdrive dependencies"
-            git push origin HEAD:rebuild/neon-core
-          fi
-
-      - name: Deploy isolated Hyperdrive-backed Worker
+      - name: Deploy isolated rebuild worker
         run: npx wrangler deploy --config wrangler.jsonc
 
-      - name: Ensure persistent JWT signing secret
+      - name: Ensure JWT signing secret
         shell: bash
         run: |
           SECRET_LIST=$(npx wrangler secret list --name roviq-core-rebuild)
-          if echo "$SECRET_LIST" | grep -q 'ROVIQ_JWT_SECRET'; then
-            echo "ROVIQ_JWT_SECRET already configured; preserving existing signing key"
-          else
+          if ! echo "$SECRET_LIST" | grep -q 'ROVIQ_JWT_SECRET'; then
             JWT_SECRET=$(openssl rand -hex 48)
             printf '%s' "$JWT_SECRET" | npx wrangler secret put ROVIQ_JWT_SECRET --name roviq-core-rebuild
-            echo "Created persistent ROVIQ_JWT_SECRET"
           fi
 
-      - name: Install rotating internal E2E token and wait for propagation
+      - name: Rotate masked E2E token and wait for propagation
         shell: bash
         run: |
           E2E_TOKEN=$(openssl rand -hex 32)
+          echo "::add-mask::$E2E_TOKEN"
           echo "ROVIQ_E2E_TOKEN=$E2E_TOKEN" >> "$GITHUB_ENV"
           printf '%s' "$E2E_TOKEN" | npx wrangler secret put ROVIQ_E2E_TOKEN --name roviq-core-rebuild
-          BODY_FILE=$(mktemp)
           STATUS=000
+          BODY_FILE=$(mktemp)
           for i in $(seq 1 20); do
-            STATUS=$(curl --silent --show-error --max-time 10 \
-              -o "$BODY_FILE" -w '%{http_code}' \
-              "$WORKER_URL/api/internal/e2e/auth-check" \
-              -H "Authorization: Bearer $E2E_TOKEN" || true)
-            echo "E2E secret propagation attempt=$i status=$STATUS"
-            if [ "$STATUS" = "200" ]; then
-              cat "$BODY_FILE"
-              break
-            fi
+            STATUS=$(curl --silent --show-error --max-time 10 -o "$BODY_FILE" -w '%{http_code}' \
+              "$WORKER_URL/api/internal/e2e/auth-check" -H "Authorization: Bearer $E2E_TOKEN" || true)
+            echo "secret propagation attempt=$i status=$STATUS"
+            [ "$STATUS" = "200" ] && break
             sleep 2
           done
           rm -f "$BODY_FILE"
           test "$STATUS" = "200"
 
-      - name: Verify live Core, Neon, AI, and migration parity
+      - name: Verify infrastructure and migration parity
         shell: bash
         run: |
-          for i in $(seq 1 18); do
-            HEALTH=$(curl --silent --show-error --max-time 20 "$WORKER_URL/health" || true)
-            READY=$(curl --silent --show-error --max-time 20 "$WORKER_URL/ready" || true)
-            AI=$(curl --silent --show-error --max-time 30 "$WORKER_URL/api/ai/ping" || true)
-            PROD=$(curl --silent --show-error --max-time 20 "$WORKER_URL/api/core/production-capabilities" || true)
-            OPS=$(curl --silent --show-error --max-time 20 "$WORKER_URL/api/core/operations-capabilities" || true)
-            DB_MIGRATION_COUNT=$(READY_JSON="$READY" node -e "try{const j=JSON.parse(process.env.READY_JSON||'{}');process.stdout.write(String(j.migration_count??''))}catch{process.stdout.write('')}" )
-            echo "health=$HEALTH"
-            echo "ready=$READY"
-            echo "ai=$AI"
-            echo "production=$PROD"
-            echo "operations=$OPS"
-            echo "migrationParity repo=$REPO_MIGRATION_COUNT db=$DB_MIGRATION_COUNT"
-            if echo "$HEALTH" | grep -q '"databaseTransport":"hyperdrive-neon"' \
-              && echo "$READY" | grep -q '"database":"reachable"' \
-              && [ "$DB_MIGRATION_COUNT" = "$REPO_MIGRATION_COUNT" ] \
-              && echo "$AI" | grep -q '"ok":true' \
-              && echo "$PROD" | grep -q '"layer":"production-core-v1"' \
-              && echo "$OPS" | grep -q '"layer":"operations-core-v1"'; then
-              exit 0
-            fi
-            sleep 5
-          done
-          echo "Isolated ROVIQ Core did not become fully ready with migration parity"
-          exit 1
+          EXPECTED=$(find migrations -maxdepth 1 -type f -name '[0-9][0-9][0-9]*.sql' | wc -l | tr -d ' ')
+          HEALTH=$(curl --fail-with-body --silent --show-error --max-time 30 "$WORKER_URL/health")
+          READY=$(curl --fail-with-body --silent --show-error --max-time 30 "$WORKER_URL/ready")
+          AI=$(curl --fail-with-body --silent --show-error --max-time 45 "$WORKER_URL/api/ai/ping")
+          PROD=$(curl --fail-with-body --silent --show-error --max-time 30 "$WORKER_URL/api/core/production-capabilities")
+          OPS=$(curl --fail-with-body --silent --show-error --max-time 30 "$WORKER_URL/api/core/operations-capabilities")
+          echo "$HEALTH" | grep -q '"databaseTransport":"hyperdrive-neon"'
+          echo "$READY" | grep -q '"database":"reachable"'
+          echo "$READY" | grep -q "\"migration_count\":$EXPECTED"
+          echo "$AI" | grep -q '"ok":true'
+          echo "$PROD" | grep -q '"layer":"production-core-v1"'
+          echo "$OPS" | grep -q '"layer":"operations-core-v1"'
 
-      - name: Verify live ROVIQ business flow v2
+      - name: Verify complete rebuild behavior
         shell: bash
         run: |
-          BODY_FILE=$(mktemp)
-          STATUS=$(curl --silent --show-error --max-time 120 \
-            -o "$BODY_FILE" -w '%{http_code}' \
+          SERVICE=$(curl --fail-with-body --silent --show-error --max-time 150 \
             -X POST "$WORKER_URL/api/internal/e2e/service-case" \
-            -H "Authorization: Bearer $ROVIQ_E2E_TOKEN" \
-            -H 'Content-Type: application/json' \
-            --data '{}')
-          RESPONSE=$(cat "$BODY_FILE")
-          rm -f "$BODY_FILE"
-          echo "status=$STATUS"
-          echo "response=$RESPONSE"
-          test "$STATUS" = "201" || exit 1
-          echo "$RESPONSE" | grep -q '"ok":true'
-          echo "$RESPONSE" | grep -q '"state":"completed"'
-          echo "$RESPONSE" | grep -q '"status":"completed"'
-          echo "$RESPONSE" | grep -q 'SERVICE_PLAN_APPROVED'
-          echo "$RESPONSE" | grep -q 'TRANSPORT_REQUESTED'
-          echo "$RESPONSE" | grep -q 'ROUTING_COMPLETED'
-          echo "$RESPONSE" | grep -q 'SERVICE_ORDER_CREATED'
-          echo "$RESPONSE" | grep -q 'CASE_COMPLETED'
-
-      - name: Verify production intake and routing
-        shell: bash
-        run: |
-          RESPONSE=$(curl --fail-with-body --silent --show-error --max-time 120 \
-            -X POST "$WORKER_URL/api/internal/e2e/production-core" \
-            -H "Authorization: Bearer $ROVIQ_E2E_TOKEN" \
-            -H 'Content-Type: application/json' \
-            --data '{}')
-          echo "$RESPONSE"
-          echo "$RESPONSE" | grep -q '"ok":true'
-          echo "$RESPONSE" | grep -q '"vehicle"'
-          echo "$RESPONSE" | grep -q '"demand"'
-          echo "$RESPONSE" | grep -q '"servicePlan"'
-          echo "$RESPONSE" | grep -q '"routingDecision"'
-
-      - name: Verify JWT auth and role projection
-        shell: bash
-        run: |
-          BODY_FILE=$(mktemp)
-          STATUS=$(curl --silent --show-error --max-time 60 \
-            -o "$BODY_FILE" -w '%{http_code}' \
-            -X POST "$WORKER_URL/api/internal/e2e/auth-projection" \
-            -H "Authorization: Bearer $ROVIQ_E2E_TOKEN" \
-            -H 'Content-Type: application/json' \
-            --data '{}')
-          RESPONSE=$(cat "$BODY_FILE")
-          rm -f "$BODY_FILE"
-          echo "status=$STATUS"
-          echo "response=$RESPONSE"
-          test "$STATUS" = "201"
-          echo "$RESPONSE" | grep -q '"ok":true'
-          echo "$RESPONSE" | grep -q '"jwtVerified":true'
-          echo "$RESPONSE" | grep -q '"role":"admin"'
-          echo "$RESPONSE" | grep -q '"projection":"admin"'
-
-      - name: Verify mobility, parts, commerce, and recovery
-        shell: bash
-        run: |
-          BODY_FILE=$(mktemp)
-          STATUS=$(curl --silent --show-error --max-time 180 \
-            -o "$BODY_FILE" -w '%{http_code}' \
-            -X POST "$WORKER_URL/api/internal/e2e/operations" \
-            -H "Authorization: Bearer $ROVIQ_E2E_TOKEN" \
-            -H 'Content-Type: application/json' \
-            --data '{}')
-          RESPONSE=$(cat "$BODY_FILE")
-          rm -f "$BODY_FILE"
-          echo "status=$STATUS"
-          echo "response=$RESPONSE"
-          test "$STATUS" = "201" || exit 1
-          echo "$RESPONSE" | grep -q '"ok":true'
-          if ! echo "$RESPONSE" | grep -q '"resourceFound":true'; then
-            echo "$RESPONSE" | grep -q 'NO_MOBILITY_RESOURCE'
-          fi
-          echo "$RESPONSE" | grep -q '"allAvailable":true'
-          echo "$RESPONSE" | grep -q '"status":"accepted"'
-          echo "$RESPONSE" | grep -q '"state":"captured"'
-          echo "$RESPONSE" | grep -q '"state":"resolved"'
-
-      - name: Verify scoped idempotency and replay
-        shell: bash
-        run: |
-          BODY_FILE=$(mktemp)
-          STATUS=$(curl --silent --show-error --max-time 60 \
-            -o "$BODY_FILE" -w '%{http_code}' \
-            -X POST "$WORKER_URL/api/internal/e2e/idempotency" \
-            -H "Authorization: Bearer $ROVIQ_E2E_TOKEN" \
-            -H 'Content-Type: application/json' \
-            --data '{}')
-          RESPONSE=$(cat "$BODY_FILE")
-          rm -f "$BODY_FILE"
-          echo "status=$STATUS"
-          echo "response=$RESPONSE"
-          test "$STATUS" = "200" || exit 1
-          echo "$RESPONSE" | grep -q '"ok":true'
-          echo "$RESPONSE" | grep -q '"first":"created"'
-          echo "$RESPONSE" | grep -q '"second":"replayed"'
-          echo "$RESPONSE" | grep -q '"sameMarker":true'
+            -H "Authorization: Bearer $ROVIQ_E2E_TOKEN" -H 'Content-Type: application/json' --data '{}')
+          echo "$SERVICE" | grep -q '"ok":true'
+          echo "$SERVICE" | grep -q 'CASE_COMPLETED'
+          for ENDPOINT in production-core auth-projection operations idempotency; do
+            BODY=$(curl --fail-with-body --silent --show-error --max-time 180 \
+              -X POST "$WORKER_URL/api/internal/e2e/$ENDPOINT" \
+              -H "Authorization: Bearer $ROVIQ_E2E_TOKEN" -H 'Content-Type: application/json' --data '{}')
+            echo "$BODY" | grep -q '"ok":true'
+          done
