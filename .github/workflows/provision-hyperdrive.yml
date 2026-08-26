@@ -10,6 +10,7 @@ on:
       - 'cloudflare/production-worker.js'
       - 'cloudflare/access-worker.js'
       - 'cloudflare/operations-worker.js'
+      - 'cloudflare/idempotency-worker.js'
       - 'wrangler.jsonc'
       - 'package.json'
       - 'package-lock.json'
@@ -51,11 +52,11 @@ jobs:
           test -n "$CLOUDFLARE_ACCOUNT_ID" || (echo "CLOUDFLARE_ACCOUNT_ID is missing" && exit 1)
           npx wrangler whoami
 
-      - name: Verify Hyperdrive, Workers AI, auth, and operations entrypoint
+      - name: Verify Hyperdrive, Workers AI, auth, operations, and idempotency entrypoint
         shell: bash
         run: |
           grep -q '"name": "roviq-core-rebuild"' wrangler.jsonc
-          grep -q '"main": "cloudflare/operations-worker.js"' wrangler.jsonc
+          grep -q '"main": "cloudflare/idempotency-worker.js"' wrangler.jsonc
           grep -q '"binding": "HYPERDRIVE"' wrangler.jsonc
           grep -q '"id": "38defb5eb63d4a079a46eea4f952eaf7"' wrangler.jsonc
           grep -q '"binding": "AI"' wrangler.jsonc
@@ -63,6 +64,7 @@ jobs:
           test -f cloudflare/production-worker.js
           test -f cloudflare/access-worker.js
           test -f cloudflare/operations-worker.js
+          test -f cloudflare/idempotency-worker.js
 
       - name: Validate authoritative Worker Core bundle
         run: npx wrangler deploy --dry-run --config wrangler.jsonc
@@ -208,3 +210,23 @@ jobs:
           echo "$RESPONSE" | grep -q '"status":"accepted"'
           echo "$RESPONSE" | grep -q '"state":"captured"'
           echo "$RESPONSE" | grep -q '"state":"resolved"'
+
+      - name: Verify scoped idempotency and replay
+        shell: bash
+        run: |
+          BODY_FILE=$(mktemp)
+          STATUS=$(curl --silent --show-error --max-time 60 \
+            -o "$BODY_FILE" -w '%{http_code}' \
+            -X POST "$WORKER_URL/api/internal/e2e/idempotency" \
+            -H "Authorization: Bearer $ROVIQ_E2E_TOKEN" \
+            -H 'Content-Type: application/json' \
+            --data '{}')
+          RESPONSE=$(cat "$BODY_FILE")
+          rm -f "$BODY_FILE"
+          echo "status=$STATUS"
+          echo "response=$RESPONSE"
+          test "$STATUS" = "200" || exit 1
+          echo "$RESPONSE" | grep -q '"ok":true'
+          echo "$RESPONSE" | grep -q '"first":"created"'
+          echo "$RESPONSE" | grep -q '"second":"replayed"'
+          echo "$RESPONSE" | grep -q '"sameMarker":true'
