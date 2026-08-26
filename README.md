@@ -116,10 +116,14 @@ Fastify Core (`src/`) is the only authoritative application backend and the only
 
 Two components, one system of record (Neon Postgres):
 
-- **Core** (`src/`, Fastify): deploys to Render (`render.yaml`) at `https://roviq-core.onrender.com`. Migrations run automatically on boot via `npm run db:migrate:prod`. Render's `DATABASE_URL` env var is set manually in the Render dashboard and must be kept in sync whenever the Neon password rotates.
-- **Edge** (`cloudflare/worker.js`): deploys via `.github/workflows/deploy-cloudflare.yml` on every push to `main`. Its `DATABASE_URL` secret (for AI triage writes) is pushed via `.github/workflows/rotate-database-secret.yml`, reading the `NEON_DATABASE_URL` repository secret. Also keep this in sync on password rotation.
+- **Core** (`src/`, Fastify): deploys to Render (`render.yaml`) at `https://roviq-core.onrender.com`. Migrations run automatically on boot via `npm run db:migrate:prod`.
+- **Edge** (`cloudflare/worker.js`): deploys via `.github/workflows/deploy-cloudflare.yml` on every push to `main`. Its `DATABASE_URL` secret is used for AI triage writes.
 
-Both components need the same current Neon password in two different places — there is no single rotation switch yet. Rotating the Neon password requires updating both.
+### Rotating the Neon password
+
+Both components read the same Neon connection string, but each holds its own copy (Cloudflare Worker secret, Render service env var). Run the **Rotate ROVIQ Core Database Secret** workflow (`.github/workflows/rotate-database-secret.yml`, `workflow_dispatch`) to push a new password to both from a single source: it reads the `NEON_DATABASE_URL` repository secret and writes it to the Cloudflare Worker secret (`wrangler secret put`) and to the Render service's env vars (via the Render API), which also triggers a Render redeploy. Update `NEON_DATABASE_URL`, then run this one workflow — no manual dashboard edits.
+
+Required repository secrets for this workflow: `NEON_DATABASE_URL`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `RENDER_API_KEY` (Render dashboard → Account Settings → API Keys), `RENDER_SERVICE_ID` (the `srv-...` id in the Render service's dashboard URL).
 
 ## Remaining work
 
@@ -127,4 +131,3 @@ Tow/valet dispatch, loaner/fleet allocation, parts fulfilment, payments, notific
 
 1. Domain adapters that reuse Core for ROVIQ Station and later operating domains
 2. Functional test coverage for the newer domains (transport, mobility, parts, payments, notifications, triage, integrations currently have no dedicated tests — only case-access/isolation are covered)
-3. A single-switch DB credential rotation (e.g. Core reads its own `DATABASE_URL` from the same source the edge rotation workflow updates) so a Neon password reset doesn't require touching two separate secrets
