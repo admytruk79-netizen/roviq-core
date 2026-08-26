@@ -66,7 +66,7 @@ DATABASE_URL=postgresql://localhost/roviq_test ADMIN_API_KEY=test-key JWT_SECRET
 DATABASE_URL=postgresql://localhost/roviq_test ADMIN_API_KEY=test-key JWT_SECRET=<same-secret-as-above> ALLOW_DEV_HEADERS=true npm run test:e2e
 ```
 
-Known gap surfaced by this test: there is no API endpoint that records a `case_approvals` row (the table and its read path in `getServicePlan` exist, but nothing writes to it) — the plan's "customer approvals are explicit and versioned" requirement isn't wired up yet for the quote-approval step specifically, even though case state transitions and payment capture are.
+Every quote revision (`POST /api/admin/maintenance/cases/:id/service-plan/revisions` with an `estimatedTotalMinor`) creates a pending `case_approvals` row for the customer. The customer (or admin) decides it via `POST /api/maintenance/cases/:id/approvals/:approvalId/decision`, and `POST /api/admin/payments` refuses to create a payment intent until the current revision's quote is approved (`409 quote_not_approved`) — the e2e test asserts both the block and the unblock.
 
 ## Authentication
 
@@ -90,6 +90,7 @@ Authorization middleware enforces actor ownership server-side; clients cannot ga
 - `POST /api/maintenance/cases/:id/transition`
 - `GET /api/maintenance/cases/:id/service-plan`
 - `POST /api/admin/maintenance/cases/:id/service-plan/revisions`
+- `POST /api/maintenance/cases/:id/approvals/:approvalId/decision`
 - `GET /api/partners/me/offers`
 - `POST /api/offers/:id/respond`
 - `PATCH /api/partners/me/capacity`

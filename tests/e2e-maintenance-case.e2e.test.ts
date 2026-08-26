@@ -76,7 +76,10 @@ describe('maintenance case end-to-end lifecycle', () => {
       }
     });
     expect(revisionRes.statusCode).toBe(201);
-    expect(JSON.parse(revisionRes.body).plan.status).toBe('proposed');
+    const revised = JSON.parse(revisionRes.body);
+    expect(revised.plan.status).toBe('proposed');
+    expect(revised.plan.pendingApproval.state).toBe('pending');
+    const approvalId = revised.plan.pendingApproval.id;
 
     const toPaymentRes = await app.inject({
       method: 'POST', url: `/api/maintenance/cases/${caseId}/transition`, headers: actorHeaders('partner', partnerActorId),
@@ -84,6 +87,27 @@ describe('maintenance case end-to-end lifecycle', () => {
     });
     expect(toPaymentRes.statusCode).toBe(200);
     expect(JSON.parse(toPaymentRes.body).case.state).toBe('payment_pending');
+
+    // No unapproved charge may enter the bill: payment creation is rejected until the customer approves the quote.
+    const prematurePaymentRes = await app.inject({
+      method: 'POST', url: '/api/admin/payments', headers: adminHeaders(),
+      payload: { caseId, amount: 249.99, currency: 'USD', description: 'Front brake pad replacement' }
+    });
+    expect(prematurePaymentRes.statusCode).toBe(409);
+    expect(JSON.parse(prematurePaymentRes.body).error).toBe('quote_not_approved');
+
+    const strangerDecisionRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/approvals/${approvalId}/decision`, headers: actorHeaders('partner', partnerActorId),
+      payload: { decision: 'approved' }
+    });
+    expect(strangerDecisionRes.statusCode).toBe(403);
+
+    const decisionRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/approvals/${approvalId}/decision`, headers: actorHeaders('customer', customerActorId),
+      payload: { decision: 'approved' }
+    });
+    expect(decisionRes.statusCode).toBe(200);
+    expect(JSON.parse(decisionRes.body).approval.state).toBe('approved');
 
     const paymentRes = await app.inject({
       method: 'POST', url: '/api/admin/payments', headers: adminHeaders(),
@@ -106,13 +130,15 @@ describe('maintenance case end-to-end lifecycle', () => {
     const timelineEvents = JSON.parse(timelineRes.body).timeline.map((e: { event_type: string }) => e.event_type);
     expect(timelineEvents).toEqual(expect.arrayContaining([
       'CASE_CREATED', 'SERVICE_PLAN_CREATED', 'CASE_TRIAGE', 'CASE_PROVIDER_SELECTION', 'CASE_PROVIDER_PENDING',
-      'CASE_REPAIR_IN_PROGRESS', 'SERVICE_PLAN_REVISED', 'CASE_PAYMENT_PENDING', 'PAYMENT_INTENT_CREATED', 'CASE_COMPLETED'
+      'CASE_REPAIR_IN_PROGRESS', 'SERVICE_PLAN_REVISED', 'CASE_PAYMENT_PENDING', 'CASE_APPROVAL_DECIDED', 'PAYMENT_INTENT_CREATED', 'CASE_COMPLETED'
     ]));
 
     const planRes = await app.inject({ method: 'GET', url: `/api/maintenance/cases/${caseId}/service-plan`, headers: actorHeaders('customer', customerActorId) });
     const plan = JSON.parse(planRes.body);
     expect(plan.plan.status).toBe('proposed');
     expect(plan.tasks.length).toBe(1);
+    expect(plan.approvals.length).toBe(1);
+    expect(plan.approvals[0].state).toBe('approved');
 
     const stranger = await app.inject({ method: 'POST', url: '/api/admin/actors', headers: adminHeaders(), payload: { actorType: 'customer' } });
     const strangerId = JSON.parse(stranger.body).actor.id;
