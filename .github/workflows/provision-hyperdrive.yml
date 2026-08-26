@@ -97,12 +97,28 @@ jobs:
             echo "Created persistent ROVIQ_JWT_SECRET"
           fi
 
-      - name: Install rotating internal E2E token
+      - name: Install rotating internal E2E token and wait for propagation
         shell: bash
         run: |
           E2E_TOKEN=$(openssl rand -hex 32)
           echo "ROVIQ_E2E_TOKEN=$E2E_TOKEN" >> "$GITHUB_ENV"
           printf '%s' "$E2E_TOKEN" | npx wrangler secret put ROVIQ_E2E_TOKEN --name roviq-core-rebuild
+          BODY_FILE=$(mktemp)
+          STATUS=000
+          for i in $(seq 1 20); do
+            STATUS=$(curl --silent --show-error --max-time 10 \
+              -o "$BODY_FILE" -w '%{http_code}' \
+              "$WORKER_URL/api/internal/e2e/auth-check" \
+              -H "Authorization: Bearer $E2E_TOKEN" || true)
+            echo "E2E secret propagation attempt=$i status=$STATUS"
+            if [ "$STATUS" = "200" ]; then
+              cat "$BODY_FILE"
+              break
+            fi
+            sleep 2
+          done
+          rm -f "$BODY_FILE"
+          test "$STATUS" = "200"
 
       - name: Verify live Core, Neon, and AI
         shell: bash
