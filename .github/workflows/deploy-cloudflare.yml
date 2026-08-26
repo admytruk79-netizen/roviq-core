@@ -82,9 +82,13 @@ jobs:
         run: |
           PROBE=$(curl --silent --show-error --max-time 15 https://roviq-core.admytruk79.workers.dev/api/__proxy_probe__ || true)
           echo "probe=$PROBE"
-          if echo "$PROBE" | grep -q '"statusCode":404' && echo "$PROBE" | grep -q '"error":"Not Found"'; then
-            echo "Edge proxy reached Core (Fastify's own 404 for an unmatched route)."
-            exit 0
+          if echo "$PROBE" | grep -q '"error":"not_found".*"service":"roviq-core"'; then
+            echo "Edge proxy did not reach Core — got the Worker's own local 404 instead: $PROBE"
+            exit 1
           fi
-          echo "Edge proxy did not reach Core as expected — got: $PROBE"
-          exit 1
+          if [ -z "$PROBE" ]; then
+            echo "Edge proxy got no response from Core (connection failure)."
+            exit 1
+          fi
+          echo "Edge proxy reached Core (got a Core-originated response, not the Worker's local 404)."
+          exit 0
