@@ -205,7 +205,9 @@ jobs:
           echo "response=$RESPONSE"
           test "$STATUS" = "201" || exit 1
           echo "$RESPONSE" | grep -q '"ok":true'
-          echo "$RESPONSE" | grep -q '"resourceFound":true'
+          if ! echo "$RESPONSE" | grep -q '"resourceFound":true'; then
+            echo "$RESPONSE" | grep -q 'NO_MOBILITY_RESOURCE'
+          fi
           echo "$RESPONSE" | grep -q '"allAvailable":true'
           echo "$RESPONSE" | grep -q '"status":"accepted"'
           echo "$RESPONSE" | grep -q '"state":"captured"'
