@@ -1,0 +1,24 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "roviq-core-candidate",
+  "main": "cloudflare/idempotency-worker.js",
+  "compatibility_date": "2026-08-24",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "ai": {
+    "binding": "AI"
+  },
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "38defb5eb63d4a079a46eea4f952eaf7"
+    }
+  ],
+  "vars": {
+    "DEPLOY_REVISION": "production-candidate-v1"
+  }
+}
