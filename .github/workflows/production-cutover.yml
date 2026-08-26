@@ -1,0 +1,182 @@
+name: ROVIQ Production Cutover
+
+on:
+  push:
+    branches: [rebuild/neon-core]
+    paths:
+      - 'wrangler.cutover.jsonc'
+      - '.github/workflows/production-cutover.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: roviq-core-production-cutover
+  cancel-in-progress: false
+
+jobs:
+  cutover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PROD_URL: https://roviq-core.admytruk79.workers.dev
+      CANDIDATE_URL: https://roviq-core-candidate.admytruk79.workers.dev
+    steps:
+      - name: Checkout rebuild branch
+        uses: actions/checkout@v4
+        with:
+          ref: rebuild/neon-core
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Validate migration integrity
+        run: npm run db:validate-migrations
+
+      - name: Verify candidate is healthy before cutover
+        shell: bash
+        run: |
+          HEALTH=$(curl --fail-with-body --silent --show-error --max-time 20 "$CANDIDATE_URL/health")
+          READY=$(curl --fail-with-body --silent --show-error --max-time 20 "$CANDIDATE_URL/ready")
+          PROD=$(curl --fail-with-body --silent --show-error --max-time 20 "$CANDIDATE_URL/api/core/production-capabilities")
+          OPS=$(curl --fail-with-body --silent --show-error --max-time 20 "$CANDIDATE_URL/api/core/operations-capabilities")
+          echo "$HEALTH" | grep -q '"databaseTransport":"hyperdrive-neon"'
+          echo "$READY" | grep -q '"database":"reachable"'
+          echo "$PROD" | grep -q '"layer":"production-core-v1"'
+          echo "$OPS" | grep -q '"layer":"operations-core-v1"'
+
+      - name: Capture exact legacy production version
+        shell: bash
+        run: |
+          npx wrangler deployments status --name roviq-core --json > legacy-deployment.json
+          LEGACY_VERSION=$(node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const data = JSON.parse(fs.readFileSync('legacy-deployment.json','utf8'));
+          function findVersion(value) {
+            if (Array.isArray(value)) {
+              for (const item of value) { const found = findVersion(item); if (found) return found; }
+              return null;
+            }
+            if (!value || typeof value !== 'object') return null;
+            if (typeof value.version_id === 'string') return value.version_id;
+            if (Array.isArray(value.versions)) {
+              for (const item of value.versions) {
+                if (item && typeof item.version_id === 'string') return item.version_id;
+              }
+            }
+            for (const key of ['deployment','latest','current','result']) {
+              if (key in value) { const found = findVersion(value[key]); if (found) return found; }
+            }
+            return null;
+          }
+          const version = findVersion(data);
+          if (!version) process.exit(2);
+          process.stdout.write(version);
+          NODE
+          )
+          test -n "$LEGACY_VERSION"
+          echo "LEGACY_VERSION=$LEGACY_VERSION" >> "$GITHUB_ENV"
+          echo "Captured rollback version $LEGACY_VERSION"
+
+      - name: Verify production cutover config
+        shell: bash
+        run: |
+          grep -q '"name": "roviq-core"' wrangler.cutover.jsonc
+          grep -q '"main": "cloudflare/idempotency-worker.js"' wrangler.cutover.jsonc
+          grep -q '"binding": "HYPERDRIVE"' wrangler.cutover.jsonc
+          grep -q '"id": "38defb5eb63d4a079a46eea4f952eaf7"' wrangler.cutover.jsonc
+          grep -q '"binding": "AI"' wrangler.cutover.jsonc
+          grep -q '"tag": "v1"' wrangler.cutover.jsonc
+          grep -q '"tag": "v2"' wrangler.cutover.jsonc
+          npx wrangler deploy --dry-run --config wrangler.cutover.jsonc
+
+      - name: Ensure production JWT signing secret
+        shell: bash
+        run: |
+          SECRET_LIST=$(npx wrangler secret list --name roviq-core)
+          if echo "$SECRET_LIST" | grep -q 'ROVIQ_JWT_SECRET'; then
+            echo "ROVIQ_JWT_SECRET already configured; preserving it"
+          else
+            JWT_SECRET=$(openssl rand -hex 48)
+            printf '%s' "$JWT_SECRET" | npx wrangler secret put ROVIQ_JWT_SECRET --name roviq-core
+            echo "Created production ROVIQ_JWT_SECRET"
+          fi
+
+      - name: Promote rebuild architecture to production worker
+        run: npx wrangler deploy --config wrangler.cutover.jsonc
+
+      - name: Install rotating production verification token
+        shell: bash
+        run: |
+          E2E_TOKEN=$(openssl rand -hex 32)
+          echo "::add-mask::$E2E_TOKEN"
+          echo "ROVIQ_E2E_TOKEN=$E2E_TOKEN" >> "$GITHUB_ENV"
+          printf '%s' "$E2E_TOKEN" | npx wrangler secret put ROVIQ_E2E_TOKEN --name roviq-core
+          STATUS=000
+          BODY_FILE=$(mktemp)
+          for i in $(seq 1 20); do
+            STATUS=$(curl --silent --show-error --max-time 10 -o "$BODY_FILE" -w '%{http_code}' \
+              "$PROD_URL/api/internal/e2e/auth-check" -H "Authorization: Bearer $E2E_TOKEN" || true)
+            echo "production secret propagation attempt=$i status=$STATUS"
+            [ "$STATUS" = "200" ] && break
+            sleep 2
+          done
+          rm -f "$BODY_FILE"
+          test "$STATUS" = "200"
+
+      - name: Verify production infrastructure
+        shell: bash
+        run: |
+          HEALTH=$(curl --fail-with-body --silent --show-error --max-time 20 "$PROD_URL/health")
+          READY=$(curl --fail-with-body --silent --show-error --max-time 20 "$PROD_URL/ready")
+          AI=$(curl --fail-with-body --silent --show-error --max-time 30 "$PROD_URL/api/ai/ping")
+          PROD=$(curl --fail-with-body --silent --show-error --max-time 20 "$PROD_URL/api/core/production-capabilities")
+          OPS=$(curl --fail-with-body --silent --show-error --max-time 20 "$PROD_URL/api/core/operations-capabilities")
+          echo "$HEALTH" | grep -q '"databaseTransport":"hyperdrive-neon"'
+          echo "$READY" | grep -q '"database":"reachable"'
+          echo "$AI" | grep -q '"ok":true'
+          echo "$PROD" | grep -q '"layer":"production-core-v1"'
+          echo "$OPS" | grep -q '"layer":"operations-core-v1"'
+
+      - name: Verify production full service case
+        shell: bash
+        run: |
+          BODY=$(curl --fail-with-body --silent --show-error --max-time 120 \
+            -X POST "$PROD_URL/api/internal/e2e/service-case" \
+            -H "Authorization: Bearer $ROVIQ_E2E_TOKEN" \
+            -H 'Content-Type: application/json' --data '{}')
+          echo "$BODY" | grep -q '"ok":true'
+          echo "$BODY" | grep -q '"state":"completed"'
+          echo "$BODY" | grep -q 'CASE_COMPLETED'
+
+      - name: Verify production intake routing auth operations and idempotency
+        shell: bash
+        run: |
+          for ENDPOINT in production-core auth-projection operations idempotency; do
+            BODY=$(curl --fail-with-body --silent --show-error --max-time 180 \
+              -X POST "$PROD_URL/api/internal/e2e/$ENDPOINT" \
+              -H "Authorization: Bearer $ROVIQ_E2E_TOKEN" \
+              -H 'Content-Type: application/json' --data '{}')
+            echo "$BODY" | grep -q '"ok":true'
+          done
+
+      - name: Automatic rollback on failed production verification
+        if: failure() && env.LEGACY_VERSION != ''
+        shell: bash
+        run: |
+          echo "Production verification failed; rolling back to $LEGACY_VERSION"
+          npx wrangler rollback "$LEGACY_VERSION" --name roviq-core --message "automatic rollback after failed ROVIQ production cutover"
+          for i in $(seq 1 12); do
+            STATUS=$(curl --silent --show-error --max-time 10 -o /dev/null -w '%{http_code}' "$PROD_URL/health" || true)
+            echo "rollback health attempt=$i status=$STATUS"
+            [ "$STATUS" = "200" ] && exit 0
+            sleep 2
+          done
+          exit 1
