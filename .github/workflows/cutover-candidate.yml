@@ -2,18 +2,6 @@ name: Verify ROVIQ Production Candidate
 
 on:
   workflow_dispatch:
-  push:
-    branches: [rebuild/neon-core]
-    paths:
-      - 'wrangler.candidate.jsonc'
-      - 'cloudflare/core-worker-v2.js'
-      - 'cloudflare/production-worker.js'
-      - 'cloudflare/access-worker.js'
-      - 'cloudflare/operations-worker.js'
-      - 'cloudflare/idempotency-worker.js'
-      - 'migrations/**'
-      - 'scripts/validate-migrations.mjs'
-      - '.github/workflows/cutover-candidate.yml'
 
 permissions:
   contents: read
