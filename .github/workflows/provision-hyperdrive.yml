@@ -11,6 +11,8 @@ on:
       - 'cloudflare/access-worker.js'
       - 'cloudflare/operations-worker.js'
       - 'cloudflare/idempotency-worker.js'
+      - 'migrations/**'
+      - 'scripts/validate-migrations.mjs'
       - 'wrangler.jsonc'
       - 'package.json'
       - 'package-lock.json'
@@ -44,6 +46,15 @@ jobs:
 
       - name: Install and synchronize dependencies
         run: npm install --no-audit --no-fund
+
+      - name: Validate migration integrity
+        shell: bash
+        run: |
+          npm run db:validate-migrations
+          REPO_MIGRATION_COUNT=$(find migrations -maxdepth 1 -type f -regextype posix-extended -regex '.*/[0-9]{3}.*\.sql' | wc -l | tr -d ' ')
+          test "$REPO_MIGRATION_COUNT" -gt 0
+          echo "REPO_MIGRATION_COUNT=$REPO_MIGRATION_COUNT" >> "$GITHUB_ENV"
+          echo "Repository migration files: $REPO_MIGRATION_COUNT"
 
       - name: Verify Cloudflare credentials
         shell: bash
@@ -120,7 +131,7 @@ jobs:
           rm -f "$BODY_FILE"
           test "$STATUS" = "200"
 
-      - name: Verify live Core, Neon, and AI
+      - name: Verify live Core, Neon, AI, and migration parity
         shell: bash
         run: |
           for i in $(seq 1 18); do
@@ -129,13 +140,16 @@ jobs:
             AI=$(curl --silent --show-error --max-time 30 "$WORKER_URL/api/ai/ping" || true)
             PROD=$(curl --silent --show-error --max-time 20 "$WORKER_URL/api/core/production-capabilities" || true)
             OPS=$(curl --silent --show-error --max-time 20 "$WORKER_URL/api/core/operations-capabilities" || true)
+            DB_MIGRATION_COUNT=$(READY_JSON="$READY" node -e "try{const j=JSON.parse(process.env.READY_JSON||'{}');process.stdout.write(String(j.migration_count??''))}catch{process.stdout.write('')}" )
             echo "health=$HEALTH"
             echo "ready=$READY"
             echo "ai=$AI"
             echo "production=$PROD"
             echo "operations=$OPS"
+            echo "migrationParity repo=$REPO_MIGRATION_COUNT db=$DB_MIGRATION_COUNT"
             if echo "$HEALTH" | grep -q '"databaseTransport":"hyperdrive-neon"' \
               && echo "$READY" | grep -q '"database":"reachable"' \
+              && [ "$DB_MIGRATION_COUNT" = "$REPO_MIGRATION_COUNT" ] \
               && echo "$AI" | grep -q '"ok":true' \
               && echo "$PROD" | grep -q '"layer":"production-core-v1"' \
               && echo "$OPS" | grep -q '"layer":"operations-core-v1"'; then
@@ -143,7 +157,7 @@ jobs:
             fi
             sleep 5
           done
-          echo "Isolated ROVIQ Core did not become fully ready"
+          echo "Isolated ROVIQ Core did not become fully ready with migration parity"
           exit 1
 
       - name: Verify live ROVIQ business flow v2
