@@ -97,6 +97,9 @@ jobs:
           grep -q '"tag": "v2"' wrangler.cutover.jsonc
           npx wrangler deploy --dry-run --config wrangler.cutover.jsonc
 
+      - name: Promote rebuild architecture to production worker
+        run: npx wrangler deploy --config wrangler.cutover.jsonc
+
       - name: Ensure production JWT signing secret
         shell: bash
         run: |
@@ -105,12 +108,10 @@ jobs:
             echo "ROVIQ_JWT_SECRET already configured; preserving it"
           else
             JWT_SECRET=$(openssl rand -hex 48)
+            echo "::add-mask::$JWT_SECRET"
             printf '%s' "$JWT_SECRET" | npx wrangler secret put ROVIQ_JWT_SECRET --name roviq-core
             echo "Created production ROVIQ_JWT_SECRET"
           fi
-
-      - name: Promote rebuild architecture to production worker
-        run: npx wrangler deploy --config wrangler.cutover.jsonc
 
       - name: Install rotating production verification token
         shell: bash
