@@ -130,6 +130,15 @@ Both components read the same Neon connection string, but each holds its own cop
 
 Required repository secrets for this workflow: `NEON_DATABASE_URL`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `RENDER_API_KEY` (Render dashboard → Account Settings → API Keys), `RENDER_SERVICE_ID` (the `srv-...` id in the Render service's dashboard URL).
 
+### Scheduled operations sweep
+
+Two admin endpoints drive queued work forward and nothing calls them automatically: `POST /api/admin/operations/sweep-deadlines` (retries or escalates expired `workflow_deadlines` rows — e.g. an unassigned tow dispatch) and `POST /api/admin/notifications/process` (delivers the `notification_outbox`). `.github/workflows/scheduled-operations-sweep.yml` runs both every 10 minutes (also runnable on demand via `workflow_dispatch`): it logs in as a real admin identity (production has `ALLOW_DEV_HEADERS=false`, so this goes through the actual `POST /api/auth/login` JWT flow, not a dev header) and calls both endpoints with the resulting bearer token.
+
+This needs an admin identity to exist and its credentials available as repository secrets:
+
+1. In the Render dashboard, set `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD` (12+ characters) on the `roviq-core` service, then redeploy — `npm run db:migrate:prod` creates that admin identity on boot if no admin identity exists yet (see `src/db/migrate.ts`).
+2. Add the same two values as GitHub repository secrets `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` so the workflow can log in as that identity.
+
 ## Remaining work
 
 Tow/valet dispatch, loaner/fleet allocation, parts fulfilment, payments, notifications, AI triage and the integration gateway are all implemented (see routes above). What's left:
