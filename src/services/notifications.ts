@@ -46,11 +46,13 @@ export async function processNotificationBatch(principal: Principal, workerId:st
 }
 
 async function deliverOne(principal: Principal, notification:any, workerId:string) {
+  const attemptNumber = Number(notification.attempt_count ?? 0) + 1;
+  const dead = attemptNumber >= Number(notification.max_attempts ?? 5);
   const config = await pool.query('select * from notification_channel_configs where channel=$1',[notification.channel]);
   const provider = notification.provider || config.rows[0]?.provider || 'internal';
   if (!config.rowCount || !config.rows[0].enabled) {
-    await fail(notification,'channel_disabled','Notification channel is disabled',provider,workerId);
-    return { id:notification.id, state:'retry' };
+    await fail(notification,'channel_disabled','Notification channel is disabled',provider,workerId,attemptNumber);
+    return { id:notification.id, state: dead ? 'dead' : 'retry' };
   }
 
   const templateResult = await pool.query(
@@ -63,11 +65,10 @@ async function deliverOne(principal: Principal, notification:any, workerId:strin
   const body = template?.body_template ? render(template.body_template,payload) : JSON.stringify(payload);
   const adapter = adapters[provider];
   if (!adapter) {
-    await fail(notification,'provider_not_configured',`No adapter registered for ${provider}`,provider,workerId);
-    return { id:notification.id, state:'retry' };
+    await fail(notification,'provider_not_configured',`No adapter registered for ${provider}`,provider,workerId,attemptNumber);
+    return { id:notification.id, state: dead ? 'dead' : 'retry' };
   }
 
-  const attemptNumber = Number(notification.attempt_count ?? 0) + 1;
   let result:DeliveryResult;
   try {
     result = await adapter({ channel:notification.channel,recipientId:notification.recipient_id,subject,body,payload });
@@ -91,11 +92,10 @@ async function deliverOne(principal: Principal, notification:any, workerId:strin
   }
 
   await retryOrDead(notification,attemptNumber,result,provider,workerId);
-  return { id:notification.id,state:attemptNumber >= notification.max_attempts ? 'dead' : 'retry' };
+  return { id:notification.id, state: dead ? 'dead' : 'retry' };
 }
 
-async function fail(notification:any, code:string, message:string, provider:string, workerId:string) {
-  const attemptNumber = Number(notification.attempt_count ?? 0) + 1;
+async function fail(notification:any, code:string, message:string, provider:string, workerId:string, attemptNumber:number) {
   await pool.query(
     `insert into notification_delivery_attempts(notification_id,attempt_number,provider,state,error_code,error_message)
      values($1,$2,$3,'failed',$4,$5)`, [notification.id,attemptNumber,provider,code,message]
