@@ -23,3 +23,7 @@ services:
         value: roviq-apps
       - key: ALLOW_DEV_HEADERS
         value: "false"
+      - key: BOOTSTRAP_ADMIN_EMAIL
+        sync: false
+      - key: BOOTSTRAP_ADMIN_PASSWORD
+        sync: false
