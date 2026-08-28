@@ -1,3 +1,5 @@
+import { handleLocalCoreRequest, isLocalCorePath } from './local-adapter.js';
+
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status,
   headers: {
@@ -149,10 +151,14 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === '/' || url.pathname === '/health' || url.pathname === '/edge-health') {
-      return json({ ok: true, service: 'roviq-core', runtime: 'cloudflare-worker', database: 'neon', aiTriage: 'shadow', engine: 'native-worker-v3' });
+      return json({ ok: true, service: 'roviq-core', runtime: 'cloudflare-worker', database: 'neon', aiTriage: 'shadow', engine: 'native-worker-v3', local: '/api/local' });
     }
 
     try {
+      if (isLocalCorePath(url.pathname)) {
+        return await handleLocalCoreRequest(request, env, url);
+      }
+
       if (url.pathname === '/ready') {
         const sql = await sqlFor(env);
         const rows = await sql`select now() as database_time, current_database() as database_name, current_user as database_user`;
