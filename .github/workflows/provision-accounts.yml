@@ -1,0 +1,106 @@
+name: Provision ROVIQ Production Accounts
+
+on:
+  workflow_dispatch:
+    inputs:
+      admin_email:
+        description: 'Existing admin email to authenticate as (e.g. the bootstrap admin)'
+        required: true
+      admin_password:
+        description: 'Existing admin password'
+        required: true
+      new_staff_email:
+        description: 'Email for a new dedicated staff (admin) account'
+        required: true
+      new_staff_password:
+        description: 'Password for the new staff account (12+ characters)'
+        required: true
+      new_customer_email:
+        description: 'Email for a new customer account'
+        required: true
+      new_customer_password:
+        description: 'Password for the new customer account (12+ characters)'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      API_BASE: https://roviq-core.admytruk79.workers.dev
+    steps:
+      - name: Mask sensitive inputs
+        shell: bash
+        run: |
+          echo "::add-mask::${{ inputs.admin_password }}"
+          echo "::add-mask::${{ inputs.new_staff_password }}"
+          echo "::add-mask::${{ inputs.new_customer_password }}"
+
+      - name: Log in as the existing admin
+        id: login
+        shell: bash
+        run: |
+          RES=$(curl -sS -X POST "$API_BASE/api/auth/login" \
+            -H 'Content-Type: application/json' \
+            -d "{\"email\":\"${{ inputs.admin_email }}\",\"password\":\"${{ inputs.admin_password }}\"}")
+          echo "::add-mask::$RES"
+          TOKEN=$(echo "$RES" | jq -r '.accessToken // empty')
+          if [ -z "$TOKEN" ]; then
+            echo "Login failed. Check the admin email/password inputs."
+            exit 1
+          fi
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+          echo "Logged in successfully."
+
+      - name: Create dedicated staff (admin) account
+        shell: bash
+        run: |
+          RES=$(curl -sS -X POST "$API_BASE/api/admin/identities" \
+            -H "Authorization: Bearer ${{ steps.login.outputs.token }}" \
+            -H 'Content-Type: application/json' \
+            -d "{\"email\":\"${{ inputs.new_staff_email }}\",\"password\":\"${{ inputs.new_staff_password }}\",\"role\":\"admin\"}")
+          echo "::add-mask::$RES"
+          if echo "$RES" | jq -e '.identity.id' >/dev/null 2>&1; then
+            echo "Staff account created: ${{ inputs.new_staff_email }}"
+          else
+            echo "Staff account creation failed (may already exist): $RES"
+            exit 1
+          fi
+
+      - name: Create customer actor
+        id: actor
+        shell: bash
+        run: |
+          RES=$(curl -sS -X POST "$API_BASE/api/admin/actors" \
+            -H "Authorization: Bearer ${{ steps.login.outputs.token }}" \
+            -H 'Content-Type: application/json' \
+            -d '{"actorType":"customer"}')
+          ACTOR_ID=$(echo "$RES" | jq -r '.actor.id // empty')
+          if [ -z "$ACTOR_ID" ]; then
+            echo "Actor creation failed: $RES"
+            exit 1
+          fi
+          echo "actor_id=$ACTOR_ID" >> "$GITHUB_OUTPUT"
+          echo "Customer actor created: $ACTOR_ID"
+
+      - name: Create customer login identity
+        shell: bash
+        run: |
+          RES=$(curl -sS -X POST "$API_BASE/api/admin/identities" \
+            -H "Authorization: Bearer ${{ steps.login.outputs.token }}" \
+            -H 'Content-Type: application/json' \
+            -d "{\"email\":\"${{ inputs.new_customer_email }}\",\"password\":\"${{ inputs.new_customer_password }}\",\"role\":\"customer\",\"actorId\":\"${{ steps.actor.outputs.actor_id }}\"}")
+          echo "::add-mask::$RES"
+          if echo "$RES" | jq -e '.identity.id' >/dev/null 2>&1; then
+            echo "Customer account created: ${{ inputs.new_customer_email }}"
+          else
+            echo "Customer account creation failed (may already exist): $RES"
+            exit 1
+          fi
+
+      - name: Done
+        run: echo "Both accounts are ready to use — sign in with the emails/passwords you entered above."
