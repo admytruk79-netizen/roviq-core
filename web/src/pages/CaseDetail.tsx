@@ -64,6 +64,10 @@ export function CaseDetail() {
         <StatusBadge state={caseData.state} />
       </div>
 
+      {caseData.attributes?.description && (
+        <p className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-600">{caseData.attributes.description}</p>
+      )}
+
       {snapshot && (
         <div className="rounded-lg border border-slate-200 bg-white p-4">
           <p className="text-sm font-medium">{snapshot.customer_message ?? humanizeToken(snapshot.customer_status)}</p>

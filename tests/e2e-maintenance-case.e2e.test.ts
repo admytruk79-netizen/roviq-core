@@ -54,6 +54,16 @@ describe('maintenance case end-to-end lifecycle', () => {
     expect(openedCase.state).toBe('triage');
     const caseId = openedCase.id;
 
+    // Only the transitions actually valid from the current state (and role) are offered.
+    const adminTransitionsRes = await app.inject({ method: 'GET', url: `/api/maintenance/cases/${caseId}/transitions`, headers: adminHeaders() });
+    expect(adminTransitionsRes.statusCode).toBe(200);
+    const adminTransitions = JSON.parse(adminTransitionsRes.body).transitions.map((t: { toState: string }) => t.toState).sort();
+    expect(adminTransitions).toEqual(['cancelled', 'diagnostic_pending', 'provider_selection', 'tow_pending']);
+
+    const customerTransitionsRes = await app.inject({ method: 'GET', url: `/api/maintenance/cases/${caseId}/transitions`, headers: actorHeaders('customer', customerActorId) });
+    expect(customerTransitionsRes.statusCode).toBe(200);
+    expect(JSON.parse(customerTransitionsRes.body).transitions.map((t: { toState: string }) => t.toState)).toEqual(['cancelled']);
+
     const routeRes = await app.inject({ method: 'POST', url: `/api/admin/demands/${demand.id}/route`, headers: adminHeaders(), payload: {} });
     expect(routeRes.statusCode).toBe(200);
     const routed = JSON.parse(routeRes.body);
@@ -67,6 +77,10 @@ describe('maintenance case end-to-end lifecycle', () => {
     });
     expect(acceptRes.statusCode).toBe(200);
     expect(JSON.parse(acceptRes.body).case.state).toBe('repair_in_progress');
+
+    const partnerTransitionsRes = await app.inject({ method: 'GET', url: `/api/maintenance/cases/${caseId}/transitions`, headers: actorHeaders('partner', partnerActorId) });
+    expect(partnerTransitionsRes.statusCode).toBe(200);
+    expect(JSON.parse(partnerTransitionsRes.body).transitions.map((t: { toState: string }) => t.toState).sort()).toEqual(['parts_pending', 'payment_pending']);
 
     const revisionRes = await app.inject({
       method: 'POST', url: `/api/admin/maintenance/cases/${caseId}/service-plan/revisions`, headers: adminHeaders(),
