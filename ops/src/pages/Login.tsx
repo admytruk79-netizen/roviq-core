@@ -6,58 +6,9 @@ export function Login() {
   const { principal, login, loading, error } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const navigate = useNavigate();
-
   if (principal) return <Navigate to="/" replace />;
-
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    try {
-      await login(email, password);
-      navigate('/');
-    } catch {
-      // error is surfaced via auth state
-    }
-  }
-
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50">
-      <form onSubmit={handleSubmit} className="w-full max-w-sm space-y-4 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div>
-          <h1 className="text-xl font-semibold">ROVIQ Ops</h1>
-          <p className="mt-1 text-sm text-slate-500">Sign in with your staff admin account.</p>
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-slate-700" htmlFor="email">Email</label>
-          <input
-            id="email"
-            type="email"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-slate-700" htmlFor="password">Password</label>
-          <input
-            id="password"
-            type="password"
-            required
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none"
-          />
-        </div>
-        {error && <p className="text-sm text-red-600">{error}</p>}
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-        >
-          {loading ? 'Signing in…' : 'Sign in'}
-        </button>
-      </form>
-    </div>
-  );
+  async function handleSubmit(e: FormEvent) { e.preventDefault(); try { await login(email.trim(), password); navigate('/'); } catch { /* auth state */ } }
+  return <div className="roviq-shell roviq-grid-glow flex min-h-screen items-center justify-center px-5 py-10"><form onSubmit={handleSubmit} className="roviq-panel w-full max-w-md p-7 sm:p-8"><div className="roviq-brand"><span className="roviq-mark"><span>R</span></span><span>ROVIQ</span></div><p className="roviq-kicker mt-8">Operations console</p><h1 className="mt-2 text-3xl font-bold tracking-tight">Staff sign in</h1><p className="roviq-muted mt-2 text-sm">Authorized ROVIQ operations accounts only.</p><div className="mt-7 space-y-5"><div><label className="mb-2 block text-sm font-medium" htmlFor="email">Email</label><input id="email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="roviq-input" /></div><div><label className="mb-2 block text-sm font-medium" htmlFor="password">Password</label><div className="relative"><input id="password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} className="roviq-input pr-20" /><button type="button" onClick={() => setShowPassword((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-[var(--roviq-copper-soft)]">{showPassword ? 'Hide' : 'Show'}</button></div></div></div>{error && <p className="mt-4 text-sm text-red-300">{error}</p>}<button type="submit" disabled={loading} className="roviq-btn-primary mt-6 w-full">{loading ? 'Signing in…' : 'Enter operations'}</button></form></div>;
 }

@@ -1,0 +1,26 @@
+name: Deploy ROVIQ Tow Portal
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['tow/**','.github/workflows/deploy-tow.yml']
+permissions: { contents: read }
+concurrency: { group: roviq-tow-production, cancel-in-progress: true }
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      VITE_API_BASE_URL: https://roviq-core.admytruk79.workers.dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - working-directory: tow
+        run: npm install --no-audit --no-fund && npm run build
+      - working-directory: tow
+        run: npx wrangler pages project list | grep -qw roviq-tow-net || npx wrangler pages project create roviq-tow-net --production-branch=main
+      - working-directory: tow
+        run: npx wrangler pages deploy dist --project-name=roviq-tow-net --branch=main --commit-dirty=true

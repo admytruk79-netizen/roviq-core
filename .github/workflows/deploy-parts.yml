@@ -1,0 +1,26 @@
+name: Deploy ROVIQ Parts Portal
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['parts-portal/**','.github/workflows/deploy-parts.yml']
+permissions: { contents: read }
+concurrency: { group: roviq-parts-production, cancel-in-progress: true }
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      VITE_API_BASE_URL: https://roviq-core.admytruk79.workers.dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - working-directory: parts-portal
+        run: npm install --no-audit --no-fund && npm run build
+      - working-directory: parts-portal
+        run: npx wrangler pages project list | grep -qw roviq-parts-net || npx wrangler pages project create roviq-parts-net --production-branch=main
+      - working-directory: parts-portal
+        run: npx wrangler pages deploy dist --project-name=roviq-parts-net --branch=main --commit-dirty=true
