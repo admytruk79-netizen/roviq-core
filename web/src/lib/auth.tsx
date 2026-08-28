@@ -34,10 +34,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setError(null);
     try {
       const res = await api.post<{ accessToken: string; principal: Principal }>('/api/auth/login', { email, password });
+
+      if (res.principal.role === 'admin') {
+        setToken(res.accessToken);
+        const testSession = await api.post<{ accessToken: string; principal: Principal; recoveredCaseCount?: number }>(
+          '/api/admin/testing/customer-session',
+          {}
+        );
+        setToken(testSession.accessToken);
+        localStorage.setItem(PRINCIPAL_KEY, JSON.stringify(testSession.principal));
+        setPrincipal(testSession.principal);
+        return;
+      }
+
+      if (res.principal.role !== 'customer' || !res.principal.actorId) {
+        setToken(null);
+        localStorage.removeItem(PRINCIPAL_KEY);
+        setError('This portal requires a customer account.');
+        throw new Error('wrong_role');
+      }
+
       setToken(res.accessToken);
       localStorage.setItem(PRINCIPAL_KEY, JSON.stringify(res.principal));
       setPrincipal(res.principal);
-    } catch {
+    } catch (err) {
+      if (err instanceof Error && err.message === 'wrong_role') throw err;
+      setToken(null);
+      localStorage.removeItem(PRINCIPAL_KEY);
       setError('Invalid email or password.');
       throw new Error('login_failed');
     } finally {
