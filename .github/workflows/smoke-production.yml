@@ -5,6 +5,21 @@ on:
   push:
     branches: [main]
     paths:
+      - 'src/**'
+      - 'cloudflare/**'
+      - 'web/**'
+      - 'diagnostic/**'
+      - 'partner/**'
+      - 'parts/**'
+      - 'tow/**'
+      - 'ops/**'
+      - '.github/workflows/deploy-cloudflare.yml'
+      - '.github/workflows/deploy-web.yml'
+      - '.github/workflows/deploy-diagnostic.yml'
+      - '.github/workflows/deploy-partner.yml'
+      - '.github/workflows/deploy-parts.yml'
+      - '.github/workflows/deploy-tow.yml'
+      - '.github/workflows/deploy-ops.yml'
       - '.github/workflows/smoke-production.yml'
 
 permissions:
