@@ -39,12 +39,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setError(null);
     try {
       const result = await api.post<{ accessToken: string; principal: Principal }>('/api/auth/login', { email: email.trim(), password });
+
+      if (result.principal.role === 'admin') {
+        setToken(result.accessToken);
+        const testSession = await api.post<{ accessToken: string; principal: Principal }>('/api/admin/testing/partner-session', {});
+        setToken(testSession.accessToken);
+        localStorage.setItem(PRINCIPAL_KEY, JSON.stringify(testSession.principal));
+        setPrincipal(testSession.principal);
+        return;
+      }
+
       if (result.principal.role !== 'partner' || !result.principal.actorId) {
         setToken(null);
         localStorage.removeItem(PRINCIPAL_KEY);
         setError('This portal requires a shop or dealership partner account.');
         throw new Error('wrong_role');
       }
+
       setToken(result.accessToken);
       localStorage.setItem(PRINCIPAL_KEY, JSON.stringify(result.principal));
       setPrincipal(result.principal);
