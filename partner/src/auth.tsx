@@ -34,7 +34,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setError(null);
     try {
       const result = await api.post<{ accessToken: string; principal: Principal }>('/api/auth/login', { email, password });
-      if (result.principal.role !== 'partner') {
+      if (!['partner', 'admin'].includes(result.principal.role)) {
         setToken(null);
         setError('This portal is for shop and dealership partner accounts.');
         throw new Error('wrong_role');
