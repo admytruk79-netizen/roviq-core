@@ -21,7 +21,12 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 function readPrincipal(): Principal | null {
   const raw = localStorage.getItem(PRINCIPAL_KEY);
   if (!raw) return null;
-  try { return JSON.parse(raw) as Principal; } catch { return null; }
+  try {
+    const principal = JSON.parse(raw) as Principal;
+    return principal.role === 'partner' && principal.actorId ? principal : null;
+  } catch {
+    return null;
+  }
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -33,10 +38,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setLoading(true);
     setError(null);
     try {
-      const result = await api.post<{ accessToken: string; principal: Principal }>('/api/auth/login', { email, password });
-      if (!['partner', 'admin'].includes(result.principal.role)) {
+      const result = await api.post<{ accessToken: string; principal: Principal }>('/api/auth/login', { email: email.trim(), password });
+      if (result.principal.role !== 'partner' || !result.principal.actorId) {
         setToken(null);
-        setError('This portal is for shop and dealership partner accounts.');
+        localStorage.removeItem(PRINCIPAL_KEY);
+        setError('This portal requires a shop or dealership partner account.');
         throw new Error('wrong_role');
       }
       setToken(result.accessToken);
