@@ -156,7 +156,7 @@ npm run dev      # dev server on :5173, proxies /api to Core
 npm run build    # tsc -b && vite build, output in web/dist
 ```
 
-Deploys to Cloudflare Pages (`roviq-web.pages.dev`) via `.github/workflows/deploy-web.yml` on every push to `main` that touches `web/`.
+Deploys to Cloudflare Pages via `.github/workflows/deploy-web.yml` on every push to `main` that touches `web/`. The Pages project is named `roviq-web`, but `roviq-web.pages.dev` was already taken globally on `pages.dev` when the project was first created, so Cloudflare assigned it `roviq-web-dxv.pages.dev` instead — check the workflow run's "Deploy to Cloudflare Pages" step for the live URL if this ever changes.
 
 ## Ops console
 
