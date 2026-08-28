@@ -27,6 +27,18 @@ export async function buildApp() {
   // Pino/Fastify logging currently triggers a Worker startup incompatibility.
   // Keep logging disabled at the Fastify layer; Cloudflare observability remains enabled.
   const app = Fastify({ logger: false, disableRequestLogging: true });
+
+  // Registered before any route plugins: Fastify's encapsulation model only lets child
+  // contexts (every app.register(xRoutes) below) inherit a parent error handler that was
+  // set before they were registered, not one set afterward.
+  app.setErrorHandler((err, _req, reply) => {
+    if (err instanceof ZodError) return reply.code(400).send({ error:'validation_error', details:err.issues });
+    if (err instanceof Error && err.message === 'idempotency_key_reused') return reply.code(409).send({error:err.message});
+    if (err instanceof Error && err.message === 'idempotency_key_too_long') return reply.code(400).send({error:err.message});
+    console.error('roviq_core_error', err);
+    return reply.code(500).send({ error:'internal_error' });
+  });
+
   await app.register(cors, { origin: false });
   await app.register(helmet);
   await app.register(rateLimit, { max: 120, timeWindow: '1 minute' });
@@ -54,12 +66,5 @@ export async function buildApp() {
   await app.register(integrationRoutes);
   await app.register(triageEvaluationRoutes);
 
-  app.setErrorHandler((err, _req, reply) => {
-    if (err instanceof ZodError) return reply.code(400).send({ error:'validation_error', details:err.issues });
-    if (err instanceof Error && err.message === 'idempotency_key_reused') return reply.code(409).send({error:err.message});
-    if (err instanceof Error && err.message === 'idempotency_key_too_long') return reply.code(400).send({error:err.message});
-    console.error('roviq_core_error', err);
-    return reply.code(500).send({ error:'internal_error' });
-  });
   return app;
 }
