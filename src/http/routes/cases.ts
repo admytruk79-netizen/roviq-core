@@ -68,6 +68,25 @@ export async function caseRoutes(app: FastifyInstance) {
     }
   });
 
+  app.get('/api/maintenance/cases/:id/transitions', async (req, reply) => {
+    const { id } = req.params as { id:string };
+    try {
+      const c = await loadCaseForPrincipal(req.principal,id);
+      if (!c) return reply.code(404).send({ error:'case_not_found' });
+      const rules = await pool.query(
+        `select to_state,terminal from case_transition_rules where from_state=$1 and $2=any(allowed_roles)`,
+        [c.state,req.principal.role]
+      );
+      const canCancel = c.state !== 'completed' && c.state !== 'cancelled' && ['admin','customer'].includes(req.principal.role);
+      const transitions = rules.rows.map(r => ({ toState:r.to_state, terminal:r.terminal }));
+      if (canCancel) transitions.push({ toState:'cancelled', terminal:true });
+      return { transitions };
+    } catch (error) {
+      if (error instanceof Error && error.message === 'forbidden') return reply.code(403).send({error:'forbidden'});
+      throw error;
+    }
+  });
+
   app.get('/api/maintenance/cases/:id/timeline', async (req, reply) => {
     const { id } = req.params as { id:string };
     try {

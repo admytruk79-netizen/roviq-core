@@ -11,6 +11,7 @@ export type ServiceCase = {
   updated_at: string;
   completed_at: string | null;
   cancelled_at: string | null;
+  attributes?: { description?: string; demandType?: string } & Record<string, unknown>;
 };
 
 export type CustomerSnapshot = {

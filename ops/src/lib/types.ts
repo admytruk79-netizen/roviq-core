@@ -12,6 +12,7 @@ export type ServiceCase = {
   updated_at: string;
   completed_at: string | null;
   cancelled_at: string | null;
+  attributes?: { description?: string; demandType?: string } & Record<string, unknown>;
 };
 
 export type CustomerSnapshot = {
@@ -85,6 +86,8 @@ export type CaseException = {
   priority: string;
   created_at: string;
 };
+
+export type CaseTransition = { toState: string; terminal: boolean };
 
 export const CASE_STATES = [
   'intake',

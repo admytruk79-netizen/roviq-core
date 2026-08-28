@@ -3,8 +3,7 @@ import { useParams } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import { formatAmount, formatDateTime, formatMinorAmount, humanizeToken } from '../lib/format';
 import { StatusBadge } from '../components/StatusBadge';
-import { CASE_STATES } from '../lib/types';
-import type { CustomerSnapshot, PaymentIntent, ServiceCase, ServicePlanResponse, TimelineEvent } from '../lib/types';
+import type { CaseTransition, CustomerSnapshot, PaymentIntent, ServiceCase, ServicePlanResponse, TimelineEvent } from '../lib/types';
 
 export function CaseDetail() {
   const { id } = useParams<{ id: string }>();
@@ -13,6 +12,7 @@ export function CaseDetail() {
   const [plan, setPlan] = useState<ServicePlanResponse | null>(null);
   const [payments, setPayments] = useState<PaymentIntent[]>([]);
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
+  const [transitions, setTransitions] = useState<CaseTransition[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const [quoteReason, setQuoteReason] = useState('');
@@ -28,17 +28,19 @@ export function CaseDetail() {
   const load = useCallback(async () => {
     if (!id) return;
     try {
-      const [caseRes, planRes, paymentsRes, timelineRes] = await Promise.all([
+      const [caseRes, planRes, paymentsRes, timelineRes, transitionsRes] = await Promise.all([
         api.get<{ case: ServiceCase; customerSnapshot: CustomerSnapshot }>(`/api/maintenance/cases/${id}`),
         api.get<ServicePlanResponse>(`/api/maintenance/cases/${id}/service-plan`).catch(() => null),
         api.get<{ payments: PaymentIntent[] }>(`/api/maintenance/cases/${id}/payments`),
-        api.get<{ timeline: TimelineEvent[] }>(`/api/maintenance/cases/${id}/timeline`)
+        api.get<{ timeline: TimelineEvent[] }>(`/api/maintenance/cases/${id}/timeline`),
+        api.get<{ transitions: CaseTransition[] }>(`/api/maintenance/cases/${id}/transitions`)
       ]);
       setCaseData(caseRes.case);
       setSnapshot(caseRes.customerSnapshot);
       setPlan(planRes);
       setPayments(paymentsRes.payments);
       setTimeline(timelineRes.timeline);
+      setTransitions(transitionsRes.transitions);
     } catch (e) {
       setError(e instanceof ApiError && e.status === 403 ? "You don't have access to this case." : 'Could not load this case.');
     }
@@ -100,6 +102,13 @@ export function CaseDetail() {
         <StatusBadge state={caseData.state} />
       </div>
 
+      {caseData.attributes?.description && (
+        <p className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-600">
+          <span className="font-medium text-slate-700">Customer note: </span>
+          {caseData.attributes.description}
+        </p>
+      )}
+
       {snapshot && (
         <div className="rounded-lg border border-slate-200 bg-white p-4">
           <p className="text-sm font-medium">{snapshot.customer_message ?? humanizeToken(snapshot.customer_status)}</p>
@@ -110,25 +119,29 @@ export function CaseDetail() {
 
       <section className="rounded-lg border border-slate-200 bg-white p-4">
         <h2 className="text-sm font-semibold text-slate-700">Move case state</h2>
-        <form onSubmit={submitTransition} className="mt-2 flex items-center gap-2">
-          <select
-            value={toState}
-            onChange={(e) => setToState(e.target.value)}
-            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:border-slate-500 focus:outline-none"
-          >
-            <option value="">Select a state…</option>
-            {CASE_STATES.map((s) => (
-              <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>
-            ))}
-          </select>
-          <button
-            type="submit"
-            disabled={!toState || transitioning}
-            className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-          >
-            {transitioning ? 'Moving…' : 'Transition'}
-          </button>
-        </form>
+        {transitions.length === 0 ? (
+          <p className="mt-2 text-sm text-slate-500">No transitions available for your role from this state.</p>
+        ) : (
+          <form onSubmit={submitTransition} className="mt-2 flex items-center gap-2">
+            <select
+              value={toState}
+              onChange={(e) => setToState(e.target.value)}
+              className="rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:border-slate-500 focus:outline-none"
+            >
+              <option value="">Select a state…</option>
+              {transitions.map((t) => (
+                <option key={t.toState} value={t.toState}>{t.toState.replace(/_/g, ' ')}</option>
+              ))}
+            </select>
+            <button
+              type="submit"
+              disabled={!toState || transitioning}
+              className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+            >
+              {transitioning ? 'Moving…' : 'Transition'}
+            </button>
+          </form>
+        )}
         {transitionError && <p className="mt-2 text-sm text-red-600">{transitionError}</p>}
       </section>
 

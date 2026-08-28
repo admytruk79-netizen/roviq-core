@@ -96,6 +96,7 @@ Authorization middleware enforces actor ownership server-side; clients cannot ga
 - `POST /api/maintenance/cases`
 - `GET /api/customers/me/cases`
 - `GET /api/admin/cases` (optional `?state=`, admin-only, unscoped)
+- `GET /api/maintenance/cases/:id/transitions` (the valid `toState`s from the case's current state for the calling principal's role, per `case_transition_rules` — lets a client only offer transitions that will actually succeed)
 - `GET /api/maintenance/cases/:id`
 - `GET /api/maintenance/cases/:id/timeline`
 - `POST /api/maintenance/cases/:id/transition`
@@ -160,7 +161,7 @@ Deploys to Cloudflare Pages via `.github/workflows/deploy-web.yml` on every push
 
 ## Ops console
 
-`ops/` is a companion React + Vite + TypeScript + Tailwind v4 app for staff: sign in with an admin identity, browse all cases (`GET /api/admin/cases`, filterable by state), open a case to move its state, propose a service-plan quote, and review payments/timeline, plus a standalone open-exceptions view (`GET /api/admin/exceptions`). Login rejects any non-admin identity client-side (the API itself already enforces this server-side via `requireRole('admin')` on every route this app calls).
+`ops/` is a companion React + Vite + TypeScript + Tailwind v4 app for staff: sign in with an admin identity, browse all cases (`GET /api/admin/cases`, filterable by state), open a case to move its state (only the transitions valid from its current state are offered, via `GET /api/maintenance/cases/:id/transitions`), propose a service-plan quote, and review payments/timeline, plus a standalone open-exceptions view (`GET /api/admin/exceptions`). Login rejects any non-admin identity client-side (the API itself already enforces this server-side via `requireRole('admin')` on every route this app calls).
 
 ```
 cd ops
