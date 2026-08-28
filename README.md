@@ -94,6 +94,7 @@ Authorization middleware enforces actor ownership server-side; clients cannot ga
 - `POST /api/demands`
 - `GET /api/demands/:id`
 - `POST /api/maintenance/cases`
+- `GET /api/customers/me/cases`
 - `GET /api/maintenance/cases/:id`
 - `GET /api/maintenance/cases/:id/timeline`
 - `POST /api/maintenance/cases/:id/transition`

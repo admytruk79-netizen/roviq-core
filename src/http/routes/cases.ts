@@ -28,6 +28,15 @@ export async function caseRoutes(app: FastifyInstance) {
     return reply.code(result.status).send(result.body);
   });
 
+  app.get('/api/customers/me/cases', { preHandler: requireRole('customer') }, async (req) => {
+    const r = await pool.query(
+      `select id,state,priority,drivability,case_type,current_owner_role,created_at,updated_at,completed_at,cancelled_at
+       from service_cases where customer_actor_id=$1 order by created_at desc limit 200`,
+      [req.principal.actorId]
+    );
+    return { cases:r.rows };
+  });
+
   app.get('/api/maintenance/cases/:id', async (req, reply) => {
     const { id } = req.params as { id:string };
     try {
