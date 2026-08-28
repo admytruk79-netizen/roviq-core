@@ -95,6 +95,7 @@ Authorization middleware enforces actor ownership server-side; clients cannot ga
 - `GET /api/demands/:id`
 - `POST /api/maintenance/cases`
 - `GET /api/customers/me/cases`
+- `GET /api/admin/cases` (optional `?state=`, admin-only, unscoped)
 - `GET /api/maintenance/cases/:id`
 - `GET /api/maintenance/cases/:id/timeline`
 - `POST /api/maintenance/cases/:id/transition`
@@ -146,7 +147,7 @@ This needs an admin identity to exist and its credentials available as repositor
 
 ## Customer web app
 
-`web/` is a React 19 + Vite + TypeScript + Tailwind v4 single-page app for customers: log in, view their cases (`GET /api/customers/me/cases`), report a new issue, and view a case's service plan, pending quote approvals, payments and activity timeline. It talks to Core directly (`VITE_API_PROXY_TARGET`, defaulting to `http://localhost:8080` in the Vite dev server proxy for `/api`).
+`web/` is a React 19 + Vite + TypeScript + Tailwind v4 single-page app for customers: log in, view their cases (`GET /api/customers/me/cases`), report a new issue, and view a case's service plan, pending quote approvals, payments and activity timeline. In dev it proxies `/api` to Core (`VITE_API_PROXY_TARGET`, defaulting to `http://localhost:8080`); the production build talks to the edge Worker directly (`VITE_API_BASE_URL`), which already sets permissive CORS headers on every response.
 
 ```
 cd web
@@ -155,7 +156,20 @@ npm run dev      # dev server on :5173, proxies /api to Core
 npm run build    # tsc -b && vite build, output in web/dist
 ```
 
-It is not yet wired into any deployment workflow — running it today means `npm run dev` against a local or remote Core instance.
+Deploys to Cloudflare Pages (`roviq-web.pages.dev`) via `.github/workflows/deploy-web.yml` on every push to `main` that touches `web/`.
+
+## Ops console
+
+`ops/` is a companion React + Vite + TypeScript + Tailwind v4 app for staff: sign in with an admin identity, browse all cases (`GET /api/admin/cases`, filterable by state), open a case to move its state, propose a service-plan quote, and review payments/timeline, plus a standalone open-exceptions view (`GET /api/admin/exceptions`). Login rejects any non-admin identity client-side (the API itself already enforces this server-side via `requireRole('admin')` on every route this app calls).
+
+```
+cd ops
+npm install
+npm run dev -- --port 5174   # dev server, proxies /api to Core
+npm run build
+```
+
+Deploys to Cloudflare Pages (`roviq-ops.pages.dev`) via `.github/workflows/deploy-ops.yml` on every push to `main` that touches `ops/`. It has no access control of its own beyond the admin-role login — anyone who reaches the URL can attempt to sign in, so treat the URL as sensitive until real staff accounts (not the bootstrap admin) and, ideally, a Cloudflare Access policy are in front of it.
 
 ## Remaining work
 
@@ -164,3 +178,4 @@ Tow/valet dispatch, loaner/fleet allocation, parts fulfilment, payments, notific
 1. Domain adapters that reuse Core for ROVIQ Station and later operating domains
 2. `publishIntegrationEvent` (`src/services/integration-gateway.ts`) is fully built — client keys, webhook subscriptions, HMAC signing, retry/dead-letter — but nothing in the domain layer actually calls it, so `integration_events`/`webhook_deliveries` never populate from real activity today. Wiring it into `appendCaseEvent` (or specific domain services) is a deliberate follow-up, not a bug fix, since it requires deciding which events are worth exposing externally.
 3. All eight domains now have end-to-end test coverage (maintenance, transport, mobility, parts, payments, notifications, triage, integrations); case-access/isolation are covered by unit tests.
+4. The ops console (`ops/`) covers case triage, quoting and state transitions only — no partner/tow/parts/payments admin screens yet, and no Cloudflare Access (or similar) in front of it.
