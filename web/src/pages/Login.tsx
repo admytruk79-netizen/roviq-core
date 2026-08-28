@@ -21,43 +21,54 @@ export function Login() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50">
-      <form onSubmit={handleSubmit} className="w-full max-w-sm space-y-4 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div>
-          <h1 className="text-xl font-semibold">Sign in to ROVIQ</h1>
-          <p className="mt-1 text-sm text-slate-500">Use the email and password an admin set up for your account.</p>
+    <div className="roviq-shell roviq-grid-glow grid min-h-screen lg:grid-cols-[1.08fr_.92fr]">
+      <section className="hidden min-h-screen flex-col justify-between border-r border-white/10 p-12 lg:flex">
+        <div className="roviq-brand">
+          <span className="roviq-mark"><span>R</span></span>
+          <span>ROVIQ</span>
         </div>
-        <div>
-          <label className="block text-sm font-medium text-slate-700" htmlFor="email">Email</label>
-          <input
-            id="email"
-            type="email"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none"
-          />
+        <div className="max-w-xl pb-14">
+          <p className="roviq-kicker mb-5">Vehicle service, coordinated</p>
+          <h1 className="text-6xl font-black leading-[0.96] tracking-[-0.045em]">
+            One case.<br />One clear plan.<br /><span className="roviq-green">Back on the road.</span>
+          </h1>
+          <p className="roviq-muted mt-7 max-w-lg text-lg leading-8">
+            Report the problem, follow your Service Plan, approve work and see every handoff in one place.
+          </p>
         </div>
-        <div>
-          <label className="block text-sm font-medium text-slate-700" htmlFor="password">Password</label>
-          <input
-            id="password"
-            type="password"
-            required
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none"
-          />
-        </div>
-        {error && <p className="text-sm text-red-600">{error}</p>}
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-        >
-          {loading ? 'Signing in…' : 'Sign in'}
-        </button>
-      </form>
+        <p className="roviq-muted text-xs">ROVIQ Maintenance</p>
+      </section>
+
+      <section className="flex min-h-screen items-center justify-center px-5 py-10 sm:px-8">
+        <form onSubmit={handleSubmit} className="roviq-panel w-full max-w-md p-6 sm:p-8">
+          <div className="mb-8 lg:hidden">
+            <div className="roviq-brand">
+              <span className="roviq-mark"><span>R</span></span>
+              <span>ROVIQ</span>
+            </div>
+          </div>
+          <p className="roviq-kicker">Customer portal</p>
+          <h2 className="mt-2 text-3xl font-bold tracking-tight">Welcome back</h2>
+          <p className="roviq-muted mt-2 text-sm">Sign in to view and manage your active service cases.</p>
+
+          <div className="mt-7 space-y-5">
+            <div>
+              <label className="mb-2 block text-sm font-medium" htmlFor="email">Email</label>
+              <input id="email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="roviq-input" placeholder="you@example.com" />
+            </div>
+            <div>
+              <label className="mb-2 block text-sm font-medium" htmlFor="password">Password</label>
+              <input id="password" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} className="roviq-input" placeholder="••••••••••••" />
+            </div>
+          </div>
+
+          {error && <p className="mt-4 rounded-lg border border-red-400/20 bg-red-500/10 px-3 py-2 text-sm text-red-300">{error}</p>}
+          <button type="submit" disabled={loading} className="roviq-btn-primary mt-6 w-full">
+            {loading ? 'Signing in…' : 'Sign in'}
+          </button>
+          <p className="roviq-muted mt-5 text-center text-xs">Secure access to your ROVIQ Service Plan and case timeline.</p>
+        </form>
+      </section>
     </div>
   );
 }
