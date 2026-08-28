@@ -46,6 +46,28 @@ jobs:
             | tee /tmp/core-health.json
           grep -Eq '"(ok|status|service)"' /tmp/core-health.json
 
+      - name: Verify ROVIQ Local through Core
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location \
+            --retry 6 --retry-delay 5 --retry-all-errors \
+            "$CORE_URL/api/local" \
+            | tee /tmp/local-capabilities.json
+          grep -Fq 'roviq-local' /tmp/local-capabilities.json
+
+          curl --fail --silent --show-error --location \
+            --retry 6 --retry-delay 5 --retry-all-errors \
+            "$CORE_URL/api/local/health" \
+            | tee /tmp/local-health.json
+          grep -Eqi '"(ok|success|status|service)"' /tmp/local-health.json
+
+          curl --fail --silent --show-error --location \
+            --retry 6 --retry-delay 5 --retry-all-errors \
+            "$CORE_URL/api/local/places" \
+            | tee /tmp/local-places.json
+          grep -Eqi '"(places|success|data)"' /tmp/local-places.json
+
       - name: Verify authentication fails closed
         shell: bash
         run: |
