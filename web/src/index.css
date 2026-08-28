@@ -1,1 +1,125 @@
 @import "tailwindcss";
+
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #f7f7f5;
+  background: #050605;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --roviq-green: #8cff1f;
+  --roviq-green-soft: #6fd615;
+  --roviq-bg: #050605;
+  --roviq-panel: rgba(18, 21, 18, 0.82);
+  --roviq-panel-strong: #101310;
+  --roviq-line: rgba(255, 255, 255, 0.11);
+  --roviq-muted: #9ba39b;
+  --roviq-danger: #ff5b62;
+}
+
+* { box-sizing: border-box; }
+
+html { background: var(--roviq-bg); }
+body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--roviq-bg); }
+button, input, textarea, select { font: inherit; }
+a { color: inherit; }
+
+.roviq-shell {
+  min-height: 100vh;
+  color: #f7f7f5;
+  background:
+    radial-gradient(circle at 78% 8%, rgba(140, 255, 31, 0.08), transparent 28rem),
+    radial-gradient(circle at 20% 100%, rgba(140, 255, 31, 0.035), transparent 35rem),
+    linear-gradient(180deg, #070907 0%, #030403 100%);
+}
+
+.roviq-header {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  border-bottom: 1px solid var(--roviq-line);
+  background: rgba(4, 5, 4, 0.88);
+  backdrop-filter: blur(18px);
+}
+
+.roviq-brand { display: inline-flex; align-items: center; gap: 0.7rem; font-weight: 700; letter-spacing: 0.24em; }
+.roviq-mark {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border: 2px solid var(--roviq-green);
+  border-radius: 999px 999px 999px 35%;
+  color: var(--roviq-green);
+  box-shadow: 0 0 24px rgba(140, 255, 31, 0.12);
+  font-size: 0.95rem;
+  font-weight: 800;
+  transform: rotate(-45deg);
+}
+.roviq-mark > span { transform: rotate(45deg); }
+
+.roviq-panel {
+  border: 1px solid var(--roviq-line);
+  background: linear-gradient(180deg, rgba(20, 23, 20, 0.9), rgba(10, 12, 10, 0.84));
+  border-radius: 1.15rem;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+}
+
+.roviq-kicker { color: var(--roviq-green); font-size: 0.75rem; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; }
+.roviq-muted { color: var(--roviq-muted); }
+.roviq-green { color: var(--roviq-green); }
+
+.roviq-btn-primary {
+  border: 0;
+  border-radius: 0.8rem;
+  background: linear-gradient(135deg, #a0ff33, #76e911);
+  color: #091006;
+  padding: 0.72rem 1rem;
+  font-weight: 800;
+  box-shadow: 0 10px 30px rgba(140, 255, 31, 0.12);
+  transition: transform 160ms ease, filter 160ms ease;
+}
+.roviq-btn-primary:hover { filter: brightness(1.06); transform: translateY(-1px); }
+.roviq-btn-primary:disabled { opacity: 0.5; transform: none; }
+
+.roviq-btn-secondary {
+  border: 1px solid var(--roviq-line);
+  border-radius: 0.8rem;
+  background: rgba(255, 255, 255, 0.035);
+  color: #f7f7f5;
+  padding: 0.7rem 1rem;
+  font-weight: 650;
+}
+.roviq-btn-secondary:hover { border-color: rgba(140, 255, 31, 0.35); color: var(--roviq-green); }
+
+.roviq-input {
+  width: 100%;
+  border: 1px solid var(--roviq-line);
+  border-radius: 0.8rem;
+  background: rgba(0, 0, 0, 0.34);
+  color: #fff;
+  padding: 0.78rem 0.9rem;
+  outline: none;
+}
+.roviq-input:focus { border-color: rgba(140, 255, 31, 0.72); box-shadow: 0 0 0 3px rgba(140, 255, 31, 0.09); }
+.roviq-input::placeholder { color: #687168; }
+
+.roviq-grid-glow {
+  background-image:
+    linear-gradient(rgba(140,255,31,.032) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(140,255,31,.032) 1px, transparent 1px);
+  background-size: 36px 36px;
+}
+
+/* Refine legacy Tailwind surfaces while pages are migrated component-by-component. */
+.bg-slate-50 { background-color: transparent !important; }
+.bg-white { background-color: rgba(16, 19, 16, 0.88) !important; }
+.bg-slate-900 { background-color: var(--roviq-green) !important; color: #091006 !important; }
+.border-slate-200, .border-slate-300 { border-color: var(--roviq-line) !important; }
+.text-slate-900, .text-slate-800, .text-slate-700 { color: #f5f7f4 !important; }
+.text-slate-600, .text-slate-500 { color: var(--roviq-muted) !important; }
+.hover\:bg-slate-800:hover { background-color: var(--roviq-green-soft) !important; }
+.hover\:text-slate-900:hover, .hover\:text-slate-800:hover { color: var(--roviq-green) !important; }
+
+@media (max-width: 640px) {
+  .roviq-brand { letter-spacing: 0.16em; }
+}
