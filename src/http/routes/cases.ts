@@ -37,6 +37,23 @@ export async function caseRoutes(app: FastifyInstance) {
     return { cases:r.rows };
   });
 
+  app.get('/api/admin/cases', { preHandler: requireRole('admin') }, async (req) => {
+    const query = z.object({ state: state.optional(), limit: z.coerce.number().int().positive().max(200).default(100) }).parse(req.query ?? {});
+    const params: unknown[] = [];
+    let where = '';
+    if (query.state) {
+      params.push(query.state);
+      where = `where state=$${params.length}`;
+    }
+    params.push(query.limit);
+    const r = await pool.query(
+      `select id,state,priority,drivability,case_type,current_owner_role,customer_actor_id,created_at,updated_at,completed_at,cancelled_at
+       from service_cases ${where} order by updated_at desc limit $${params.length}`,
+      params
+    );
+    return { cases:r.rows };
+  });
+
   app.get('/api/maintenance/cases/:id', async (req, reply) => {
     const { id } = req.params as { id:string };
     try {

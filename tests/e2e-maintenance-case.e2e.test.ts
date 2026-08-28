@@ -152,5 +152,24 @@ describe('maintenance case end-to-end lifecycle', () => {
     expect(myCases.some((c: { id: string }) => c.id === caseId)).toBe(true);
     const strangerCasesRes = await app.inject({ method: 'GET', url: '/api/customers/me/cases', headers: actorHeaders('customer', strangerId) });
     expect(JSON.parse(strangerCasesRes.body).cases.some((c: { id: string }) => c.id === caseId)).toBe(false);
+
+    // An admin can list all cases, unscoped, and filter by state.
+    const adminAllRes = await app.inject({ method: 'GET', url: '/api/admin/cases', headers: adminHeaders() });
+    expect(adminAllRes.statusCode).toBe(200);
+    const adminAllCases = JSON.parse(adminAllRes.body).cases;
+    expect(adminAllCases.some((c: { id: string }) => c.id === caseId)).toBe(true);
+    expect(adminAllCases.some((c: { id: string }) => c.id === caseId && c.customer_actor_id === customerActorId)).toBe(true);
+
+    const adminCompletedRes = await app.inject({ method: 'GET', url: '/api/admin/cases?state=completed', headers: adminHeaders() });
+    expect(adminCompletedRes.statusCode).toBe(200);
+    const adminCompletedCases = JSON.parse(adminCompletedRes.body).cases;
+    expect(adminCompletedCases.some((c: { id: string }) => c.id === caseId)).toBe(true);
+    expect(adminCompletedCases.every((c: { state: string }) => c.state === 'completed')).toBe(true);
+
+    const adminIntakeRes = await app.inject({ method: 'GET', url: '/api/admin/cases?state=intake', headers: adminHeaders() });
+    expect(JSON.parse(adminIntakeRes.body).cases.some((c: { id: string }) => c.id === caseId)).toBe(false);
+
+    const nonAdminRes = await app.inject({ method: 'GET', url: '/api/admin/cases', headers: actorHeaders('customer', customerActorId) });
+    expect(nonAdminRes.statusCode).toBe(403);
   });
 });
