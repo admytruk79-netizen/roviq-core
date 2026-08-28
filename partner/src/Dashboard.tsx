@@ -1,0 +1,226 @@
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { api } from './api';
+import { useAuth } from './auth';
+
+type Offer = {
+  id: string;
+  case_id?: string | null;
+  demand_id?: string | null;
+  demand_type?: string | null;
+  urgency?: string | null;
+  outcome?: string | null;
+  offered_at?: string | null;
+  responded_at?: string | null;
+  attributes?: Record<string, unknown> | null;
+};
+
+type Capacity = {
+  id: string;
+  capacity_type: string;
+  quantity: number | string;
+  start_at: string;
+  end_at: string;
+};
+
+type Controls = {
+  routing_enabled?: boolean;
+  service_radius_miles?: number | string | null;
+  max_active_jobs?: number | string | null;
+  accepts_overflow?: boolean;
+  loaner_participation?: boolean;
+  valet_participation?: boolean;
+  tow_participation?: boolean;
+};
+
+function fmtDate(value?: string | null) {
+  if (!value) return '—';
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(value));
+}
+
+function urgencyTone(value?: string | null) {
+  if (value === 'critical' || value === 'emergency') return 'text-red-300 border-red-400/20 bg-red-500/10';
+  if (value === 'high') return 'text-amber-300 border-amber-400/20 bg-amber-500/10';
+  return 'text-[var(--green)] border-[rgba(140,255,31,.2)] bg-[rgba(140,255,31,.07)]';
+}
+
+export function Dashboard() {
+  const { principal, logout } = useAuth();
+  const [offers, setOffers] = useState<Offer[]>([]);
+  const [capacity, setCapacity] = useState<Capacity[]>([]);
+  const [controls, setControls] = useState<Controls | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [capacityType, setCapacityType] = useState('service_bays');
+  const [quantity, setQuantity] = useState('1');
+  const [hours, setHours] = useState('8');
+
+  async function refresh() {
+    setLoading(true);
+    setMessage(null);
+    try {
+      const [offerRes, capacityRes, controlsRes] = await Promise.all([
+        api.get<{ offers: Offer[] }>('/api/partners/me/offers'),
+        api.get<{ capacity: Capacity[] }>('/api/partners/me/capacity'),
+        api.get<{ controls: Controls | null }>('/api/partners/me/controls')
+      ]);
+      setOffers(offerRes.offers);
+      setCapacity(capacityRes.capacity);
+      setControls(controlsRes.controls);
+    } catch (err) {
+      setMessage(`Could not load partner data: ${(err as Error).message}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { void refresh(); }, []);
+
+  const openOffers = useMemo(() => offers.filter((offer) => !offer.outcome || offer.outcome === 'offered'), [offers]);
+  const accepted = useMemo(() => offers.filter((offer) => offer.outcome === 'accepted'), [offers]);
+  const latestCapacity = capacity[0];
+
+  async function respond(id: string, outcome: 'accepted' | 'declined') {
+    setBusyId(id);
+    setMessage(null);
+    try {
+      await api.post(`/api/offers/${id}/respond`, { outcome });
+      setMessage(outcome === 'accepted' ? 'Work accepted. The case has been handed to your operation.' : 'Offer declined and returned to ROVIQ coordination.');
+      await refresh();
+    } catch (err) {
+      setMessage(`Could not update offer: ${(err as Error).message}`);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function declareCapacity(event: FormEvent) {
+    event.preventDefault();
+    const start = new Date();
+    const end = new Date(start.getTime() + Math.max(1, Number(hours)) * 60 * 60 * 1000);
+    setMessage(null);
+    try {
+      await api.patch('/api/partners/me/capacity', {
+        capacityType,
+        quantity: Math.max(0, Number(quantity)),
+        startAt: start.toISOString(),
+        endAt: end.toISOString(),
+        source: 'partner_portal'
+      });
+      setMessage('Capacity updated. ROVIQ routing can now use the new availability window.');
+      await refresh();
+    } catch (err) {
+      setMessage(`Could not update capacity: ${(err as Error).message}`);
+    }
+  }
+
+  async function toggleRouting() {
+    const nextEnabled = !(controls?.routing_enabled ?? true);
+    setMessage(null);
+    try {
+      await api.patch('/api/partners/me/controls', {
+        routingEnabled: nextEnabled,
+        acceptsOverflow: controls?.accepts_overflow ?? false,
+        releasesOverflow: false,
+        serviceRadiusMiles: controls?.service_radius_miles == null ? null : Number(controls.service_radius_miles),
+        operatingHours: {},
+        acceptedJobTypes: [],
+        excludedJobTypes: [],
+        oemWarrantyRules: {},
+        maxActiveJobs: controls?.max_active_jobs == null ? null : Number(controls.max_active_jobs),
+        earliestAvailableAt: null,
+        loanerParticipation: controls?.loaner_participation ?? false,
+        valetParticipation: controls?.valet_participation ?? false,
+        towParticipation: controls?.tow_participation ?? false
+      });
+      setMessage(nextEnabled ? 'ROVIQ routing enabled for your operation.' : 'ROVIQ routing paused. Existing accepted work is unchanged.');
+      await refresh();
+    } catch (err) {
+      setMessage(`Could not update routing controls: ${(err as Error).message}`);
+    }
+  }
+
+  return (
+    <div className="shell min-h-screen">
+      <header className="header">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6">
+          <div className="flex items-center gap-5">
+            <div className="brand"><span className="mark"><span>R</span></span><span className="hidden sm:inline">ROVIQ</span></div>
+            <div className="h-7 w-px bg-white/10" />
+            <div><p className="kicker">Partner Network</p><p className="text-sm font-semibold">Shop / Dealership</p></div>
+          </div>
+          <button onClick={logout} className="secondary text-sm">Sign out</button>
+        </div>
+      </header>
+
+      <main className="grid-glow mx-auto max-w-7xl px-4 py-8 sm:px-6">
+        <div className="flex flex-col justify-between gap-5 md:flex-row md:items-end">
+          <div>
+            <p className="kicker">Live operations</p>
+            <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">Your service queue</h1>
+            <p className="muted mt-2 max-w-2xl text-sm sm:text-base">Review incoming coordinated work, manage availability and control whether new work can be routed to your operation.</p>
+          </div>
+          <button onClick={() => void refresh()} className="secondary self-start" disabled={loading}>{loading ? 'Refreshing…' : 'Refresh'}</button>
+        </div>
+
+        {message && <div className="mt-6 rounded-xl border border-white/10 bg-white/[.035] px-4 py-3 text-sm text-white/85">{message}</div>}
+
+        <section className="mt-7 grid gap-3 sm:grid-cols-3">
+          <div className="stat"><p className="muted text-xs uppercase tracking-[.14em]">Open offers</p><p className="mt-2 text-3xl font-black text-[var(--green)]">{openOffers.length}</p></div>
+          <div className="stat"><p className="muted text-xs uppercase tracking-[.14em]">Accepted work</p><p className="mt-2 text-3xl font-black">{accepted.length}</p></div>
+          <div className="stat"><p className="muted text-xs uppercase tracking-[.14em]">Routing</p><div className="mt-2 flex items-center justify-between gap-3"><p className={`text-lg font-bold ${(controls?.routing_enabled ?? true) ? 'text-[var(--green)]' : 'text-amber-300'}`}>{(controls?.routing_enabled ?? true) ? 'Enabled' : 'Paused'}</p><button onClick={() => void toggleRouting()} className="secondary px-3 py-2 text-xs">{(controls?.routing_enabled ?? true) ? 'Pause' : 'Enable'}</button></div></div>
+        </section>
+
+        <div className="mt-7 grid gap-6 xl:grid-cols-[1.55fr_.75fr]">
+          <section>
+            <div className="mb-3 flex items-center justify-between"><div><p className="kicker">Incoming</p><h2 className="mt-1 text-xl font-bold">Service offers</h2></div><span className="muted text-xs">{openOffers.length} waiting</span></div>
+            <div className="space-y-3">
+              {!loading && openOffers.length === 0 && <div className="panel p-7 text-center"><p className="text-lg font-semibold">No offers waiting</p><p className="muted mt-2 text-sm">New eligible work will appear here when ROVIQ routes it to your operation.</p></div>}
+              {openOffers.map((offer) => (
+                <article key={offer.id} className="panel offer p-5">
+                  <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`rounded-full border px-2.5 py-1 text-[11px] font-bold uppercase tracking-[.12em] ${urgencyTone(offer.urgency)}`}>{offer.urgency ?? 'normal'}</span>
+                        <span className="muted text-xs">Offered {fmtDate(offer.offered_at)}</span>
+                      </div>
+                      <h3 className="mt-3 text-lg font-bold">{offer.demand_type?.replaceAll('_', ' ') ?? 'Vehicle service request'}</h3>
+                      <p className="muted mt-1 text-sm">Case {offer.case_id ? offer.case_id.slice(0, 8) : 'pending'} · Demand {offer.demand_id ? offer.demand_id.slice(0, 8) : '—'}</p>
+                    </div>
+                    <div className="flex shrink-0 gap-2">
+                      <button disabled={busyId === offer.id} onClick={() => void respond(offer.id, 'declined')} className="danger">Decline</button>
+                      <button disabled={busyId === offer.id} onClick={() => void respond(offer.id, 'accepted')} className="primary">{busyId === offer.id ? 'Updating…' : 'Accept work'}</button>
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <aside className="space-y-5">
+            <section className="panel p-5">
+              <p className="kicker">Capacity</p>
+              <h2 className="mt-1 text-xl font-bold">Declare availability</h2>
+              <p className="muted mt-2 text-sm">Tell Core how much work you can take in the next operating window.</p>
+              <form onSubmit={declareCapacity} className="mt-5 space-y-4">
+                <div><label className="mb-2 block text-xs font-semibold uppercase tracking-[.12em] text-white/65">Capacity type</label><select value={capacityType} onChange={(e) => setCapacityType(e.target.value)} className="input"><option value="service_bays">Service bays</option><option value="diagnostic_slots">Diagnostic slots</option><option value="technician_hours">Technician hours</option></select></div>
+                <div className="grid grid-cols-2 gap-3"><div><label className="mb-2 block text-xs font-semibold uppercase tracking-[.12em] text-white/65">Quantity</label><input type="number" min="0" value={quantity} onChange={(e) => setQuantity(e.target.value)} className="input" /></div><div><label className="mb-2 block text-xs font-semibold uppercase tracking-[.12em] text-white/65">Window hours</label><input type="number" min="1" value={hours} onChange={(e) => setHours(e.target.value)} className="input" /></div></div>
+                <button type="submit" className="primary w-full">Update capacity</button>
+              </form>
+            </section>
+
+            <section className="panel p-5">
+              <p className="kicker">Current signal</p>
+              <div className="mt-3 space-y-3 text-sm">
+                <div className="flex justify-between gap-4"><span className="muted">Type</span><span className="font-semibold">{latestCapacity?.capacity_type?.replaceAll('_', ' ') ?? 'Not declared'}</span></div>
+                <div className="flex justify-between gap-4"><span className="muted">Quantity</span><span className="font-semibold">{latestCapacity?.quantity ?? '—'}</span></div>
+                <div className="flex justify-between gap-4"><span className="muted">Until</span><span className="text-right font-semibold">{fmtDate(latestCapacity?.end_at)}</span></div>
+                <div className="flex justify-between gap-4"><span className="muted">Account</span><span className="max-w-[12rem] truncate font-semibold">{principal?.email ?? principal?.actorId ?? 'Partner'}</span></div>
+              </div>
+            </section>
+          </aside>
+        </div>
+      </main>
+    </div>
+  );
+}
