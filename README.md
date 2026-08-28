@@ -144,6 +144,19 @@ This needs an admin identity to exist and its credentials available as repositor
 1. In the Render dashboard, set `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD` (12+ characters) on the `roviq-core` service, then redeploy — `npm run db:migrate:prod` creates that admin identity on boot if no admin identity exists yet (see `src/db/migrate.ts`).
 2. Add the same two values as GitHub repository secrets `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` so the workflow can log in as that identity.
 
+## Customer web app
+
+`web/` is a React 19 + Vite + TypeScript + Tailwind v4 single-page app for customers: log in, view their cases (`GET /api/customers/me/cases`), report a new issue, and view a case's service plan, pending quote approvals, payments and activity timeline. It talks to Core directly (`VITE_API_PROXY_TARGET`, defaulting to `http://localhost:8080` in the Vite dev server proxy for `/api`).
+
+```
+cd web
+npm install
+npm run dev      # dev server on :5173, proxies /api to Core
+npm run build    # tsc -b && vite build, output in web/dist
+```
+
+It is not yet wired into any deployment workflow — running it today means `npm run dev` against a local or remote Core instance.
+
 ## Remaining work
 
 Tow/valet dispatch, loaner/fleet allocation, parts fulfilment, payments, notifications, AI triage and the integration gateway are all implemented (see routes above). What's left:
