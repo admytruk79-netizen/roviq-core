@@ -144,5 +144,13 @@ describe('maintenance case end-to-end lifecycle', () => {
     const strangerId = JSON.parse(stranger.body).actor.id;
     const forbiddenRes = await app.inject({ method: 'GET', url: `/api/maintenance/cases/${caseId}`, headers: actorHeaders('customer', strangerId) });
     expect(forbiddenRes.statusCode).toBe(403);
+
+    // A customer can list their own cases, scoped to only their own.
+    const myCasesRes = await app.inject({ method: 'GET', url: '/api/customers/me/cases', headers: actorHeaders('customer', customerActorId) });
+    expect(myCasesRes.statusCode).toBe(200);
+    const myCases = JSON.parse(myCasesRes.body).cases;
+    expect(myCases.some((c: { id: string }) => c.id === caseId)).toBe(true);
+    const strangerCasesRes = await app.inject({ method: 'GET', url: '/api/customers/me/cases', headers: actorHeaders('customer', strangerId) });
+    expect(JSON.parse(strangerCasesRes.body).cases.some((c: { id: string }) => c.id === caseId)).toBe(false);
   });
 });
