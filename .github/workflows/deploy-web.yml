@@ -44,6 +44,13 @@ jobs:
           test -n "$CLOUDFLARE_API_TOKEN" || (echo "CLOUDFLARE_API_TOKEN is missing" && exit 1)
           test -n "$CLOUDFLARE_ACCOUNT_ID" || (echo "CLOUDFLARE_ACCOUNT_ID is missing" && exit 1)
 
+      - name: Ensure Cloudflare Pages project exists
+        working-directory: web
+        shell: bash
+        run: |
+          npx wrangler pages project list | grep -qw roviq-web \
+            || npx wrangler pages project create roviq-web --production-branch=main
+
       - name: Deploy to Cloudflare Pages
         working-directory: web
         run: npx wrangler pages deploy dist --project-name=roviq-web --branch=main --commit-dirty=true
