@@ -3,20 +3,20 @@
 :root {
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: #f4f2ed;
-  background: #09131d;
+  background: #0b1624;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  --roviq-navy: #101d2c;
-  --roviq-navy-deep: #09131d;
+  --roviq-navy: #14253a;
+  --roviq-navy-deep: #0b1624;
   --roviq-copper: #e46f35;
   --roviq-copper-soft: #f0834b;
   --roviq-porcelain: #f4f2ed;
   --roviq-slate: #647386;
-  --roviq-bg: #09131d;
-  --roviq-panel: rgba(16, 29, 44, 0.72);
-  --roviq-panel-strong: #142536;
-  --roviq-line: rgba(244, 242, 237, 0.12);
-  --roviq-muted: #9aa7b5;
+  --roviq-bg: #0b1624;
+  --roviq-panel: rgba(20, 37, 58, 0.78);
+  --roviq-panel-strong: #1b3049;
+  --roviq-line: rgba(244, 242, 237, 0.14);
+  --roviq-muted: #a8b4c2;
   --roviq-danger: #ef5b5b;
   --roviq-success: #4fb477;
   --roviq-warning: #d99a3d;
@@ -34,9 +34,9 @@ a { color: inherit; }
   min-height: 100vh;
   color: var(--roviq-porcelain);
   background:
-    radial-gradient(circle at 78% 8%, rgba(228, 111, 53, 0.11), transparent 30rem),
-    radial-gradient(circle at 16% 100%, rgba(100, 115, 134, 0.12), transparent 38rem),
-    linear-gradient(180deg, #101d2c 0%, #09131d 100%);
+    radial-gradient(circle at 78% 8%, rgba(228, 111, 53, 0.13), transparent 30rem),
+    radial-gradient(circle at 16% 100%, rgba(80, 121, 171, 0.16), transparent 38rem),
+    linear-gradient(180deg, #14253a 0%, #0b1624 100%);
 }
 
 .roviq-header {
@@ -44,7 +44,7 @@ a { color: inherit; }
   top: 0;
   z-index: 30;
   border-bottom: 1px solid var(--roviq-line);
-  background: rgba(9, 19, 29, 0.78);
+  background: rgba(11, 22, 36, 0.84);
   backdrop-filter: blur(22px) saturate(130%);
   -webkit-backdrop-filter: blur(22px) saturate(130%);
 }
@@ -66,11 +66,11 @@ a { color: inherit; }
 
 .roviq-panel {
   border: 1px solid var(--roviq-line);
-  background: linear-gradient(180deg, rgba(25, 42, 59, 0.78), rgba(12, 25, 37, 0.7));
+  background: linear-gradient(180deg, rgba(28, 48, 72, 0.84), rgba(13, 27, 43, 0.78));
   backdrop-filter: blur(18px) saturate(125%);
   -webkit-backdrop-filter: blur(18px) saturate(125%);
   border-radius: 1.15rem;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.26), inset 0 1px 0 rgba(255,255,255,.035);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.26), inset 0 1px 0 rgba(255,255,255,.045);
 }
 
 .roviq-kicker { color: var(--roviq-copper); font-size: 0.75rem; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; }
@@ -93,7 +93,7 @@ a { color: inherit; }
 .roviq-btn-secondary {
   border: 1px solid var(--roviq-line);
   border-radius: 0.8rem;
-  background: rgba(244, 242, 237, 0.035);
+  background: rgba(244, 242, 237, 0.045);
   color: var(--roviq-porcelain);
   padding: 0.7rem 1rem;
   font-weight: 650;
@@ -104,13 +104,13 @@ a { color: inherit; }
   width: 100%;
   border: 1px solid var(--roviq-line);
   border-radius: 0.8rem;
-  background: rgba(5, 14, 22, 0.46);
+  background: rgba(7, 18, 31, 0.62);
   color: var(--roviq-porcelain);
   padding: 0.78rem 0.9rem;
   outline: none;
 }
 .roviq-input:focus { border-color: rgba(228, 111, 53, 0.74); box-shadow: 0 0 0 3px rgba(228, 111, 53, 0.11); }
-.roviq-input::placeholder { color: #748393; }
+.roviq-input::placeholder { color: #7f90a3; }
 
 .roviq-grid-glow {
   background-image:
@@ -120,7 +120,7 @@ a { color: inherit; }
 }
 
 .bg-slate-50 { background-color: transparent !important; }
-.bg-white { background-color: rgba(16, 29, 44, 0.76) !important; backdrop-filter: blur(16px); }
+.bg-white { background-color: rgba(20, 37, 58, 0.8) !important; backdrop-filter: blur(16px); }
 .bg-slate-900 { background-color: var(--roviq-copper) !important; color: #fffaf6 !important; }
 .border-slate-200, .border-slate-300 { border-color: var(--roviq-line) !important; }
 .text-slate-900, .text-slate-800, .text-slate-700 { color: var(--roviq-porcelain) !important; }
@@ -130,28 +130,28 @@ a { color: inherit; }
 
 @media (prefers-color-scheme: light) {
   :root {
-    color: #101d2c;
+    color: #14253a;
     background: #f4f2ed;
     --roviq-bg: #f4f2ed;
     --roviq-panel: rgba(255,255,255,.62);
     --roviq-panel-strong: #fbfaf7;
-    --roviq-line: rgba(16,29,44,.12);
+    --roviq-line: rgba(20,37,58,.12);
     --roviq-muted: #647386;
   }
   html { color-scheme: light; }
   .roviq-shell {
-    color: #101d2c;
+    color: #14253a;
     background:
       radial-gradient(circle at 80% 0%, rgba(228,111,53,.12), transparent 30rem),
       radial-gradient(circle at 10% 100%, rgba(100,115,134,.11), transparent 36rem),
       linear-gradient(180deg,#fbfaf7 0%,#f4f2ed 100%);
   }
   .roviq-header { background: rgba(244,242,237,.78); }
-  .roviq-panel { background: linear-gradient(180deg,rgba(255,255,255,.72),rgba(244,242,237,.58)); box-shadow:0 24px 70px rgba(16,29,44,.10), inset 0 1px 0 rgba(255,255,255,.8); }
-  .roviq-btn-secondary { background: rgba(255,255,255,.46); color:#101d2c; }
-  .roviq-input { background: rgba(255,255,255,.62); color:#101d2c; }
+  .roviq-panel { background: linear-gradient(180deg,rgba(255,255,255,.72),rgba(244,242,237,.58)); box-shadow:0 24px 70px rgba(20,37,58,.10), inset 0 1px 0 rgba(255,255,255,.8); }
+  .roviq-btn-secondary { background: rgba(255,255,255,.46); color:#14253a; }
+  .roviq-input { background: rgba(255,255,255,.62); color:#14253a; }
   .bg-white { background-color: rgba(255,255,255,.7) !important; }
-  .text-slate-900, .text-slate-800, .text-slate-700 { color:#101d2c !important; }
+  .text-slate-900, .text-slate-800, .text-slate-700 { color:#14253a !important; }
 }
 
 @media (max-width: 640px) {
