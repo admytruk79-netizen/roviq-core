@@ -25,6 +25,21 @@ export async function transportRoutes(app: FastifyInstance) {
   app.get('/api/transport/:id', async (req, reply) => {
     const { id } = req.params as { id:string }; const d = await getTransportDispatch(id); if (!d) return reply.code(404).send({ error:'dispatch_not_found' }); if (req.principal.role !== 'admin' && d.provider_actor_id && d.provider_actor_id !== req.principal.actorId) return reply.code(403).send({ error:'forbidden' }); return { dispatch:d };
   });
+  app.post('/api/transport/:id/location', { preHandler: requireRole('tow','partner','admin') }, async (req, reply) => {
+    const { id } = req.params as { id:string };
+    const body = z.object({ lat:z.number().min(-90).max(90), lng:z.number().min(-180).max(180), accuracy:z.number().nonnegative().optional(), heading:z.number().min(0).max(360).nullable().optional(), speed:z.number().nonnegative().nullable().optional(), capturedAt:z.string().datetime().optional() }).parse(req.body);
+    const d = await getTransportDispatch(id);
+    if (!d) return reply.code(404).send({ error:'dispatch_not_found' });
+    if (req.principal.role !== 'admin' && d.provider_actor_id !== req.principal.actorId) return reply.code(403).send({ error:'dispatch_forbidden' });
+    const point = { lat:body.lat,lng:body.lng,accuracy:body.accuracy ?? null,heading:body.heading ?? null,speed:body.speed ?? null,capturedAt:body.capturedAt ?? new Date().toISOString(),dispatchId:id };
+    await pool.query(
+      `insert into case_spatial_context(case_id,transport_location,source,updated_at)
+       values($1,$2::jsonb,'tow_live_gps',now())
+       on conflict(case_id) do update set transport_location=excluded.transport_location,source='tow_live_gps',updated_at=now()`,
+      [d.case_id,JSON.stringify(point)]
+    );
+    return { ok:true, transportLocation:point };
+  });
   app.post('/api/transport/:id/status', { preHandler: requireRole('tow','partner','admin') }, async (req, reply) => {
     const { id } = req.params as { id:string }; const body = z.object({ status, metadata:z.record(z.unknown()).optional() }).parse(req.body);
     try { return { dispatch:await updateTransportStatus(req.principal,id,body.status,body.metadata ?? {}) }; }
