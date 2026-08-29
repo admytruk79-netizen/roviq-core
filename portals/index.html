@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ROVIQ Portals</title>
+  <meta name="description" content="ROVIQ portal launcher for Customer, Diagnostic, Partner, Parts, Tow / Valet, and Operations." />
+  <style>
+    :root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#f4f2ed;background:#0b1624;--navy:#14253a;--deep:#0b1624;--copper:#e46f35;--copper-soft:#f0834b;--muted:#a8b4c2;--line:rgba(244,242,237,.14)}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 82% 3%,rgba(228,111,53,.16),transparent 30rem),linear-gradient(180deg,var(--navy),var(--deep))}
+    a{color:inherit;text-decoration:none}.shell{max-width:1180px;margin:auto;padding:42px 22px 34px}.brand{display:flex;align-items:center;gap:12px;font-weight:900;letter-spacing:.19em}.mark{display:grid;place-items:center;width:40px;height:40px;border:2px solid var(--copper);border-radius:11px;color:var(--copper);letter-spacing:0}.kicker{margin:34px 0 0;color:var(--copper-soft);font-size:12px;font-weight:900;text-transform:uppercase;letter-spacing:.16em}.hero{display:flex;justify-content:space-between;align-items:end;gap:26px;margin-bottom:30px}.hero h1{margin:7px 0 0;font-size:clamp(38px,6vw,64px);line-height:.98;letter-spacing:-.045em}.hero p{max-width:650px;margin:14px 0 0;color:var(--muted);font-size:16px;line-height:1.65}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.card{min-height:222px;padding:23px;display:flex;flex-direction:column;justify-content:space-between;border:1px solid var(--line);border-radius:20px;background:rgba(20,37,58,.77);box-shadow:0 24px 70px rgba(0,0,0,.20);transition:.18s ease}.card:hover{transform:translateY(-3px);border-color:rgba(240,131,75,.55);background:rgba(24,43,65,.9)}.role{color:var(--copper-soft);font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.15em}.card h2{margin:10px 0 0;font-size:25px;letter-spacing:-.02em}.card p{margin:11px 0 0;color:var(--muted);font-size:14px;line-height:1.55}.open{display:flex;justify-content:space-between;align-items:center;margin-top:22px;color:var(--copper-soft);font-size:14px;font-weight:850}.footer{margin:30px 0 0;text-align:center;color:var(--muted);font-size:12px}.staff{border-color:rgba(228,111,53,.34)}
+    @media(max-width:850px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.hero{display:block}}
+    @media(max-width:560px){.shell{padding:28px 16px}.grid{grid-template-columns:1fr}.card{min-height:190px}}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <div class="brand"><span class="mark">R</span><span>ROVIQ</span></div>
+    <section class="hero">
+      <div><div class="kicker">ROVIQ Network</div><h1>All portals.<br>One Core.</h1><p>Choose the operating surface you need. Every portal connects into the same ROVIQ case lifecycle and coordinated backend.</p></div>
+    </section>
+    <section class="grid" aria-label="ROVIQ portals">
+      <a class="card" href="https://roviq-web-dxv.pages.dev"><div><div class="role">Driver / Vehicle owner</div><h2>Customer</h2><p>Create and follow service cases, approvals, handoffs and status.</p></div><div class="open"><span>Open portal</span><span>→</span></div></a>
+      <a class="card" href="https://roviq-diagnostic-net.pages.dev"><div><div class="role">Diagnostic network</div><h2>Diagnostic</h2><p>Review diagnostic work, findings and case-level diagnostic activity.</p></div><div class="open"><span>Open portal</span><span>→</span></div></a>
+      <a class="card" href="https://roviq-partner.pages.dev"><div><div class="role">Shop / Dealership</div><h2>Partner</h2><p>Receive coordinated work, manage capacity and accept routed cases.</p></div><div class="open"><span>Open portal</span><span>→</span></div></a>
+      <a class="card" href="https://roviq-parts-net.pages.dev"><div><div class="role">Parts vendor</div><h2>Parts</h2><p>Handle parts demand, availability and fulfillment linked to cases.</p></div><div class="open"><span>Open portal</span><span>→</span></div></a>
+      <a class="card" href="https://roviq-tow-net.pages.dev"><div><div class="role">Vehicle movement</div><h2>Tow / Valet</h2><p>Receive dispatches and update pickup, transit, arrival and delivery.</p></div><div class="open"><span>Open portal</span><span>→</span></div></a>
+      <a class="card staff" href="https://roviq-ops.pages.dev"><div><div class="role">ROVIQ operations</div><h2>Ops / Oversight</h2><p>Cross-network oversight for cases, exceptions, assignments and the live map.</p></div><div class="open"><span>Open oversight</span><span>→</span></div></a>
+    </section>
+    <div class="footer">Multiple front ends. One coordinated backend. One ROVIQ engine.</div>
+  </main>
+</body>
+</html>
