@@ -1,30 +1,24 @@
-const LOCAL_URL = 'https://roviq-local2.admytruk79.workers.dev';
+import { useEffect, useMemo, useState } from 'react';
+import { api } from '../lib/api';
+
+type NetworkCase={case_id:string;state:string;priority:string;drivability:string;origin?:unknown;current_vehicle?:unknown;destination?:unknown;provider_location?:unknown;transport_location?:unknown;parts_origin?:unknown;route_context?:Record<string,unknown>;spatial_updated_at?:string};
+
+function loc(v:unknown){if(!v)return'Not available';if(typeof v==='string')return v;if(typeof v==='object'){const o=v as Record<string,unknown>;const text=[o.name,o.label,o.address,o.formatted_address,o.description].find(x=>typeof x==='string');if(typeof text==='string')return text;const lat=o.lat??o.latitude,lng=o.lng??o.lon??o.longitude;if(typeof lat==='number'&&typeof lng==='number')return`${lat.toFixed(4)}, ${lng.toFixed(4)}`}return'Case location'}
 
 export function NetworkMap() {
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
-        <div>
-          <p className="roviq-kicker">Network oversight</p>
-          <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">ROVIQ Local operations map</h1>
-          <p className="roviq-muted mt-2 max-w-3xl text-sm sm:text-base">Cross-network spatial oversight for active service activity, transport movement and service locations. ROVIQ Core remains authoritative for case state, assignments, exceptions and permissions.</p>
-        </div>
-        <a href={LOCAL_URL} target="_blank" rel="noreferrer" className="roviq-btn-secondary self-start text-sm">Open full map</a>
-      </div>
-
-      <section className="overflow-hidden rounded-2xl border border-white/10 bg-white/[.035] shadow-2xl">
-        <div className="grid gap-3 border-b border-white/10 p-4 sm:grid-cols-3 sm:p-5">
-          <div><p className="roviq-muted text-xs uppercase tracking-[.14em]">View</p><p className="mt-1 font-semibold">Network-wide</p></div>
-          <div><p className="roviq-muted text-xs uppercase tracking-[.14em]">Operational source</p><p className="mt-1 font-semibold">ROVIQ Core</p></div>
-          <div><p className="roviq-muted text-xs uppercase tracking-[.14em]">Spatial source</p><p className="mt-1 font-semibold">ROVIQ Local</p></div>
-        </div>
-        <iframe
-          title="ROVIQ Local operations oversight map"
-          src={LOCAL_URL}
-          allow="geolocation"
-          className="block h-[560px] w-full border-0 lg:h-[660px]"
-        />
-      </section>
-    </div>
-  );
+  const[cases,setCases]=useState<NetworkCase[]>([]),[selected,setSelected]=useState<string|null>(null),[error,setError]=useState('');
+  async function load(){try{setError('');const r=await api.get<{cases:NetworkCase[]}>('/api/admin/spatial/network');setCases(r.cases);if(!selected&&r.cases[0])setSelected(r.cases[0].case_id)}catch(e){setError(e instanceof Error?e.message:'Unable to load operational spatial data')}}
+  useEffect(()=>{void load()},[]);
+  const active=useMemo(()=>cases.find(c=>c.case_id===selected)??cases[0]??null,[cases,selected]);
+  const withMovement=cases.filter(c=>c.transport_location||c.current_vehicle).length;
+  const exceptions=cases.filter(c=>c.priority==='urgent'||c.priority==='high').length;
+  const route=active?.route_context??{};
+  return <div className="space-y-6">
+    <div className="flex flex-col justify-between gap-4 md:flex-row md:items-end"><div><p className="roviq-kicker">Network oversight</p><h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">Operational spatial view</h1><p className="roviq-muted mt-2 max-w-3xl text-sm sm:text-base">Core-owned geography for active cases, vehicle movement and service destinations. Public ROVIQ Local browsing is intentionally separated from operational case data.</p></div><button onClick={()=>void load()} className="roviq-btn-secondary self-start text-sm">Refresh</button></div>
+    {error&&<div className="rounded-xl border border-red-400/20 bg-red-500/10 p-4 text-sm text-red-200">{error}</div>}
+    <section className="grid gap-3 sm:grid-cols-3"><div className="rounded-2xl border border-white/10 bg-white/[.035] p-4"><p className="roviq-muted text-xs uppercase tracking-[.14em]">Active cases</p><p className="mt-2 text-3xl font-bold">{cases.length}</p></div><div className="rounded-2xl border border-white/10 bg-white/[.035] p-4"><p className="roviq-muted text-xs uppercase tracking-[.14em]">Movement visible</p><p className="mt-2 text-3xl font-bold">{withMovement}</p></div><div className="rounded-2xl border border-white/10 bg-white/[.035] p-4"><p className="roviq-muted text-xs uppercase tracking-[.14em]">High priority</p><p className="mt-2 text-3xl font-bold">{exceptions}</p></div></section>
+    <div className="grid gap-5 xl:grid-cols-[.85fr_1.4fr]"><section className="space-y-2">{cases.length===0&&!error&&<div className="rounded-2xl border border-white/10 bg-white/[.035] p-6 text-sm roviq-muted">No active spatial cases.</div>}{cases.map(c=><button key={c.case_id} onClick={()=>setSelected(c.case_id)} className={`w-full rounded-xl border p-4 text-left ${active?.case_id===c.case_id?'border-orange-400/50 bg-orange-400/10':'border-white/10 bg-white/[.035]'}`}><div className="flex items-center justify-between gap-3"><span className="font-semibold">Case {c.case_id.slice(0,8)}</span><span className="text-xs uppercase roviq-muted">{c.priority}</span></div><p className="mt-1 text-sm roviq-muted">{c.state.replaceAll('_',' ')} · {loc(c.current_vehicle??c.origin)}</p></button>)}</section>
+    <section className="overflow-hidden rounded-2xl border border-white/10 bg-white/[.035]"><div className="border-b border-white/10 p-5"><p className="roviq-kicker">Selected case</p><h2 className="mt-1 text-xl font-bold">Spatial coordination context</h2><p className="roviq-muted mt-2 text-sm">Operational facts only. Core remains authoritative for assignment, state and permissions.</p></div>{active?<div className="grid gap-px bg-white/10 sm:grid-cols-2"><Fact title="Vehicle / origin" value={loc(active.current_vehicle??active.origin)}/><Fact title="Destination" value={loc(active.destination??active.provider_location)}/><Fact title="Transport" value={loc(active.transport_location)}/><Fact title="Parts origin" value={loc(active.parts_origin)}/><Fact title="Distance" value={`${String(route.distanceMiles??'—')} mi`}/><Fact title="ETA" value={`${String(route.etaMinutes??'—')} min`}/></div>:<div className="p-6 text-sm roviq-muted">Select an active case to inspect its spatial context.</div>}</section></div>
+  </div>;
 }
+function Fact({title,value}:{title:string;value:string}){return <div className="bg-[#101a28] p-5"><p className="roviq-muted text-xs uppercase tracking-[.14em]">{title}</p><p className="mt-2 text-sm font-semibold">{value}</p></div>}
