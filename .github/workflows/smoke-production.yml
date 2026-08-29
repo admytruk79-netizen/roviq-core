@@ -50,23 +50,35 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --silent --show-error --location \
-            --retry 6 --retry-delay 5 --retry-all-errors \
-            "$CORE_URL/api/local" \
-            | tee /tmp/local-capabilities.json
-          grep -Fq 'roviq-local' /tmp/local-capabilities.json
 
-          curl --fail --silent --show-error --location \
-            --retry 6 --retry-delay 5 --retry-all-errors \
-            "$CORE_URL/api/local/health" \
-            | tee /tmp/local-health.json
-          grep -Eqi '"(ok|success|status|service)"' /tmp/local-health.json
+          wait_for_json() {
+            local url="$1"
+            local output="$2"
+            local pattern="$3"
+            local status=""
 
-          curl --fail --silent --show-error --location \
-            --retry 6 --retry-delay 5 --retry-all-errors \
-            "$CORE_URL/api/local/places" \
-            | tee /tmp/local-places.json
-          grep -Eqi '"(places|success|data)"' /tmp/local-places.json
+            for attempt in $(seq 1 24); do
+              status="$(curl --silent --show-error --location \
+                --max-time 20 --output "$output" --write-out '%{http_code}' \
+                "$url" || true)"
+
+              if [[ "$status" == "200" ]] && grep -Eqi "$pattern" "$output"; then
+                cat "$output"
+                return 0
+              fi
+
+              echo "Waiting for Cloudflare propagation: $url returned $status (attempt $attempt/24)"
+              sleep 5
+            done
+
+            echo "ROVIQ Local endpoint did not become ready: $url"
+            cat "$output" || true
+            return 1
+          }
+
+          wait_for_json "$CORE_URL/api/local" /tmp/local-capabilities.json 'roviq-local'
+          wait_for_json "$CORE_URL/api/local/health" /tmp/local-health.json '"(ok|success|status|service)"'
+          wait_for_json "$CORE_URL/api/local/places" /tmp/local-places.json '"(places|success|data)"'
 
       - name: Verify authentication fails closed
         shell: bash
