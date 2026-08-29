@@ -11,8 +11,35 @@ declare global { interface Window { maplibregl?: any } }
 
 const BASE=(import.meta.env.VITE_API_BASE_URL??'').replace(/\/$/,'');
 const TOKEN='roviq_tow_token';
-const ROVIQ_LOCAL_STYLE={day:'https://tiles.stadiamaps.com/styles/alidade_smooth.json',night:'https://tiles.stadiamaps.com/styles/alidade_smooth_dark.json'};
 const PICKUP_STATES=new Set(['assigned','accepted','en_route','arrived']);
+
+function roviqLocalStyle(mode:'day'|'night'){
+  return {
+    version:8,
+    sources:{
+      osm:{
+        type:'raster',
+        tiles:['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+        tileSize:256,
+        attribution:'© OpenStreetMap contributors'
+      }
+    },
+    layers:[
+      {id:'rq-bg',type:'background',paint:{'background-color':mode==='day'?'#e9e7df':'#071117'}},
+      {id:'rq-osm',type:'raster',source:'osm',paint:mode==='day'?{
+        'raster-brightness-min':0.08,
+        'raster-brightness-max':1,
+        'raster-contrast':0.04,
+        'raster-saturation':-0.08
+      }:{
+        'raster-brightness-min':0.03,
+        'raster-brightness-max':0.58,
+        'raster-contrast':0.22,
+        'raster-saturation':-0.35
+      }}
+    ]
+  } as any;
+}
 
 function point(value:unknown):Point|null{if(!value||typeof value!=='object')return null;const v=value as Record<string,unknown>;const lat=Number(v.lat??v.latitude),lng=Number(v.lng??v.lon??v.longitude);return Number.isFinite(lat)&&Number.isFinite(lng)&&Math.abs(lat)<=90&&Math.abs(lng)<=180?{lat,lng}:null}
 function label(value:unknown){if(!value)return'Not available yet';if(typeof value==='string')return value;if(typeof value==='object'){const v=value as Record<string,unknown>;const text=[v.name,v.label,v.address,v.formatted_address,v.description].find(x=>typeof x==='string');if(typeof text==='string')return text;const p=point(v);if(p)return`${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}`}return'Location available in case data'}
@@ -35,7 +62,7 @@ export function LocalMap({caseId,dispatchId,dispatchStatus}:{caseId?:string;disp
 
   useEffect(()=>{if(!navigator.geolocation){setTracking('limited');return}const id=navigator.geolocation.watchPosition(pos=>{const p:LivePoint={lat:pos.coords.latitude,lng:pos.coords.longitude,heading:Number.isFinite(pos.coords.heading)?pos.coords.heading:null,accuracy:Number.isFinite(pos.coords.accuracy)?pos.coords.accuracy:null,speed:Number.isFinite(pos.coords.speed)?pos.coords.speed:null};setLive(p);setTracking('live');const now=Date.now();if(dispatchId&&now-lastPush.current>8000){lastPush.current=now;void fetch(`${BASE}/api/transport/${dispatchId}/location`,{method:'POST',headers:{'content-type':'application/json',...auth()},body:JSON.stringify({lat:p.lat,lng:p.lng,accuracy:p.accuracy,heading:p.heading,speed:p.speed,capturedAt:new Date(pos.timestamp).toISOString()})}).catch(()=>{})}},()=>setTracking('limited'),{enableHighAccuracy:true,maximumAge:1500,timeout:12000});return()=>navigator.geolocation.clearWatch(id)},[dispatchId]);
 
-  useEffect(()=>{let alive=true;void ensureMapLibre().then(()=>{if(!alive||!mapNode.current||mapRef.current)return;const center=live??point(spatial?.transport_location)??point(spatial?.origin)??point(spatial?.destination)??{lat:45.5231,lng:-122.6765};const map=new window.maplibregl.Map({container:mapNode.current,style:ROVIQ_LOCAL_STYLE[mode],center:[center.lng,center.lat],zoom:13,pitch:assigned?46:20,bearing:0,attributionControl:true,minZoom:3,maxZoom:18});mapRef.current=map;map.on('dragstart',()=>setFollowing(false));map.on('load',()=>void render(true));map.on('styledata',()=>drawRoute(route));map.on('error',(e:any)=>{const m=String(e?.error?.message??'');if(m.includes('style')||m.includes('source')||m.includes('tile'))setError('ROVIQ Local basemap is temporarily unavailable.')})}).catch(()=>setError('ROVIQ Local map failed to load.'));return()=>{alive=false;markers.current.forEach(m=>m.remove?.());markers.current=[];mapRef.current?.remove?.();mapRef.current=null}},[]);
+  useEffect(()=>{let alive=true;void ensureMapLibre().then(()=>{if(!alive||!mapNode.current||mapRef.current)return;const center=live??point(spatial?.transport_location)??point(spatial?.origin)??point(spatial?.destination)??{lat:45.5231,lng:-122.6765};const map=new window.maplibregl.Map({container:mapNode.current,style:roviqLocalStyle(mode),center:[center.lng,center.lat],zoom:13,pitch:assigned?46:20,bearing:0,attributionControl:true,minZoom:3,maxZoom:18});mapRef.current=map;map.on('dragstart',()=>setFollowing(false));map.on('load',()=>{setError('');map.resize();void render(true)});map.on('styledata',()=>drawRoute(route));map.on('error',(e:any)=>{const m=String(e?.error?.message??'');if(m.includes('source')||m.includes('tile')||m.includes('network'))setError('Map tiles are temporarily unavailable.')});setTimeout(()=>map.resize(),250)}).catch(()=>setError('ROVIQ Local map failed to load.'));return()=>{alive=false;markers.current.forEach(m=>m.remove?.());markers.current=[];mapRef.current?.remove?.();mapRef.current=null}},[]);
 
   useEffect(()=>{void render(false)},[spatial,live,dispatchStatus]);
   useEffect(()=>{drawRoute(route)},[route]);
