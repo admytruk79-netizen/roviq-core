@@ -28,6 +28,11 @@ export async function routeMaintenanceDemand(demandId: string) {
   const aiCapability = capabilityFromCaseIntelligence(intelligence);
   const requestedCapability = demand.attributes?.requiredCapability ?? aiCapability ?? capabilityForDemand(demand.demand_type,demand.attributes);
 
+  const spatial = demand.case_id
+    ? await pool.query('select route_context from case_spatial_context where case_id=$1',[demand.case_id])
+    : {rows:[] as any[]};
+  const routeCandidates = spatial.rows[0]?.route_context?.candidates ?? {};
+
   const candidates = await pool.query<Candidate>(
     `select a.id as actor_id,a.actor_type,coalesce(pc.routing_enabled,true) as routing_enabled,
             pc.service_radius_miles,coalesce(pc.accepted_job_types_json,'[]'::jsonb) as accepted_job_types_json,
@@ -49,13 +54,17 @@ export async function routeMaintenanceDemand(demandId: string) {
     if(accepted.length&&!accepted.includes(demand.demand_type)){rejected.push({actorId:c.actor_id,reason:'job_type_not_accepted'});continue;}
     if(c.active_capacity<=0&&c.earliest_available_at&&new Date(c.earliest_available_at)>new Date()){rejected.push({actorId:c.actor_id,reason:'no_current_capacity'});continue;}
     const continuity = [demand.originating_actor_id,demand.relationship_owner_actor_id].filter(Boolean).includes(c.actor_id) ? 1 : 0;
-    eligible.push({actorId:c.actor_id,signals:{capacity:c.active_capacity,rating:c.avg_rating,onTime:c.on_time_rate,distanceMiles:null,etaMinutes:null,continuity}});
+    const route = routeCandidates?.[c.actor_id] ?? {};
+    eligible.push({actorId:c.actor_id,signals:{
+      capacity:c.active_capacity,rating:c.avg_rating,onTime:c.on_time_rate,
+      distanceMiles:finiteOrNull(route.distanceMiles),etaMinutes:finiteOrNull(route.etaMinutes),continuity
+    }});
   }
 
   const policy=await getActivePolicy(demand.domain_id,'maintenance_default');
   if(!policy){
     const decision=await pool.query(`insert into routing_decisions(demand_id,eligible_actor_ids,rejected_candidates,ranking_trace,selected_actor_id,recommended_actor_id,selection_mode,decision_basis) values($1,$2,$3,$4,null,null,$5,$6) returning *`,[demandId,JSON.stringify(eligible.map(x=>x.actorId)),JSON.stringify(rejected),JSON.stringify([]),demand.selection_mode??'customer_choice',`eligible_unranked:${requestedCapability}:policy_missing`]);
-    return {decision:decision.rows[0],ranked:[],eligible,rejected,policyRequired:true,engineVersion:COORDINATION_ENGINE_VERSION,intelligence};
+    return {decision:decision.rows[0],ranked:[],eligible,rejected,policyRequired:true,engineVersion:COORDINATION_ENGINE_VERSION,intelligence,selectionMode:demand.selection_mode??'customer_choice'};
   }
 
   const ranked=rankCoordinationCandidates(eligible,policy.configuration,demandId);
@@ -75,3 +84,4 @@ export async function routeMaintenanceDemand(demandId: string) {
 async function getActivePolicy(domainId:string,policyKey:string):Promise<RoutingPolicy|null>{const r=await pool.query<RoutingPolicy>(`select id,version,configuration from routing_policies where domain_id=$1 and policy_key=$2 and active=true order by version desc limit 1`,[domainId,policyKey]);return r.rows[0]??null;}
 function capabilityForDemand(demandType:string,attributes:any):string{if(attributes?.drivability==='non_drivable')return'tow';if(demandType.includes('diagnostic')||attributes?.requiresDiagnostic===true)return'diagnostics';if(demandType.includes('tow'))return'tow';if(demandType.includes('part'))return'parts_supply';return'repair';}
 function positiveInteger(value:unknown){return typeof value==='number'&&Number.isInteger(value)&&value>0?value:null;}
+function finiteOrNull(value:unknown){return typeof value==='number'&&Number.isFinite(value)?value:null;}
