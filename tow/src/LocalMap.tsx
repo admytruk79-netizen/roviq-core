@@ -1,39 +1,57 @@
-import {useMemo} from 'react';
+import {useEffect,useMemo,useRef,useState} from 'react';
+import maplibregl from 'maplibre-gl';
 
+type Point={lat:number;lng:number};
+type LivePoint=Point&{heading:number|null;accuracy:number|null;speed:number|null};
+type Spatial={origin?:unknown;current_vehicle?:unknown;destination?:unknown;transport_location?:unknown;route_context?:Record<string,unknown>};
+type RouteStep={instruction?:string;type?:string;modifier?:string;name?:string;location?:number[]};
+type Route={geometry?:{coordinates?:number[][]};distance?:number;duration?:number;steps?:RouteStep[]};
 type Props={caseId?:string;dispatchId?:string;dispatchStatus?:string};
 
-const LOCAL='https://roviq-local2.admytruk79.workers.dev/';
+const BASE=(import.meta.env.VITE_API_BASE_URL??'').replace(/\/$/,'');
+const TOKEN='roviq_tow_token';
+const PICKUP_STATES=new Set(['assigned','accepted','en_route','arrived']);
+
+function auth():Record<string,string>{const t=localStorage.getItem(TOKEN);return t?{authorization:`Bearer ${t}`}:{}}
+function point(value:unknown):Point|null{if(!value||typeof value!=='object')return null;const v=value as Record<string,unknown>;const lat=Number(v.lat??v.latitude),lng=Number(v.lng??v.lon??v.longitude);return Number.isFinite(lat)&&Number.isFinite(lng)&&Math.abs(lat)<=90&&Math.abs(lng)<=180?{lat,lng}:null}
+function label(value:unknown){if(!value)return'Not available yet';if(typeof value==='string')return value;if(typeof value==='object'){const v=value as Record<string,unknown>;const s=[v.name,v.label,v.address,v.formatted_address,v.description].find(x=>typeof x==='string');if(typeof s==='string')return s;const p=point(v);if(p)return`${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}`}return'Location available'}
+function rad(n:number){return n*Math.PI/180}
+function distanceM(a:Point,b:Point){const R=6371000,dLat=rad(b.lat-a.lat),dLng=rad(b.lng-a.lng),q=Math.sin(dLat/2)**2+Math.cos(rad(a.lat))*Math.cos(rad(b.lat))*Math.sin(dLng/2)**2;return 2*R*Math.asin(Math.min(1,Math.sqrt(q)))}
+function projectAhead(p:Point,heading:number|null,meters:number):Point{if(!Number.isFinite(heading)||meters<=0)return p;const R=6378137,r=Math.PI/180,lat=p.lat*r,lng=p.lng*r,b=(heading as number)*r,d=meters/R,lat2=Math.asin(Math.sin(lat)*Math.cos(d)+Math.cos(lat)*Math.sin(d)*Math.cos(b)),lng2=lng+Math.atan2(Math.sin(b)*Math.sin(d)*Math.cos(lat),Math.cos(d)-Math.sin(lat)*Math.sin(lat2));return{lat:lat2/r,lng:lng2/r}}
+function marker(kind:'pickup'|'destination'){const el=document.createElement('div');el.className=`rq-marker rq-dispatch-marker ${kind}`;el.innerHTML=`<span>${kind==='pickup'?'P':'D'}</span>`;return el}
+function puck(heading:number|null){const el=document.createElement('div');el.className='rq-nav-puck';el.style.setProperty('--rq-heading',`${Number.isFinite(heading)?heading:0}deg`);el.innerHTML='<span></span>';return el}
+function modeNow():'day'|'night'{const explicit=document.documentElement.dataset.roviqMode;if(explicit==='day'||explicit==='night')return explicit;const h=new Date().getHours();return h>=7&&h<19?'day':'night'}
+function mapStyle(mode:'day'|'night'):maplibregl.StyleSpecification{const tile=mode==='day'?'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png':'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png';return{version:8,sources:{base:{type:'raster',tiles:[tile],tileSize:256,attribution:'© OpenStreetMap © CARTO'}},layers:[{id:'background',type:'background',paint:{'background-color':mode==='day'?'#e9e5dc':'#071019'}},{id:'base',type:'raster',source:'base',minzoom:0,maxzoom:20,paint:{'raster-opacity':1}}]}}
+function statusText(status?:string){return String(status||'standby').replaceAll('_',' ').toUpperCase()}
+function stepText(route:Route|null){const step=route?.steps?.find(s=>s.instruction)||route?.steps?.[0];if(!step)return'';if(step.instruction)return step.instruction;const modifier=step.modifier?` ${step.modifier}`:'';if(step.type==='turn')return`Turn${modifier}${step.name?` onto ${step.name}`:''}`;if(step.type==='arrive')return'Arrive at destination';return step.name?`Continue on ${step.name}`:'Continue on route'}
 
 export function LocalMap({caseId,dispatchId,dispatchStatus}:Props){
-  const src=useMemo(()=>{
-    const q=new URLSearchParams();
-    q.set('embed','1');
-    q.set('mode','tow');
-    if(caseId)q.set('caseId',caseId);
-    if(dispatchId)q.set('dispatchId',dispatchId);
-    if(dispatchStatus)q.set('dispatchStatus',dispatchStatus);
-    return `${LOCAL}?${q.toString()}`;
-  },[caseId,dispatchId,dispatchStatus]);
+ const mode=useMemo(modeNow,[]),assigned=Boolean(caseId&&dispatchId);
+ const[spatial,setSpatial]=useState<Spatial|null>(null),[live,setLive]=useState<LivePoint|null>(null),[route,setRoute]=useState<Route|null>(null),[tracking,setTracking]=useState<'starting'|'live'|'limited'>('starting'),[error,setError]=useState(''),[following,setFollowing]=useState(true);
+ const mapNode=useRef<HTMLDivElement|null>(null),mapRef=useRef<maplibregl.Map|null>(null),markers=useRef<maplibregl.Marker[]>([]),lastPush=useRef(0),lastRouteAt=useRef(0),lastRouted=useRef<Point|null>(null),lastTarget=useRef('');
 
-  return (
-    <section className="map-panel dispatch-context live-local-map">
-      <div className="map-head">
-        <div>
-          <span className="eyebrow map-eyebrow">ROVIQ Local · Tow</span>
-          <h2>{dispatchId?'Live dispatch map':'Tow live map'}</h2>
-          <p>{dispatchId?'Live ROVIQ Local navigation for the active dispatch.':'The live ROVIQ Local map stays available before a dispatch is assigned.'}</p>
-        </div>
-      </div>
-      <div className="live-map-wrap live-map-embedded">
-        <iframe
-          key={src}
-          className="live-map-frame"
-          src={src}
-          title="ROVIQ Local live tow map"
-          allow="geolocation"
-          referrerPolicy="strict-origin-when-cross-origin"
-        />
-      </div>
-    </section>
-  );
+ useEffect(()=>{if(!caseId){setSpatial(null);return}let dead=false;const load=async()=>{try{const r=await fetch(`${BASE}/api/maintenance/cases/${caseId}/spatial`,{headers:auth(),cache:'no-store'});if(!r.ok)throw new Error();const d=await r.json() as {spatial:Spatial};if(!dead){setSpatial(d.spatial);setError('')}}catch{if(!dead)setError('Case route context unavailable.')}};void load();const id=setInterval(()=>void load(),10000);return()=>{dead=true;clearInterval(id)}},[caseId]);
+
+ useEffect(()=>{if(!navigator.geolocation){setTracking('limited');return}const id=navigator.geolocation.watchPosition(pos=>{const p:LivePoint={lat:pos.coords.latitude,lng:pos.coords.longitude,heading:Number.isFinite(pos.coords.heading)?pos.coords.heading:null,accuracy:Number.isFinite(pos.coords.accuracy)?pos.coords.accuracy:null,speed:Number.isFinite(pos.coords.speed)?pos.coords.speed:null};setLive(p);setTracking('live');const now=Date.now();if(dispatchId&&now-lastPush.current>8000){lastPush.current=now;void fetch(`${BASE}/api/transport/${dispatchId}/location`,{method:'POST',headers:{'content-type':'application/json',...auth()},body:JSON.stringify({lat:p.lat,lng:p.lng,accuracy:p.accuracy,heading:p.heading,speed:p.speed,capturedAt:new Date(pos.timestamp).toISOString()})}).catch(()=>{})}},()=>setTracking('limited'),{enableHighAccuracy:true,maximumAge:1000,timeout:12000});return()=>navigator.geolocation.clearWatch(id)},[dispatchId]);
+
+ useEffect(()=>{if(!mapNode.current||mapRef.current)return;const center=live??point(spatial?.transport_location)??point(spatial?.origin)??point(spatial?.destination)??{lat:45.5231,lng:-122.6765};const map=new maplibregl.Map({container:mapNode.current,style:mapStyle(mode),center:[center.lng,center.lat],zoom:12.8,pitch:assigned?48:18,bearing:0,attributionControl:{compact:true},minZoom:3,maxZoom:20});map.addControl(new maplibregl.NavigationControl({showCompass:false}),'top-right');mapRef.current=map;map.on('dragstart',()=>setFollowing(false));map.on('load',()=>{setError('');map.resize();void renderMap(true)});map.on('styledata',()=>drawRoute(route));map.on('error',e=>{const m=String((e as any)?.error?.message??'');if(m.includes('tile')||m.includes('base'))setError('Road map is reconnecting…')});const resize=setTimeout(()=>map.resize(),250);return()=>{clearTimeout(resize);markers.current.forEach(m=>m.remove());markers.current=[];map.remove();mapRef.current=null}},[]);
+
+ useEffect(()=>{void renderMap(false)},[spatial,live,dispatchStatus]);
+ useEffect(()=>{drawRoute(route)},[route]);
+
+ function pickup(){return point(spatial?.origin)??point(spatial?.current_vehicle)}
+ function destination(){return point(spatial?.destination)}
+ function target(){const p=pickup(),d=destination();return dispatchStatus&&PICKUP_STATES.has(dispatchStatus)?p:(d??p)}
+
+ async function requestRoute(from:Point,to:Point,force:boolean){const key=`${to.lng.toFixed(5)},${to.lat.toFixed(5)}`,moved=lastRouted.current?distanceM(from,lastRouted.current):Infinity;if(!force&&key===lastTarget.current&&Date.now()-lastRouteAt.current<10000&&moved<45)return;lastTarget.current=key;lastRouteAt.current=Date.now();lastRouted.current={...from};try{let d:any=null;try{const r=await fetch(`${BASE}/api/local/route?from=${encodeURIComponent(`${from.lng},${from.lat}`)}&to=${encodeURIComponent(`${to.lng},${to.lat}`)}`,{cache:'no-store'});if(r.ok)d=await r.json()}catch{}if(!d?.route?.geometry?.coordinates?.length){const fallback=`https://router.project-osrm.org/route/v1/driving/${from.lng},${from.lat};${to.lng},${to.lat}?overview=full&geometries=geojson&steps=true`;const r=await fetch(fallback,{cache:'no-store'});const raw=await r.json();const rr=raw?.routes?.[0];if(rr?.geometry?.coordinates?.length)d={route:{geometry:rr.geometry,distance:rr.distance,duration:rr.duration,steps:(rr.legs||[]).flatMap((leg:any)=>leg.steps||[]).map((s:any)=>({instruction:s.maneuver?.instruction||'',type:s.maneuver?.type||'',modifier:s.maneuver?.modifier||'',name:s.name||'',location:s.maneuver?.location||null}))}}}if(!d?.route?.geometry?.coordinates?.length)throw new Error();setRoute(d.route);setError('')}catch{setError('Road route temporarily unavailable.')}}
+
+ function drawRoute(r:Route|null){const map=mapRef.current;if(!map||!map.loaded())return;const coords=r?.geometry?.coordinates??[];try{const data:any={type:'Feature',properties:{},geometry:{type:'LineString',coordinates:coords}};const src=map.getSource('rq-nav-route') as maplibregl.GeoJSONSource|undefined;if(src)src.setData(data);else if(coords.length)map.addSource('rq-nav-route',{type:'geojson',data});if(coords.length&&!map.getLayer('rq-nav-route-casing'))map.addLayer({id:'rq-nav-route-casing',type:'line',source:'rq-nav-route',layout:{'line-join':'round','line-cap':'round'},paint:{'line-color':'#03161d','line-width':14,'line-opacity':.82}});if(coords.length&&!map.getLayer('rq-nav-route-glow'))map.addLayer({id:'rq-nav-route-glow',type:'line',source:'rq-nav-route',layout:{'line-join':'round','line-cap':'round'},paint:{'line-color':'#39d9c8','line-width':9,'line-opacity':.24,'line-blur':5}});if(coords.length&&!map.getLayer('rq-nav-route'))map.addLayer({id:'rq-nav-route',type:'line',source:'rq-nav-route',layout:{'line-join':'round','line-cap':'round'},paint:{'line-color':'#7ff6e7','line-width':4.5,'line-opacity':.98}})}catch{}}
+
+ async function renderMap(force:boolean){const map=mapRef.current;if(!map||!map.loaded())return;const tow=live??point(spatial?.transport_location),p=pickup(),d=destination(),t=target();markers.current.forEach(m=>m.remove());markers.current=[];if(p)markers.current.push(new maplibregl.Marker({element:marker('pickup'),anchor:'center'}).setLngLat([p.lng,p.lat]).addTo(map));if(d)markers.current.push(new maplibregl.Marker({element:marker('destination'),anchor:'center'}).setLngLat([d.lng,d.lat]).addTo(map));if(tow)markers.current.push(new maplibregl.Marker({element:puck(live?.heading??null),anchor:'center',rotationAlignment:'map'}).setLngLat([tow.lng,tow.lat]).addTo(map));if(tow&&t)await requestRoute(tow,t,force);if(tow&&following){const speed=live?.speed??0,look=projectAhead(tow,live?.heading??null,Math.min(115,28+speed*3.6)),zoom=Math.max(14.35,Math.min(16.35,16.15-speed*.035)),pitch=assigned?Math.max(48,Math.min(63,51+speed*.45)):28;map.easeTo({center:[look.lng,look.lat],zoom,pitch,bearing:live?.heading??map.getBearing(),duration:720,easing:x=>1-Math.pow(1-x,3),essential:true})}else if(force){const pts=[p,d,tow].filter(Boolean) as Point[];if(pts.length>1){const b=new maplibregl.LngLatBounds();pts.forEach(x=>b.extend([x.lng,x.lat]));map.fitBounds(b,{padding:{top:170,bottom:230,left:38,right:38},maxZoom:15.2,duration:900,essential:true})}else if(pts[0])map.easeTo({center:[pts[0].lng,pts[0].lat],zoom:14,duration:500,essential:true})}}
+
+ function recenter(){setFollowing(true);if(mapRef.current&&live){const speed=live.speed??0,look=projectAhead(live,live.heading,Math.min(115,28+speed*3.6));mapRef.current.easeTo({center:[look.lng,look.lat],zoom:assigned?15.6:14.7,pitch:assigned?56:28,bearing:live.heading??mapRef.current.getBearing(),duration:720,easing:x=>1-Math.pow(1-x,3),essential:true})}}
+
+ const distanceMiles=typeof route?.distance==='number'?route.distance/1609.344:Number(spatial?.route_context?.distanceMiles),etaMinutes=typeof route?.duration==='number'?route.duration/60:Number(spatial?.route_context?.etaMinutes),goingToPickup=Boolean(dispatchStatus&&PICKUP_STATES.has(dispatchStatus)),instruction=stepText(route)||(goingToPickup?'Proceed to pickup':'Proceed to destination');
+
+ return <section className="map-panel dispatch-context"><div className="map-head"><div><span className="eyebrow map-eyebrow">ROVIQ Local · Tow</span><h2>{assigned?(goingToPickup?'Tow → pickup':'Vehicle → destination'):'Tow live map'}</h2><p>{assigned?'Operational dispatch map: route, live tow position, pickup and destination.':'Tow standby map. GPS remains available while waiting for a dispatch.'}</p></div><span className={`live-badge ${tracking}`}>{tracking==='live'?'● GPS LIVE':tracking==='starting'?'LOCATING…':'GPS LIMITED'}</span></div><div className={`live-map-wrap rq-local-${mode}`}><div ref={mapNode} className="live-map"/><div className="rq-brand rq-tow-brand"><strong>ROVIQ</strong><span>LOCAL · TOW</span></div><div className="rq-weather rq-tow-mode" aria-hidden="true"><span>{mode==='day'?'☀':'☾'}</span><span>{mode.toUpperCase()}</span></div>{assigned?<section className="rq-nav-hud rq-tow-hud"><div className="rq-nav-kicker">ROVIQ DRIVE · {statusText(dispatchStatus)}</div><div className="rq-nav-next">{instruction}</div><div className="rq-nav-meta"><strong>{Number.isFinite(etaMinutes)?`${Math.max(1,Math.round(etaMinutes))} min`:'—'}</strong><span>{Number.isFinite(distanceMiles)?`${distanceMiles.toFixed(1)} mi`:'—'}</span><span>{live?.speed!=null?`${Math.max(0,Math.round(live.speed*2.23694))} mph`:'0 mph'}</span></div><button type="button" className="rq-nav-follow" onClick={recenter} aria-label="Follow live tow location">◎</button></section>:<section className="rq-tow-standby"><span>TOW STANDBY</span><strong>{tracking==='live'?'Location locked · ready for dispatch':tracking==='starting'?'Acquiring tow location…':'Location limited · tap locate'}</strong></section>}<button type="button" className="rq-locate rq-map-locate" onClick={recenter} aria-label="Center on live tow location">◎</button>{error&&<div className="map-warning">{error}</div>}</div>{assigned&&<div className="spatial-grid"><div><span>Pickup</span><strong>{label(spatial?.origin??spatial?.current_vehicle)}</strong></div><div><span>Destination</span><strong>{label(spatial?.destination)}</strong></div><div><span>Tow position</span><strong>{label(live??spatial?.transport_location)}</strong></div><div><span>Dispatch status</span><strong>{statusText(dispatchStatus)}</strong></div></div>}</section>;
 }
