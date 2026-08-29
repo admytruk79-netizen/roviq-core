@@ -1,0 +1,23 @@
+name: Deploy ROVIQ Portals Launcher
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['portals/**','.github/workflows/deploy-portals.yml']
+permissions: { contents: read }
+concurrency: { group: roviq-portals-production, cancel-in-progress: true }
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - working-directory: portals
+        run: npx wrangler pages project list | grep -qw roviq-portals || npx wrangler pages project create roviq-portals --production-branch=main
+      - working-directory: portals
+        run: npx wrangler pages deploy . --project-name=roviq-portals --branch=main --commit-dirty=true
