@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateAssessmentAuthority } from '../src/services/case-intelligence.js';
+import { evaluateAssessmentAuthority } from '../src/services/ai-authority.js';
 
 describe('AI assessment authority boundary', () => {
   it('never automates in shadow mode', () => {
