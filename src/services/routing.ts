@@ -1,5 +1,6 @@
 import { pool } from '../db/pool.js';
 import { COORDINATION_ENGINE_VERSION, rankCoordinationCandidates } from './coordination-engine.js';
+import { capabilityFromCaseIntelligence, loadCaseIntelligenceForDemand } from './case-intelligence.js';
 
 type Candidate = {
   actor_id: string;
@@ -41,7 +42,16 @@ export async function routeMaintenanceDemand(demandId: string) {
   const demand = demandResult.rows[0];
   if (demand.domain_code !== 'maintenance') throw new Error('unsupported_domain');
 
-  const requestedCapability = demand.attributes?.requiredCapability ?? capabilityForDemand(demand.demand_type, demand.attributes);
+  // Cloudflare Workers AI is part of the case intelligence path, but remains
+  // advisory. Only an accepted/reviewed assessment, or a proposed assessment
+  // that explicitly passed the human-review gate, may influence capability
+  // selection. Explicit deterministic demand attributes still win.
+  const intelligence = await loadCaseIntelligenceForDemand(demandId);
+  const aiCapability = capabilityFromCaseIntelligence(intelligence);
+  const requestedCapability = demand.attributes?.requiredCapability
+    ?? aiCapability
+    ?? capabilityForDemand(demand.demand_type, demand.attributes);
+
   const candidates = await pool.query<Candidate>(
     `select a.id as actor_id, a.actor_type,
             coalesce(pc.routing_enabled,true) as routing_enabled,
@@ -91,21 +101,30 @@ export async function routeMaintenanceDemand(demandId: string) {
       [demandId, JSON.stringify(eligible.map(x=>x.actorId)), JSON.stringify(rejected), JSON.stringify([]),
        `eligible_unranked:${requestedCapability}:policy_missing`]
     );
-    return { decision:decision.rows[0], ranked:[], eligible, rejected, policyRequired:true, engineVersion:COORDINATION_ENGINE_VERSION };
+    return {
+      decision:decision.rows[0], ranked:[], eligible, rejected, policyRequired:true,
+      engineVersion:COORDINATION_ENGINE_VERSION, intelligence
+    };
   }
 
   const ranked = rankCoordinationCandidates(eligible, policy.configuration, demandId);
   const maxCandidates = positiveInteger(policy.configuration?.limits?.maxCandidates);
   const rankedForDecision = maxCandidates ? ranked.slice(0,maxCandidates) : ranked;
   const selected = rankedForDecision[0]?.actorId ?? null;
+  const intelligenceBasis = intelligence.effectiveForAutomation
+    ? `:ai:${intelligence.assessmentId}`
+    : ':ai:advisory';
   const decision = await pool.query(
     `insert into routing_decisions(demand_id,eligible_actor_ids,rejected_candidates,ranking_trace,selected_actor_id,decision_basis,policy_id,policy_version,rule_version)
      values($1,$2,$3,$4,$5,$6,$7,$8,$8) returning *`,
     [demandId, JSON.stringify(eligible.map(x=>x.actorId)), JSON.stringify(rejected), JSON.stringify(rankedForDecision), selected,
-      selected ? `coordination_engine:${COORDINATION_ENGINE_VERSION}:${requestedCapability}` : `no_eligible_actor:${requestedCapability}`,
+      selected ? `coordination_engine:${COORDINATION_ENGINE_VERSION}:${requestedCapability}${intelligenceBasis}` : `no_eligible_actor:${requestedCapability}${intelligenceBasis}`,
       policy.id, policy.version]
   );
-  return { decision:decision.rows[0], ranked:rankedForDecision, rejected, policyRequired:false, engineVersion:COORDINATION_ENGINE_VERSION };
+  return {
+    decision:decision.rows[0], ranked:rankedForDecision, rejected, policyRequired:false,
+    engineVersion:COORDINATION_ENGINE_VERSION, intelligence
+  };
 }
 
 async function getActivePolicy(domainId: string, policyKey: string): Promise<RoutingPolicy | null> {
