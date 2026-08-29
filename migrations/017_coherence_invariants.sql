@@ -4,7 +4,9 @@ alter table service_cases
   add column if not exists originating_actor_id uuid references actors(id),
   add column if not exists relationship_owner_actor_id uuid references actors(id),
   add column if not exists selection_mode text not null default 'customer_choice',
+  add column if not exists recommended_actor_id uuid references actors(id),
   add column if not exists selected_actor_id uuid references actors(id),
+  add column if not exists selection_source text,
   add column if not exists selected_by_role text,
   add column if not exists selected_at timestamptz,
   add column if not exists coordination_completed_at timestamptz,
@@ -16,6 +18,7 @@ alter table service_cases add constraint service_cases_selection_mode_check
 
 create index if not exists service_cases_origin_idx on service_cases(originating_actor_id,created_at desc);
 create index if not exists service_cases_relationship_owner_idx on service_cases(relationship_owner_actor_id,state);
+create index if not exists service_cases_selected_actor_idx on service_cases(selected_actor_id,state);
 
 alter table actors add column if not exists partner_subtype text;
 alter table actors drop constraint if exists actors_partner_subtype_check;
@@ -31,6 +34,21 @@ alter table routing_decisions drop constraint if exists routing_decisions_select
 alter table routing_decisions add constraint routing_decisions_selection_mode_check check (
   selection_mode is null or selection_mode in ('customer_choice','dealer_controlled','auto_dispatch','ops_override')
 );
+
+create table if not exists case_selections (
+  id uuid primary key default gen_random_uuid(),
+  case_id uuid not null references service_cases(id) on delete cascade,
+  recommended_actor_id uuid references actors(id),
+  selected_actor_id uuid not null references actors(id),
+  selection_mode text not null,
+  authority_role text not null,
+  authority_actor_id uuid references actors(id),
+  routing_decision_id uuid references routing_decisions(id),
+  rationale jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  check (selection_mode in ('customer_choice','dealer_controlled','auto_dispatch','ops_override'))
+);
+create index if not exists case_selections_case_idx on case_selections(case_id,created_at desc);
 
 create table if not exists case_spatial_context (
   case_id uuid primary key references service_cases(id) on delete cascade,
