@@ -22,6 +22,20 @@ export async function coherenceRoutes(app: FastifyInstance) {
     }
   });
 
+  app.get('/api/admin/spatial/network', { preHandler: requireRole('admin') }, async () => {
+    const r = await pool.query(`
+      select c.id as case_id,c.state,c.priority,c.drivability,c.updated_at,
+             s.origin,s.current_vehicle,s.destination,s.diagnostic_location,s.provider_location,
+             s.transport_location,s.parts_origin,s.route_context,s.source,s.updated_at as spatial_updated_at
+      from service_cases c
+      left join case_spatial_context s on s.case_id=c.id
+      where c.state not in ('completed','cancelled')
+      order by case when c.priority='urgent' then 0 when c.priority='high' then 1 else 2 end,c.updated_at desc
+      limit 250
+    `);
+    return { cases:r.rows };
+  });
+
   app.put('/api/admin/cases/:id/spatial', { preHandler: requireRole('admin') }, async (req) => {
     const { id } = req.params as { id:string };
     const body = z.object({
