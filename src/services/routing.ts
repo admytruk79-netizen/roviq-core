@@ -1,4 +1,5 @@
 import { pool } from '../db/pool.js';
+import { COORDINATION_ENGINE_VERSION, rankCoordinationCandidates } from './coordination-engine.js';
 
 type Candidate = {
   actor_id: string;
@@ -20,6 +21,14 @@ type RoutingPolicy = {
     weights?: Record<string, number>;
     defaults?: Record<string, number>;
     limits?: Record<string, number>;
+    coordination?: {
+      enabled?: boolean;
+      maxAdjustment?: number;
+      continuityBoost?: number;
+      balanceBoost?: number;
+      spatialBoost?: number;
+      reliabilityBoost?: number;
+    };
   };
 };
 
@@ -63,7 +72,14 @@ export async function routeMaintenanceDemand(demandId: string) {
     }
     eligible.push({
       actorId:c.actor_id,
-      signals:{ capacity:c.active_capacity, rating:c.avg_rating, onTime:c.on_time_rate }
+      signals:{
+        capacity:c.active_capacity,
+        rating:c.avg_rating,
+        onTime:c.on_time_rate,
+        distanceMiles:null,
+        etaMinutes:null,
+        continuity:0
+      }
     });
   }
 
@@ -75,14 +91,10 @@ export async function routeMaintenanceDemand(demandId: string) {
       [demandId, JSON.stringify(eligible.map(x=>x.actorId)), JSON.stringify(rejected), JSON.stringify([]),
        `eligible_unranked:${requestedCapability}:policy_missing`]
     );
-    return { decision:decision.rows[0], ranked:[], eligible, rejected, policyRequired:true };
+    return { decision:decision.rows[0], ranked:[], eligible, rejected, policyRequired:true, engineVersion:COORDINATION_ENGINE_VERSION };
   }
 
-  const ranked = eligible
-    .map((c) => ({ ...c, score:scoreWithPolicy(c.signals, policy.configuration) }))
-    .sort((a,b) => b.score-a.score)
-    .map((x,i) => ({ ...x, rank:i+1 }));
-
+  const ranked = rankCoordinationCandidates(eligible, policy.configuration, demandId);
   const maxCandidates = positiveInteger(policy.configuration?.limits?.maxCandidates);
   const rankedForDecision = maxCandidates ? ranked.slice(0,maxCandidates) : ranked;
   const selected = rankedForDecision[0]?.actorId ?? null;
@@ -90,10 +102,10 @@ export async function routeMaintenanceDemand(demandId: string) {
     `insert into routing_decisions(demand_id,eligible_actor_ids,rejected_candidates,ranking_trace,selected_actor_id,decision_basis,policy_id,policy_version,rule_version)
      values($1,$2,$3,$4,$5,$6,$7,$8,$8) returning *`,
     [demandId, JSON.stringify(eligible.map(x=>x.actorId)), JSON.stringify(rejected), JSON.stringify(rankedForDecision), selected,
-      selected ? `policy_ranked:${requestedCapability}` : `no_eligible_actor:${requestedCapability}`,
+      selected ? `coordination_engine:${COORDINATION_ENGINE_VERSION}:${requestedCapability}` : `no_eligible_actor:${requestedCapability}`,
       policy.id, policy.version]
   );
-  return { decision:decision.rows[0], ranked:rankedForDecision, rejected, policyRequired:false };
+  return { decision:decision.rows[0], ranked:rankedForDecision, rejected, policyRequired:false, engineVersion:COORDINATION_ENGINE_VERSION };
 }
 
 async function getActivePolicy(domainId: string, policyKey: string): Promise<RoutingPolicy | null> {
@@ -111,20 +123,6 @@ function capabilityForDemand(demandType: string, attributes: any): string {
   if (demandType.includes('tow')) return 'tow';
   if (demandType.includes('part')) return 'parts_supply';
   return 'repair';
-}
-
-function scoreWithPolicy(signals: Record<string, number | null>, configuration: RoutingPolicy['configuration']) {
-  const weights = configuration?.weights ?? {};
-  const defaults = configuration?.defaults ?? {};
-  let score = 0;
-  for (const [signal, weight] of Object.entries(weights)) {
-    if (!Number.isFinite(weight)) continue;
-    const raw = signals[signal];
-    const fallback = defaults[signal] ?? 0;
-    const value = typeof raw === 'number' && Number.isFinite(raw) ? raw : fallback;
-    score += value * weight;
-  }
-  return Math.round(score * 10000) / 10000;
 }
 
 function positiveInteger(value: unknown) {
