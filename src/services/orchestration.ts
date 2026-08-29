@@ -10,9 +10,12 @@ export type CaseState =
   | 'tow_pending' | 'tow_in_progress' | 'provider_selection' | 'provider_pending'
   | 'repair_in_progress' | 'parts_pending' | 'payment_pending' | 'completed' | 'cancelled';
 
+export type SelectionMode = 'customer_choice' | 'dealer_controlled' | 'auto_dispatch' | 'ops_override';
+
 export async function createServiceCase(principal: Principal, input: {
   demandId?: string; marketId?: string; locationId?: string; priority?: string;
   drivability?: string; attributes?: Record<string, unknown>;
+  originatingActorId?: string; relationshipOwnerActorId?: string; selectionMode?: SelectionMode;
 }, transactionClient?:PoolClient) {
   const client = transactionClient ?? await pool.connect();
   const ownsTransaction = !transactionClient;
@@ -22,9 +25,12 @@ export async function createServiceCase(principal: Principal, input: {
     if (!domain.rowCount) throw new Error('maintenance_domain_missing');
     const customerActorId = principal.role === 'customer' ? principal.actorId ?? null : null;
     const r = await client.query(
-      `insert into service_cases(domain_id,demand_id,customer_actor_id,market_id,location_id,priority,drivability,attributes)
-       values($1,$2,$3,$4,$5,$6,$7,$8) returning *`,
-      [domain.rows[0].id,input.demandId ?? null,customerActorId,input.marketId ?? null,input.locationId ?? null,input.priority ?? 'normal',input.drivability ?? 'unknown',JSON.stringify(input.attributes ?? {})]
+      `insert into service_cases(domain_id,demand_id,customer_actor_id,market_id,location_id,priority,drivability,attributes,
+        originating_actor_id,relationship_owner_actor_id,selection_mode)
+       values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning *`,
+      [domain.rows[0].id,input.demandId ?? null,customerActorId,input.marketId ?? null,input.locationId ?? null,
+       input.priority ?? 'normal',input.drivability ?? 'unknown',JSON.stringify(input.attributes ?? {}),
+       input.originatingActorId ?? null,input.relationshipOwnerActorId ?? input.originatingActorId ?? null,input.selectionMode ?? 'customer_choice']
     );
     const c = r.rows[0];
     const plan = await client.query(
@@ -41,12 +47,14 @@ export async function createServiceCase(principal: Principal, input: {
       `insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload)
        values('service_case',$1,'CASE_CREATED',$2,$3),
              ('service_case',$1,'SERVICE_PLAN_CREATED',$2,$4)`,
-      [c.id,principal.actorId ?? null,JSON.stringify({state:c.state,priority:c.priority}),JSON.stringify({servicePlanId:plan.rows[0].id,revision:1})]
+      [c.id,principal.actorId ?? null,
+       JSON.stringify({state:c.state,priority:c.priority,originatingActorId:c.originating_actor_id,relationshipOwnerActorId:c.relationship_owner_actor_id,selectionMode:c.selection_mode}),
+       JSON.stringify({servicePlanId:plan.rows[0].id,revision:1})]
     );
     await client.query(
       `insert into audit_log(principal_role,principal_actor_id,action,object_type,object_id,rule_basis,metadata)
        values($1,$2,'create_case','service_case',$3,'maintenance_case_created',$4)`,
-      [principal.role,principal.actorId ?? null,c.id,JSON.stringify({servicePlanId:plan.rows[0].id})]
+      [principal.role,principal.actorId ?? null,c.id,JSON.stringify({servicePlanId:plan.rows[0].id,selectionMode:c.selection_mode})]
     );
     if (ownsTransaction) await client.query('commit');
     return c;
@@ -86,6 +94,13 @@ export async function transitionCase(principal: Principal, caseId: string, toSta
        values('service_case',$1,$2,$3,$4)`,
       [caseId,`CASE_${toState.toUpperCase()}`,principal.actorId ?? null,JSON.stringify({ from:c.state,to:toState,...metadata })]
     );
+    if (toState === 'completed') {
+      await client.query(
+        `insert into coordination_milestones(case_id,milestone_code,billable,metadata)
+         values($1,'CASE_COMPLETED',false,$2) on conflict(case_id,milestone_code) do nothing`,
+        [caseId,JSON.stringify({source:'case_transition',from:c.state})]
+      );
+    }
     await client.query('commit');
     await audit(principal,'transition_case','service_case',caseId,`${c.state}->${toState}`,metadata);
     return updated.rows[0];
