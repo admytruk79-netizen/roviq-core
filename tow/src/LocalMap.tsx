@@ -1,11 +1,22 @@
-type Props={caseId?:string;dispatchId?:string;dispatchStatus?:string};
-const LOCAL_MAP_URL=(import.meta.env.VITE_LOCAL_MAP_URL??'https://roviq-local2.admytruk79.workers.dev').replace(/\/$/,'');
+import {useEffect,useRef,useState} from 'react';
+import maplibregl from 'maplibre-gl';
 
-export function LocalMap({dispatchId,dispatchStatus}:Props){
-  return <section className="map-panel dispatch-context">
-    <div className="map-head"><div><span className="eyebrow map-eyebrow">ROVIQ Local</span><h2>Live local map</h2><p>{dispatchId?`Dispatch ${dispatchId.slice(0,8)}`:'Active dispatch'}{dispatchStatus?` · ${dispatchStatus.replaceAll('_',' ')}`:''}</p></div></div>
-    <div className="live-map-wrap">
-      <iframe className="live-map-frame" src={LOCAL_MAP_URL} title="ROVIQ Local map" allow="geolocation" referrerPolicy="strict-origin-when-cross-origin" />
-    </div>
-  </section>
+type Point={lat:number;lng:number};
+type Spatial={origin?:unknown;current_vehicle?:unknown;destination?:unknown;transport_location?:unknown;route?:unknown;route_geometry?:unknown;eta_minutes?:unknown;distance_miles?:unknown};
+type Props={caseId?:string;dispatchId?:string;dispatchStatus?:string};
+const BASE=(import.meta.env.VITE_API_BASE_URL??'').replace(/\/$/,'');
+const TOKEN='roviq_tow_token';
+const DAY='https://tiles.stadiamaps.com/styles/alidade_smooth.json';
+const NIGHT='https://tiles.stadiamaps.com/styles/alidade_smooth_dark.json';
+function auth():Record<string,string>{const t=localStorage.getItem(TOKEN);return t?{authorization:`Bearer ${t}`}:{}}
+function point(value:unknown):Point|null{if(!value||typeof value!=='object')return null;const v=value as Record<string,unknown>;const lat=Number(v.lat??v.latitude),lng=Number(v.lng??v.lon??v.longitude);return Number.isFinite(lat)&&Number.isFinite(lng)&&Math.abs(lat)<=90&&Math.abs(lng)<=180?{lat,lng}:null}
+function marker(label:string,kind:string){const el=document.createElement('button');el.type='button';el.className=`rq-marker rq-dispatch-marker ${kind}`;el.setAttribute('aria-label',label);el.innerHTML=`<span>${label.slice(0,1)}</span>`;return el}
+function routeCoords(value:unknown):[number,number][]{if(!value)return[];let raw:unknown=value;if(typeof value==='object'&&value){const v=value as Record<string,unknown>;raw=v.coordinates??(v.geometry&&typeof v.geometry==='object'?(v.geometry as Record<string,unknown>).coordinates:undefined)}if(!Array.isArray(raw))return[];return raw.filter((x):x is [number,number]=>Array.isArray(x)&&x.length>=2&&Number.isFinite(Number(x[0]))&&Number.isFinite(Number(x[1]))).map(x=>[Number(x[0]),Number(x[1])])}
+export function LocalMap({caseId,dispatchId,dispatchStatus}:Props){
+ const host=useRef<HTMLDivElement|null>(null),mapRef=useRef<maplibregl.Map|null>(null);const[spatial,setSpatial]=useState<Spatial|null>(null),[error,setError]=useState(''),[night,setNight]=useState(false);
+ useEffect(()=>{if(!caseId){setSpatial(null);return}let dead=false;const load=async()=>{try{const r=await fetch(`${BASE}/api/maintenance/cases/${caseId}/spatial`,{headers:auth(),cache:'no-store'});if(!r.ok)throw new Error();const d=await r.json() as {spatial:Spatial};if(!dead){setSpatial(d.spatial);setError('')}}catch{if(!dead)setError('Case route context is not available yet.')}};void load();const id=setInterval(()=>void load(),10000);return()=>{dead=true;clearInterval(id)}},[caseId]);
+ useEffect(()=>{if(!host.current||mapRef.current)return;const map=new maplibregl.Map({container:host.current,style:night?NIGHT:DAY,center:[0,20],zoom:2.4,pitch:0,bearing:0,attributionControl:true,minZoom:3,maxZoom:18});mapRef.current=map;return()=>{map.remove();mapRef.current=null}},[]);
+ useEffect(()=>{const map=mapRef.current;if(map&&map.isStyleLoaded())map.setStyle(night?NIGHT:DAY)},[night]);
+ useEffect(()=>{const map=mapRef.current;if(!map||!spatial)return;const pickup=point(spatial.origin)??point(spatial.current_vehicle),destination=point(spatial.destination),vehicle=point(spatial.transport_location),markers:maplibregl.Marker[]=[];if(pickup)markers.push(new maplibregl.Marker({element:marker('Pickup','pickup')}).setLngLat([pickup.lng,pickup.lat]).addTo(map));if(destination)markers.push(new maplibregl.Marker({element:marker('Destination','destination')}).setLngLat([destination.lng,destination.lat]).addTo(map));if(vehicle)markers.push(new maplibregl.Marker({element:marker('Tow vehicle','vehicle')}).setLngLat([vehicle.lng,vehicle.lat]).addTo(map));const pts=[pickup,destination,vehicle].filter(Boolean) as Point[],coords=routeCoords(spatial.route_geometry??spatial.route);const draw=()=>{if(coords.length>1&&!map.getSource('rq-tow-route')){map.addSource('rq-tow-route',{type:'geojson',data:{type:'Feature',properties:{},geometry:{type:'LineString',coordinates:coords}}});map.addLayer({id:'rq-tow-route',type:'line',source:'rq-tow-route',paint:{'line-color':'#55ddca','line-width':4,'line-opacity':.9}})}};map.loaded()?draw():map.once('load',draw);if(pts.length){const b=new maplibregl.LngLatBounds();pts.forEach(p=>b.extend([p.lng,p.lat]));map.fitBounds(b,{padding:64,maxZoom:15,duration:650,pitch:18})}return()=>{markers.forEach(m=>m.remove());if(map.getLayer('rq-tow-route'))map.removeLayer('rq-tow-route');if(map.getSource('rq-tow-route'))map.removeSource('rq-tow-route')}},[spatial]);
+ return <section className={`map-panel dispatch-context ${night?'rq-local-night':'rq-local-day'}`}><div className="map-head"><div><span className="eyebrow map-eyebrow">Tow / Valet</span><h2>Pickup · route · destination</h2><p>{dispatchId?`Dispatch ${dispatchId.slice(0,8)}`:'Active dispatch'}{dispatchStatus?` · ${dispatchStatus.replaceAll('_',' ')}`:''}</p></div><button className="secondary" type="button" onClick={()=>setNight(v=>!v)}>{night?'DAY':'NIGHT'}</button></div><div className="live-map-wrap"><div ref={host} className="live-map"/><div className="rq-brand"><strong>ROVIQ</strong><span>TOW / VALET</span></div>{spatial&&<div className="rq-nav-hud"><div className="rq-nav-kicker">ACTIVE CASE</div><div className="rq-nav-next">{dispatchStatus?.replaceAll('_',' ')||'Dispatch ready'}</div><div className="rq-nav-meta">{spatial.eta_minutes!=null&&<span><strong>{String(spatial.eta_minutes)}</strong> min</span>}{spatial.distance_miles!=null&&<span>{String(spatial.distance_miles)} mi</span>}</div></div>}{error&&<div className="map-warning">{error}</div>}</div></section>
 }
