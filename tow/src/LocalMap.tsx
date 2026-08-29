@@ -1,59 +1,39 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
-type Spatial = {
-  case_id?: string;
-  origin?: unknown;
-  current_vehicle?: unknown;
-  destination?: unknown;
-  transport_location?: unknown;
-  route_context?: Record<string, unknown>;
-  updated_at?: string;
-};
+type Point={lat:number;lng:number};
+type Spatial={case_id?:string;origin?:unknown;current_vehicle?:unknown;destination?:unknown;transport_location?:unknown;route_context?:Record<string,unknown>;updated_at?:string};
+type RoutePayload={route?:{geometry?:{coordinates?:number[][]};distance?:number;duration?:number}};
+
+declare global { interface Window { maplibregl?: any } }
 
 const BASE=(import.meta.env.VITE_API_BASE_URL??'').replace(/\/$/,'');
 const TOKEN='roviq_tow_token';
+const STYLE={day:'https://tiles.stadiamaps.com/styles/alidade_smooth.json',night:'https://tiles.stadiamaps.com/styles/alidade_smooth_dark.json'};
 
-function label(value: unknown) {
-  if (!value) return 'Not available yet';
-  if (typeof value === 'string') return value;
-  if (typeof value === 'object') {
-    const v=value as Record<string,unknown>;
-    const text=[v.name,v.label,v.address,v.formatted_address,v.description].find(x=>typeof x==='string');
-    if (typeof text === 'string') return text;
-    const lat=v.lat??v.latitude, lng=v.lng??v.lon??v.longitude;
-    if (typeof lat === 'number' && typeof lng === 'number') return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-  }
-  return 'Location available in case data';
-}
+function point(value:unknown):Point|null{if(!value||typeof value!=='object')return null;const v=value as Record<string,unknown>;const lat=Number(v.lat??v.latitude),lng=Number(v.lng??v.lon??v.longitude);return Number.isFinite(lat)&&Number.isFinite(lng)&&Math.abs(lat)<=90&&Math.abs(lng)<=180?{lat,lng}:null}
+function label(value:unknown){if(!value)return'Not available yet';if(typeof value==='string')return value;if(typeof value==='object'){const v=value as Record<string,unknown>;const text=[v.name,v.label,v.address,v.formatted_address,v.description].find(x=>typeof x==='string');if(typeof text==='string')return text;const p=point(v);if(p)return`${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}`}return'Location available in case data'}
+function metric(route:Record<string,unknown>|undefined,key:string){const value=route?.[key];return typeof value==='number'||typeof value==='string'?String(value):'—'}
+function auth(){const t=localStorage.getItem(TOKEN);return t?{authorization:`Bearer ${t}`}:{}}
+function ensureMapLibre(){return new Promise<void>((resolve,reject)=>{if(window.maplibregl)return resolve();if(!document.querySelector('link[data-roviq-maplibre]')){const l=document.createElement('link');l.rel='stylesheet';l.href='https://unpkg.com/maplibre-gl@5.23.0/dist/maplibre-gl.css';l.dataset.roviqMaplibre='1';document.head.appendChild(l)}const existing=document.querySelector('script[data-roviq-maplibre]') as HTMLScriptElement|null;if(existing){existing.addEventListener('load',()=>resolve(),{once:true});existing.addEventListener('error',()=>reject(new Error('Map failed to load')),{once:true});return}const s=document.createElement('script');s.src='https://unpkg.com/maplibre-gl@5.23.0/dist/maplibre-gl.js';s.dataset.roviqMaplibre='1';s.onload=()=>resolve();s.onerror=()=>reject(new Error('Map failed to load'));document.head.appendChild(s)})}
+function markerElement(kind:'tow'|'pickup'|'destination'){const el=document.createElement('div');el.className=`live-map-marker ${kind}`;el.innerHTML=kind==='tow'?'<span class="pulse"></span><span class="dot">T</span>':kind==='pickup'?'<span class="dot">P</span>':'<span class="dot">D</span>';return el}
 
-function metric(route: Record<string,unknown>|undefined, key:string) {
-  const value=route?.[key];
-  return typeof value === 'number' || typeof value === 'string' ? String(value) : '—';
-}
+export function LocalMap({caseId,dispatchId}:{caseId:string;dispatchId:string}){
+  const[spatial,setSpatial]=useState<Spatial|null>(null),[error,setError]=useState(''),[tracking,setTracking]=useState<'starting'|'live'|'limited'>('starting'),[livePoint,setLivePoint]=useState<Point|null>(null),[routeMeta,setRouteMeta]=useState<{distanceMiles?:number;etaMinutes?:number}>({});
+  const mapEl=useRef<HTMLDivElement|null>(null),mapRef=useRef<any>(null),markers=useRef<any[]>([]),lastPush=useRef(0);
 
-export function LocalMap({caseId}:{caseId:string}) {
-  const [spatial,setSpatial]=useState<Spatial|null>(null);
-  const [error,setError]=useState('');
-  useEffect(()=>{
-    let cancelled=false;
-    const token=localStorage.getItem(TOKEN);
-    fetch(`${BASE}/api/maintenance/cases/${caseId}/spatial`,{headers:token?{authorization:`Bearer ${token}`}:{}})
-      .then(async r=>{if(!r.ok)throw new Error(`spatial_${r.status}`);return r.json() as Promise<{spatial:Spatial}>})
-      .then(r=>{if(!cancelled)setSpatial(r.spatial)})
-      .catch(()=>{if(!cancelled)setError('Case route context is not available yet.')});
-    return()=>{cancelled=true};
-  },[caseId]);
+  useEffect(()=>{let cancelled=false;async function load(){try{const r=await fetch(`${BASE}/api/maintenance/cases/${caseId}/spatial`,{headers:auth()});if(!r.ok)throw new Error();const d=await r.json() as {spatial:Spatial};if(!cancelled){setSpatial(d.spatial);setError('')}}catch{if(!cancelled)setError('Case route context is not available yet.')}}void load();const timer=setInterval(()=>void load(),10000);return()=>{cancelled=true;clearInterval(timer)}},[caseId]);
 
-  const route=spatial?.route_context;
-  return <section className="map-panel dispatch-context">
-    <div className="map-head"><div><span className="eyebrow map-eyebrow">Case spatial context</span><h2>Dispatch route</h2><p>Only the pickup, vehicle movement, destination and ETA for this assigned case are shown here.</p></div></div>
-    {error?<div className="spatial-empty">{error}</div>:<div className="spatial-grid">
-      <div><span>Pickup</span><strong>{label(spatial?.origin)}</strong></div>
-      <div><span>Vehicle</span><strong>{label(spatial?.current_vehicle)}</strong></div>
-      <div><span>Destination</span><strong>{label(spatial?.destination)}</strong></div>
-      <div><span>Tow position</span><strong>{label(spatial?.transport_location)}</strong></div>
-      <div><span>Distance</span><strong>{metric(route,'distanceMiles')} mi</strong></div>
-      <div><span>ETA</span><strong>{metric(route,'etaMinutes')} min</strong></div>
-    </div>}
-  </section>;
+  useEffect(()=>{if(!navigator.geolocation){setTracking('limited');return}const id=navigator.geolocation.watchPosition(pos=>{const p={lat:pos.coords.latitude,lng:pos.coords.longitude};setLivePoint(p);setTracking('live');const now=Date.now();if(now-lastPush.current>8000){lastPush.current=now;void fetch(`${BASE}/api/transport/${dispatchId}/location`,{method:'POST',headers:{'content-type':'application/json',...auth()},body:JSON.stringify({lat:p.lat,lng:p.lng,accuracy:pos.coords.accuracy,heading:pos.coords.heading,speed:pos.coords.speed,capturedAt:new Date(pos.timestamp).toISOString()})}).catch(()=>{})}},()=>setTracking('limited'),{enableHighAccuracy:true,maximumAge:5000,timeout:15000});return()=>navigator.geolocation.clearWatch(id)},[dispatchId]);
+
+  useEffect(()=>{let alive=true;void ensureMapLibre().then(()=>{if(!alive||!mapEl.current||mapRef.current)return;const center=livePoint??point(spatial?.transport_location)??point(spatial?.origin)??point(spatial?.destination)??{lat:45.5231,lng:-122.6765};const mode=document.documentElement.dataset.roviqMode==='day'?'day':'night';const map=new window.maplibregl.Map({container:mapEl.current,style:STYLE[mode],center:[center.lng,center.lat],zoom:12.5,pitch:34,bearing:0,attributionControl:true,minZoom:3,maxZoom:18});map.addControl(new window.maplibregl.NavigationControl({showCompass:false}),'top-right');mapRef.current=map;map.on('load',()=>renderMap())}).catch(()=>setError('Live map failed to load.'));return()=>{alive=false;markers.current.forEach(m=>m.remove?.());markers.current=[];mapRef.current?.remove?.();mapRef.current=null}},[]);
+
+  useEffect(()=>{void renderMap()},[spatial,livePoint]);
+
+  async function renderMap(){const map=mapRef.current;if(!map||!map.loaded?.())return;const tow=livePoint??point(spatial?.transport_location),pickup=point(spatial?.origin)??point(spatial?.current_vehicle),dest=point(spatial?.destination);markers.current.forEach(m=>m.remove?.());markers.current=[];for(const[k,p]of[['pickup',pickup],['destination',dest],['tow',tow]] as const){if(!p)continue;markers.current.push(new window.maplibregl.Marker({element:markerElement(k),anchor:'center'}).setLngLat([p.lng,p.lat]).addTo(map))}
+    let coords:number[][]=[];if(tow&&dest){try{const r=await fetch(`${BASE}/api/local/route?from=${encodeURIComponent(`${tow.lng},${tow.lat}`)}&to=${encodeURIComponent(`${dest.lng},${dest.lat}`)}`,{cache:'no-store'});if(r.ok){const d=await r.json() as RoutePayload;coords=d.route?.geometry?.coordinates??[];if(d.route){setRouteMeta({distanceMiles:typeof d.route.distance==='number'?d.route.distance/1609.344:undefined,etaMinutes:typeof d.route.duration==='number'?d.route.duration/60:undefined})}}}catch{}}
+    const source=map.getSource('dispatch-route');if(coords.length){const data={type:'Feature',geometry:{type:'LineString',coordinates:coords}};if(source)source.setData(data);else{map.addSource('dispatch-route',{type:'geojson',data});map.addLayer({id:'dispatch-route-glow',type:'line',source:'dispatch-route',paint:{'line-color':'#0b1624','line-width':8,'line-opacity':.45}});map.addLayer({id:'dispatch-route',type:'line',source:'dispatch-route',paint:{'line-color':'#55ddca','line-width':4.5,'line-opacity':.95}})}}
+    const pts=[pickup,dest,tow].filter(Boolean) as Point[];if(pts.length>1){const b=new window.maplibregl.LngLatBounds();pts.forEach(p=>b.extend([p.lng,p.lat]));map.fitBounds(b,{padding:{top:70,bottom:70,left:55,right:55},maxZoom:15,pitch:34,duration:650,essential:true})}else if(pts[0])map.easeTo({center:[pts[0].lng,pts[0].lat],zoom:14,pitch:34,duration:500,essential:true})}
+
+  const route=spatial?.route_context;const distance=routeMeta.distanceMiles??Number(route?.distanceMiles),eta=routeMeta.etaMinutes??Number(route?.etaMinutes);
+  return <section className="map-panel dispatch-context"><div className="map-head"><div><span className="eyebrow map-eyebrow">Live dispatch map</span><h2>ROVIQ route</h2><p>Live tow position, pickup and destination for this case. Routing uses the ROVIQ Local mapping source through Core.</p></div><span className={`live-badge ${tracking}`}>{tracking==='live'?'● GPS live':tracking==='starting'?'Connecting GPS…':'GPS limited'}</span></div><div className="live-map-wrap"><div ref={mapEl} className="live-map"/>{error&&<div className="map-warning">{error}</div>}</div><div className="spatial-grid"><div><span>Pickup</span><strong>{label(spatial?.origin??spatial?.current_vehicle)}</strong></div><div><span>Destination</span><strong>{label(spatial?.destination)}</strong></div><div><span>Tow position</span><strong>{label(livePoint??spatial?.transport_location)}</strong></div><div><span>Distance</span><strong>{Number.isFinite(distance)?`${distance.toFixed(1)} mi`:`${metric(route,'distanceMiles')} mi`}</strong></div><div><span>ETA</span><strong>{Number.isFinite(eta)?`${Math.max(1,Math.round(eta))} min`:`${metric(route,'etaMinutes')} min`}</strong></div><div><span>Tracking</span><strong>{tracking==='live'?'Updating automatically':'Enable precise location for live tracking'}</strong></div></div></section>
 }
