@@ -1,12 +1,17 @@
 import { pool } from '../db/pool.js';
 
+export type AiDeploymentMode = 'shadow' | 'advisory' | 'assisted';
+
 export type CaseIntelligence = {
   caseId: string | null;
   assessmentId: string | null;
-  source: 'cloudflare-workers-ai' | 'none';
+  source: 'cloudflare-workers-ai' | 'other-ai' | 'none';
+  modelProvider: string | null;
+  deploymentMode: AiDeploymentMode | null;
   status: string | null;
   confidence: number | null;
   requiresHumanReview: boolean;
+  safetyOverride: boolean;
   suggestedCapabilities: string[];
   suggestedDrivability: string | null;
   safetyFlags: unknown[];
@@ -14,20 +19,38 @@ export type CaseIntelligence = {
   rationale: string;
 };
 
+export function evaluateAssessmentAuthority(input: {
+  deploymentMode: AiDeploymentMode;
+  status: string;
+  requiresHumanReview: boolean;
+  safetyOverride?: boolean;
+}) {
+  if (input.deploymentMode === 'shadow') return { effectiveForAutomation:false, rationale:'ai_shadow_observation_only' };
+  if (input.deploymentMode === 'advisory') return { effectiveForAutomation:false, rationale:'ai_advisory_human_decision_required' };
+  if (input.safetyOverride) return { effectiveForAutomation:false, rationale:'ai_safety_override_human_review_required' };
+  if (input.requiresHumanReview) return { effectiveForAutomation:false, rationale:'ai_human_review_required' };
+  const governedStatus = input.status === 'accepted' || input.status === 'reviewed' || input.status === 'proposed';
+  return governedStatus
+    ? { effectiveForAutomation:true, rationale:`ai_assisted_${input.status}_usable` }
+    : { effectiveForAutomation:false, rationale:`ai_${input.status}_not_authorized` };
+}
+
 /**
- * Reads the latest Cloudflare Workers AI triage assessment attached to the
- * service case for a demand. AI is advisory: only reviewed/accepted results,
- * or a proposed result that explicitly does not require human review, may
- * influence deterministic routing inputs.
+ * Cloudflare Workers AI is an intelligence source, not a decision authority.
+ * Only ASSISTED-mode assessments that have cleared safety/human-review gates
+ * may influence normalized routing inputs. Shadow and advisory assessments are
+ * persisted and traceable but never alter automatic provider coordination.
  */
 export async function loadCaseIntelligenceForDemand(demandId: string): Promise<CaseIntelligence> {
   const result = await pool.query(
     `select sc.id as case_id,
             ai.id as assessment_id,
             ai.model_provider,
+            ai.deployment_mode,
             ai.status,
             ai.confidence::float as confidence,
             ai.requires_human_review,
+            ai.safety_override,
             ai.suggested_capabilities,
             ai.suggested_drivability,
             ai.safety_flags
@@ -51,9 +74,12 @@ export async function loadCaseIntelligenceForDemand(demandId: string): Promise<C
       caseId: row?.case_id ?? null,
       assessmentId: null,
       source: 'none',
+      modelProvider: null,
+      deploymentMode: null,
       status: null,
       confidence: null,
       requiresHumanReview: true,
+      safetyOverride: false,
       suggestedCapabilities: [],
       suggestedDrivability: null,
       safetyFlags: [],
@@ -64,23 +90,30 @@ export async function loadCaseIntelligenceForDemand(demandId: string): Promise<C
 
   const status = String(row.status || 'proposed');
   const requiresHumanReview = row.requires_human_review !== false;
-  const effectiveForAutomation =
-    status === 'accepted' || status === 'reviewed' || (status === 'proposed' && !requiresHumanReview);
+  const deploymentMode: AiDeploymentMode = ['shadow','advisory','assisted'].includes(String(row.deployment_mode))
+    ? String(row.deployment_mode) as AiDeploymentMode
+    : 'shadow';
+  const safetyOverride = row.safety_override === true;
+  const authority = evaluateAssessmentAuthority({ deploymentMode, status, requiresHumanReview, safetyOverride });
+  const provider = row.model_provider ? String(row.model_provider) : null;
 
   return {
     caseId: row.case_id,
     assessmentId: row.assessment_id,
-    source: row.model_provider === 'cloudflare-workers-ai' ? 'cloudflare-workers-ai' : 'cloudflare-workers-ai',
+    source: provider === 'cloudflare-workers-ai' ? 'cloudflare-workers-ai' : 'other-ai',
+    modelProvider: provider,
+    deploymentMode,
     status,
     confidence: typeof row.confidence === 'number' ? row.confidence : null,
     requiresHumanReview,
+    safetyOverride,
     suggestedCapabilities: Array.isArray(row.suggested_capabilities)
       ? row.suggested_capabilities.map(String).filter(Boolean).slice(0, 8)
       : [],
     suggestedDrivability: row.suggested_drivability ? String(row.suggested_drivability) : null,
     safetyFlags: Array.isArray(row.safety_flags) ? row.safety_flags.slice(0, 12) : [],
-    effectiveForAutomation,
-    rationale: effectiveForAutomation ? `ai_${status}_usable` : `ai_${status}_advisory_only`
+    effectiveForAutomation: authority.effectiveForAutomation,
+    rationale: authority.rationale
   };
 }
 
