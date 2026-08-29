@@ -5,7 +5,6 @@ import { audit } from '../../services/audit.js';
 import { loadCaseForPrincipal } from '../../services/case-access.js';
 import { requireRole } from '../middleware/principal.js';
 
-const selectionMode = z.enum(['customer_choice','dealer_controlled','auto_dispatch','ops_override']);
 const partnerSubtype = z.enum(['dealership','independent_repair','service_center','mobile_service']);
 
 export async function coherenceRoutes(app: FastifyInstance) {
@@ -55,43 +54,6 @@ export async function coherenceRoutes(app: FastifyInstance) {
     return { spatial:r.rows[0] };
   });
 
-  app.post('/api/maintenance/cases/:id/select-provider', async (req, reply) => {
-    const { id } = req.params as { id:string };
-    const body = z.object({ actorId:z.string().uuid(), routingDecisionId:z.string().uuid().optional() }).parse(req.body);
-    const c = await loadCaseForPrincipal(req.principal,id);
-    if (!c) return reply.code(404).send({error:'case_not_found'});
-    const mode = selectionMode.parse(c.selection_mode ?? 'customer_choice');
-    if (!canSelect(req.principal.role,mode)) return reply.code(403).send({error:'selection_forbidden'});
-    if (c.state !== 'provider_selection') return reply.code(409).send({error:'case_not_awaiting_provider_selection'});
-
-    const decision = await pool.query(
-      body.routingDecisionId
-        ? `select * from routing_decisions where id=$1 and demand_id=$2 order by evaluated_at desc limit 1`
-        : `select * from routing_decisions where demand_id=$1 order by evaluated_at desc limit 1`,
-      body.routingDecisionId ? [body.routingDecisionId,c.demand_id] : [c.demand_id]
-    );
-    if (!decision.rowCount) return reply.code(409).send({error:'routing_decision_required'});
-    const eligible = Array.isArray(decision.rows[0].eligible_actor_ids) ? decision.rows[0].eligible_actor_ids : [];
-    if (!eligible.includes(body.actorId)) return reply.code(409).send({error:'actor_not_eligible'});
-
-    const offer = await pool.query(
-      `insert into matches_offers(demand_id,case_id,actor_id,score,rank,rule_basis)
-       values($1,$2,$3,null,null,$4) returning *`,
-      [c.demand_id,id,body.actorId,`governed_selection:${mode}`]
-    );
-    const updated = await pool.query(
-      `update service_cases set selected_actor_id=$1,selected_by_role=$2,selected_at=now(),updated_at=now() where id=$3 returning *`,
-      [body.actorId,req.principal.role,id]
-    );
-    await pool.query(
-      `insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload)
-       values('service_case',$1,'PROVIDER_SELECTED',$2,$3)`,
-      [id,req.principal.actorId ?? null,JSON.stringify({actorId:body.actorId,selectionMode:mode,offerId:offer.rows[0].id,routingDecisionId:decision.rows[0].id})]
-    );
-    await audit(req.principal,'select_provider','service_case',id,`selection_mode:${mode}`,{actorId:body.actorId,routingDecisionId:decision.rows[0].id});
-    return { case:updated.rows[0], offer:offer.rows[0], selectionMode:mode };
-  });
-
   app.get('/api/partners/me/profile', { preHandler: requireRole('partner') }, async (req) => {
     const r = await pool.query('select id,actor_type,partner_subtype,status,attributes from actors where id=$1',[req.principal.actorId]);
     return { partner:r.rows[0] ?? null };
@@ -128,19 +90,15 @@ export async function coherenceRoutes(app: FastifyInstance) {
     const { id } = req.params as { id:string };
     const c = await pool.query('select * from service_cases where id=$1',[id]);
     if (!c.rowCount) return reply.code(404).send({error:'case_not_found'});
-    const [ai,routing,spatial,milestones] = await Promise.all([
+    const [ai,routing,spatial,milestones,selections] = await Promise.all([
       pool.query('select * from ai_triage_assessments where case_id=$1 order by created_at desc limit 5',[id]),
       c.rows[0].demand_id ? pool.query('select * from routing_decisions where demand_id=$1 order by evaluated_at desc limit 10',[c.rows[0].demand_id]) : Promise.resolve({rows:[]}),
       pool.query('select * from case_spatial_context where case_id=$1',[id]),
-      pool.query('select * from coordination_milestones where case_id=$1 order by occurred_at asc',[id])
+      pool.query('select * from coordination_milestones where case_id=$1 order by occurred_at asc',[id]),
+      pool.query('select * from case_selections where case_id=$1 order by created_at asc',[id])
     ]);
-    return { case:c.rows[0], ai:ai.rows, routing:routing.rows, spatial:spatial.rows[0] ?? null, milestones:milestones.rows };
+    return { case:c.rows[0], ai:ai.rows, routing:routing.rows, spatial:spatial.rows[0] ?? null, selections:selections.rows, milestones:milestones.rows };
   });
-}
-
-function canSelect(role:string, mode:z.infer<typeof selectionMode>) {
-  if (role === 'admin') return true;
-  return mode === 'customer_choice' && role === 'customer';
 }
 
 function projectSpatial(role:string, s:Record<string,unknown>) {
