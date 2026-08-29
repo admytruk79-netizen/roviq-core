@@ -12,7 +12,9 @@ const createIdentityBody = z.object({
   actorId: z.string().uuid().nullable().optional()
 });
 
-async function adminTestSession(req:any, reply:any, role:'partner'|'tow') {
+type TestRole='partner'|'tow'|'diagnostic'|'parts';
+
+async function adminTestSession(req:any, reply:any, role:TestRole) {
   const domain = await pool.query("select id from domains where code='maintenance' limit 1");
   if (!domain.rowCount) return reply.code(500).send({ error:'maintenance_domain_missing' });
   const testContext = `admin_${role}_portal`;
@@ -21,9 +23,13 @@ async function adminTestSession(req:any, reply:any, role:'partner'|'tow') {
     [role,testContext]
   );
   if (!actor.rowCount) {
+    const displayName = role === 'tow' ? 'ROVIQ Admin Test Tow / Valet'
+      : role === 'diagnostic' ? 'ROVIQ Admin Test Diagnostic'
+      : role === 'parts' ? 'ROVIQ Admin Test Parts Vendor'
+      : 'ROVIQ Admin Test Partner';
     actor = await pool.query(
       `insert into actors(domain_id,actor_type,status,attributes) values($1,$2,'active',$3) returning id`,
-      [domain.rows[0].id,role,JSON.stringify({ testContext, displayName: role === 'tow' ? 'ROVIQ Admin Test Tow / Valet' : 'ROVIQ Admin Test Partner' })]
+      [domain.rows[0].id,role,JSON.stringify({ testContext, displayName })]
     );
   }
   const actorId = actor.rows[0].id as string;
@@ -64,6 +70,8 @@ export async function authRoutes(app: FastifyInstance) {
 
   app.post('/api/admin/testing/partner-session', { preHandler: requireRole('admin') }, async (req, reply) => adminTestSession(req,reply,'partner'));
   app.post('/api/admin/testing/tow-session', { preHandler: requireRole('admin') }, async (req, reply) => adminTestSession(req,reply,'tow'));
+  app.post('/api/admin/testing/diagnostic-session', { preHandler: requireRole('admin') }, async (req, reply) => adminTestSession(req,reply,'diagnostic'));
+  app.post('/api/admin/testing/parts-session', { preHandler: requireRole('admin') }, async (req, reply) => adminTestSession(req,reply,'parts'));
 
   app.post('/api/admin/identities', { preHandler: requireRole('admin') }, async (req, reply) => {
     const b = createIdentityBody.parse(req.body);
