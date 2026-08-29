@@ -21,6 +21,16 @@ jobs:
       - working-directory: tow
         run: npm install --no-audit --no-fund && npm run build
       - working-directory: tow
-        run: npx wrangler pages project list | grep -qw roviq-tow-net || npx wrangler pages project create roviq-tow-net --production-branch=main
-      - working-directory: tow
+        run: |
+          set -euo pipefail
+          projects="$(npx wrangler pages project list)"
+          echo "$projects" | grep -qw roviq-tow-net || npx wrangler pages project create roviq-tow-net --production-branch=main
+          if ! echo "$projects" | grep -qw w-net; then
+            npx wrangler pages project create w-net --production-branch=main || true
+          fi
+      - name: Deploy canonical Tow project
+        working-directory: tow
         run: npx wrangler pages deploy dist --project-name=roviq-tow-net --branch=main --commit-dirty=true
+      - name: Deploy legacy Tow URL
+        working-directory: tow
+        run: npx wrangler pages deploy dist --project-name=w-net --branch=main --commit-dirty=true
