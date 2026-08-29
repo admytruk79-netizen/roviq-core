@@ -15,15 +15,15 @@ export async function routingRoutes(app:FastifyInstance){
    const caseResult=await pool.query('select * from service_cases where demand_id=$1 order by created_at desc limit 1',[id]);
    let serviceCase=caseResult.rows[0]??null;
    if(serviceCase&&['triage','diagnostic_in_progress'].includes(serviceCase.state))serviceCase=await transitionCase(req.principal,serviceCase.id,'provider_selection',{source:'routing_engine'});
-   let offer=null; let selection=null;
-   const recommended=result.recommendedActorId??result.ranked[0]?.actorId??null;
+   let offer=null; let selection:null|{caseId:string;selectedActorId:string;selectionMode:'auto_dispatch'}=null;
+   const recommended=result.recommendedActorId??null;
    if(serviceCase&&recommended&&serviceCase.selection_mode==='auto_dispatch'){
     selection=await autoDispatchCase(serviceCase.id,recommended,result.decision?.id??null,{source:'routing_engine'});
    }
    // An offer is an invitation, not a provider selection. For customer/dealer choice,
    // the recommendation remains visible until the authorized selector chooses.
    if(body.createOffer&&recommended&&serviceCase?.selection_mode==='auto_dispatch'){
-    const first=result.ranked[0];
+    const first=result.ranked[0] as {score?:number}|undefined;
     const r=await pool.query(`insert into matches_offers(demand_id,case_id,actor_id,score,rank,rule_basis) values($1,$2,$3,$4,1,$5) returning *`,[id,serviceCase?.id??null,recommended,first?.score??null,'coordination_recommendation_v2']);
     offer=r.rows[0];
     if(serviceCase?.state==='provider_selection')serviceCase=await transitionCase(req.principal,serviceCase.id,'provider_pending',{offerId:offer.id,providerActorId:recommended,selectionMode:'auto_dispatch'});
