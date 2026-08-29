@@ -6,6 +6,7 @@ import { Login } from './pages/Login';
 import { Cases } from './pages/Cases';
 import { Exceptions } from './pages/Exceptions';
 import { CaseDetail } from './pages/CaseDetail';
+import { NetworkMap } from './pages/NetworkMap';
 
 function App() {
   return (
@@ -17,6 +18,7 @@ function App() {
             <Route element={<Layout />}>
               <Route path="/" element={<Cases />} />
               <Route path="/exceptions" element={<Exceptions />} />
+              <Route path="/map" element={<NetworkMap />} />
               <Route path="/cases/:id" element={<CaseDetail />} />
             </Route>
           </Route>
