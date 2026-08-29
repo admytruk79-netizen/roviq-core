@@ -28,6 +28,7 @@ export function Layout() {
             <nav className="flex gap-1">
               <Link to="/" className={navClass('/')}>Cases</Link>
               <Link to="/exceptions" className={navClass('/exceptions')}>Exceptions</Link>
+              <Link to="/map" className={navClass('/map')}>Oversight map</Link>
             </nav>
           </div>
           {principal && <button onClick={handleLogout} className="roviq-btn-secondary shrink-0 text-sm">Sign out</button>}
