@@ -30,7 +30,7 @@ export function isLocalCorePath(pathname) {
   return pathname === '/api/local' || pathname.startsWith('/api/local/');
 }
 
-export async function handleLocalCoreRequest(request, _env, url) {
+export async function handleLocalCoreRequest(request, env, url) {
   if (url.pathname === '/api/local') {
     if (request.method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
     return json({
@@ -71,10 +71,8 @@ export async function handleLocalCoreRequest(request, _env, url) {
     });
   }
 
-  // Keep Core on the canonical Local worker. A stale dashboard variable previously
-  // redirected the adapter to an obsolete deployment and made every public Local
-  // API route return 404 even though the live worker exposes them.
-  const upstreamUrl = new URL(selected.upstream(match) + url.search, DEFAULT_LOCAL_ORIGIN);
+  const upstreamPath = selected.upstream(match) + url.search;
+  const upstreamUrl = new URL(upstreamPath, DEFAULT_LOCAL_ORIGIN);
   const headers = new Headers();
   const contentType = request.headers.get('content-type');
   if (contentType) headers.set('content-type', contentType);
@@ -88,7 +86,9 @@ export async function handleLocalCoreRequest(request, _env, url) {
 
   let upstreamResponse;
   try {
-    upstreamResponse = await fetch(upstreamRequest);
+    upstreamResponse = env?.ROVIQ_LOCAL?.fetch
+      ? await env.ROVIQ_LOCAL.fetch(upstreamRequest)
+      : await fetch(upstreamRequest);
   } catch (error) {
     return json({
       error: 'local_upstream_unreachable',
@@ -110,7 +110,8 @@ export async function handleLocalCoreRequest(request, _env, url) {
       service: 'roviq-local',
       integration: 'roviq-core',
       upstream: 'reachable',
-      upstreamStatus: upstreamResponse.status
+      upstreamStatus: upstreamResponse.status,
+      transport: env?.ROVIQ_LOCAL?.fetch ? 'service-binding' : 'public-fallback'
     });
   }
 
