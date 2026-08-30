@@ -16,39 +16,50 @@ export function Cases() {
       .catch(() => setError('Could not load your cases.'));
   }, []);
 
+  const openCount = cases?.filter(c => !['completed','closed','cancelled'].includes(String(c.state).toLowerCase())).length ?? 0;
+
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold">Your cases</h1>
-        <Link to="/cases/new" className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800">
-          Report a new issue
-        </Link>
-      </div>
+    <div className="space-y-5">
+      <section className="roviq-customer-hero">
+        <div>
+          <p className="roviq-kicker">Your vehicle care</p>
+          <h1>My cases</h1>
+          <p className="roviq-muted">Follow active service, transportation and repair progress from one place.</p>
+        </div>
+        <Link to="/cases/new" className="roviq-btn-primary roviq-start-service">Start service</Link>
+      </section>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      <section className="roviq-summary-strip" aria-label="Case summary">
+        <div><span>Active</span><strong>{openCount}</strong></div>
+        <div><span>Total</span><strong>{cases?.length ?? '—'}</strong></div>
+        <div><span>Updates</span><strong>{openCount ? 'Live' : '—'}</strong></div>
+      </section>
 
-      {cases === null && !error && <p className="text-sm text-slate-500">Loading…</p>}
+      {error && <div className="roviq-error">{error}</div>}
+      {cases === null && !error && <div className="roviq-panel p-5 text-sm roviq-muted">Loading your cases…</div>}
 
       {cases !== null && cases.length === 0 && (
-        <p className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">
-          No cases yet. Report an issue to get started.
-        </p>
+        <section className="roviq-panel roviq-empty-state">
+          <p className="roviq-kicker">No cases yet</p>
+          <h2>Your service history will appear here.</h2>
+          <p className="roviq-muted">Start a case when you need diagnostics, repair coordination, towing or related service.</p>
+          <Link to="/cases/new" className="roviq-btn-primary">Report an issue</Link>
+        </section>
       )}
 
       {cases !== null && cases.length > 0 && (
-        <ul className="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">
+        <section className="roviq-case-list">
           {cases.map((c) => (
-            <li key={c.id}>
-              <Link to={`/cases/${c.id}`} className="flex items-center justify-between px-4 py-3 hover:bg-slate-50">
-                <div>
-                  <p className="text-sm font-medium capitalize">{c.case_type} case</p>
-                  <p className="text-xs text-slate-500">Opened {formatDateTime(c.created_at)}</p>
-                </div>
-                <StatusBadge state={c.state} />
-              </Link>
-            </li>
+            <Link key={c.id} to={`/cases/${c.id}`} className="roviq-case-card">
+              <div className="roviq-case-copy">
+                <p className="roviq-kicker">{String(c.case_type).replaceAll('_',' ')} case</p>
+                <h2>Case {c.id.slice(0,8)}</h2>
+                <p className="roviq-muted">Opened {formatDateTime(c.created_at)}</p>
+              </div>
+              <div className="roviq-case-status"><StatusBadge state={c.state} /><span aria-hidden="true">›</span></div>
+            </Link>
           ))}
-        </ul>
+        </section>
       )}
     </div>
   );
