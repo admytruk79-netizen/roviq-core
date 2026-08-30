@@ -1,9 +1,7 @@
 const DEFAULT_LOCAL_ORIGIN = 'https://roviq-local2.admytruk79.workers.dev';
 
 const ROUTES = [
-  // The deployed Local worker does not expose /api/health consistently. Probe a
-  // read-only public endpoint and synthesize a stable Core health response.
-  { core: /^\/api\/local\/health$/, upstream: () => '/api/places', methods: ['GET'], healthProbe: true },
+  { core: /^\/api\/local\/health$/, upstream: () => '/api/health', methods: ['GET'], healthProbe: true },
   { core: /^\/api\/local\/version$/, upstream: () => '/api/version', methods: ['GET'] },
   { core: /^\/api\/local\/places$/, upstream: () => '/api/places', methods: ['GET'] },
   { core: /^\/api\/local\/places\/(\d+)$/, upstream: (m) => `/api/places/${m[1]}`, methods: ['GET'] },
@@ -32,7 +30,7 @@ export function isLocalCorePath(pathname) {
   return pathname === '/api/local' || pathname.startsWith('/api/local/');
 }
 
-export async function handleLocalCoreRequest(request, env, url) {
+export async function handleLocalCoreRequest(request, _env, url) {
   if (url.pathname === '/api/local') {
     if (request.method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
     return json({
@@ -73,8 +71,10 @@ export async function handleLocalCoreRequest(request, env, url) {
     });
   }
 
-  const origin = String(env.ROVIQ_LOCAL_API_URL || DEFAULT_LOCAL_ORIGIN).replace(/\/+$/, '');
-  const upstreamUrl = new URL(selected.upstream(match) + url.search, origin);
+  // Keep Core on the canonical Local worker. A stale dashboard variable previously
+  // redirected the adapter to an obsolete deployment and made every public Local
+  // API route return 404 even though the live worker exposes them.
+  const upstreamUrl = new URL(selected.upstream(match) + url.search, DEFAULT_LOCAL_ORIGIN);
   const headers = new Headers();
   const contentType = request.headers.get('content-type');
   if (contentType) headers.set('content-type', contentType);
