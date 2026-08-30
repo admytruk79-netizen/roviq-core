@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { formatDateTime } from '../lib/format';
@@ -13,55 +13,42 @@ export function Cases() {
   useEffect(() => {
     setCases(null);
     const query = stateFilter ? `?state=${stateFilter}` : '';
-    api
-      .get<{ cases: ServiceCase[] }>(`/api/admin/cases${query}`)
-      .then((res) => setCases(res.cases))
-      .catch(() => setError('Could not load cases.'));
+    api.get<{ cases: ServiceCase[] }>(`/api/admin/cases${query}`).then((res) => setCases(res.cases)).catch(() => setError('Could not load cases.'));
   }, [stateFilter]);
 
+  const critical = useMemo(() => cases?.filter(c => ['critical','emergency','high'].includes(String(c.priority).toLowerCase())).length ?? 0,[cases]);
+  const active = useMemo(() => cases?.filter(c => !['closed','completed','cancelled'].includes(String(c.state).toLowerCase())).length ?? 0,[cases]);
+
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold">Cases</h1>
-        <select
-          value={stateFilter}
-          onChange={(e) => setStateFilter(e.target.value)}
-          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:border-slate-500 focus:outline-none"
-        >
+    <div className="space-y-5">
+      <section className="ops-hero">
+        <div><p className="roviq-kicker">Network control</p><h1>Operations cases</h1><p className="roviq-muted">Monitor active cases, priority and exceptions from one control surface.</p></div>
+        <select value={stateFilter} onChange={(e) => setStateFilter(e.target.value)} className="roviq-input ops-filter" aria-label="Filter cases by state">
           <option value="">All states</option>
-          {CASE_STATES.map((s) => (
-            <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>
-          ))}
+          {CASE_STATES.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
         </select>
-      </div>
+      </section>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      <section className="ops-stats" aria-label="Operations summary">
+        <div><span>Visible cases</span><strong>{cases?.length ?? '—'}</strong></div>
+        <div><span>Active</span><strong>{active}</strong></div>
+        <div><span>Priority watch</span><strong>{critical}</strong></div>
+      </section>
 
-      {cases === null && !error && <p className="text-sm text-slate-500">Loading…</p>}
-
-      {cases !== null && cases.length === 0 && (
-        <p className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">
-          No cases match this filter.
-        </p>
-      )}
+      {error && <div className="ops-error">{error}</div>}
+      {cases === null && !error && <div className="roviq-panel p-5 text-sm roviq-muted">Loading operational cases…</div>}
+      {cases !== null && cases.length === 0 && <div className="roviq-panel ops-empty">No cases match this filter.</div>}
 
       {cases !== null && cases.length > 0 && (
-        <ul className="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">
+        <section className="ops-case-grid">
           {cases.map((c) => (
-            <li key={c.id}>
-              <Link to={`/cases/${c.id}`} className="flex items-center justify-between px-4 py-3 hover:bg-slate-50">
-                <div>
-                  <p className="text-sm font-medium capitalize">{c.case_type} case</p>
-                  <p className="text-xs text-slate-500">Updated {formatDateTime(c.updated_at)}</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs uppercase text-slate-400">{c.priority}</span>
-                  <StatusBadge state={c.state} />
-                </div>
-              </Link>
-            </li>
+            <Link to={`/cases/${c.id}`} key={c.id} className="ops-case-card">
+              <div className="ops-case-top"><div><p className="roviq-kicker">{String(c.case_type).replaceAll('_',' ')} case</p><h2>Case {c.id.slice(0,8)}</h2></div><StatusBadge state={c.state} /></div>
+              <div className="ops-case-meta"><span className={`ops-priority priority-${String(c.priority).toLowerCase()}`}>{c.priority}</span><span>Updated {formatDateTime(c.updated_at)}</span></div>
+              <div className="ops-open-row"><span>Open case control</span><strong>›</strong></div>
+            </Link>
           ))}
-        </ul>
+        </section>
       )}
     </div>
   );
