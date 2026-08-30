@@ -18,13 +18,13 @@ describe('external dependency degradation', () => {
       headers: { authorization: 'Bearer should-not-be-forwarded' }
     });
     const url = new URL(request.url);
-    const response = await handleLocalCoreRequest(request, { ROVIQ_LOCAL_API_URL: 'https://local.invalid' }, url);
+    const response = await handleLocalCoreRequest(request, {}, url);
 
     expect(response.status).toBe(502);
     expect(await response.json()).toMatchObject({ error: 'local_upstream_unreachable' });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const upstream = fetchSpy.mock.calls[0][0] as Request;
-    expect(upstream.url).toBe('https://local.invalid/api/route?from=1,2&to=3,4');
+    expect(upstream.url).toBe('https://roviq-local2.admytruk79.workers.dev/api/route?from=1,2&to=3,4');
     expect(upstream.headers.get('authorization')).toBeNull();
     expect(upstream.headers.get('x-roviq-via')).toBe('core-local-adapter');
   });
