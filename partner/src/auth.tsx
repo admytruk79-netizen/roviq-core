@@ -1,5 +1,5 @@
-import { createContext, useContext, useState, type ReactNode } from 'react';
-import { api, setToken } from './api';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { api, getToken, SESSION_EXPIRED_EVENT, setToken } from './api';
 
 export type Principal = {
   role: 'partner' | 'diagnostic' | 'tow' | 'parts' | 'fleet' | 'admin' | 'customer';
@@ -19,12 +19,17 @@ const PRINCIPAL_KEY = 'roviq_partner_principal';
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 function readPrincipal(): Principal | null {
+  if (!getToken()) {
+    localStorage.removeItem(PRINCIPAL_KEY);
+    return null;
+  }
   const raw = localStorage.getItem(PRINCIPAL_KEY);
   if (!raw) return null;
   try {
     const principal = JSON.parse(raw) as Principal;
     return principal.role === 'partner' && principal.actorId ? principal : null;
   } catch {
+    localStorage.removeItem(PRINCIPAL_KEY);
     return null;
   }
 }
@@ -33,6 +38,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [principal, setPrincipal] = useState<Principal | null>(readPrincipal);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  function clearSession(message?: string) {
+    setToken(null);
+    localStorage.removeItem(PRINCIPAL_KEY);
+    setPrincipal(null);
+    if (message) setError(message);
+  }
+
+  useEffect(() => {
+    const onExpired = () => clearSession('Your session expired. Please sign in again.');
+    window.addEventListener(SESSION_EXPIRED_EVENT, onExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired);
+  }, []);
 
   async function login(email: string, password: string) {
     setLoading(true);
@@ -50,8 +68,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       if (result.principal.role !== 'partner' || !result.principal.actorId) {
-        setToken(null);
-        localStorage.removeItem(PRINCIPAL_KEY);
+        clearSession();
         setError('This portal requires a shop or dealership partner account.');
         throw new Error('wrong_role');
       }
@@ -60,7 +77,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       localStorage.setItem(PRINCIPAL_KEY, JSON.stringify(result.principal));
       setPrincipal(result.principal);
     } catch (err) {
-      if ((err as Error).message !== 'wrong_role') setError('Invalid email or password.');
+      const message = err instanceof Error ? err.message : '';
+      if (message !== 'wrong_role' && !message.includes('session expired')) {
+        clearSession();
+        setError('Invalid email or password.');
+      }
       throw err;
     } finally {
       setLoading(false);
@@ -68,9 +89,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   function logout() {
-    setToken(null);
-    localStorage.removeItem(PRINCIPAL_KEY);
-    setPrincipal(null);
+    clearSession();
   }
 
   return <AuthContext.Provider value={{ principal, loading, error, login, logout }}>{children}</AuthContext.Provider>;
