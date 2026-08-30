@@ -1,0 +1,89 @@
+name: Smoke Production Surfaces
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - 'diagnostic/**'
+      - 'partner/**'
+      - 'parts-portal/**'
+      - 'tow/**'
+      - 'ops/**'
+      - 'cloudflare/**'
+      - 'src/**'
+      - '.github/workflows/smoke-production-surfaces.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  public-surfaces:
+    name: smoke-${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: customer
+            url: https://roviq-web-dxv.pages.dev
+          - name: diagnostic
+            url: https://roviq-diagnostic-net.pages.dev
+          - name: partner
+            url: https://roviq-partner.pages.dev
+          - name: parts
+            url: https://roviq-parts-net.pages.dev
+          - name: tow
+            url: https://roviq-tow-net.pages.dev
+          - name: ops
+            url: https://roviq-ops.pages.dev
+    steps:
+      - name: Fetch surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          response="$(mktemp)"
+          headers="$(mktemp)"
+          code="$(curl --fail-with-body --location --silent --show-error \
+            --connect-timeout 10 --max-time 25 \
+            --retry 2 --retry-delay 2 \
+            --dump-header "$headers" --output "$response" \
+            --write-out '%{http_code}' '${{ matrix.url }}')"
+          echo "HTTP $code"
+          test "$code" -ge 200
+          test "$code" -lt 400
+          grep -Eiq '<!doctype html|<html' "$response"
+          grep -Eiq 'ROVIQ|<title' "$response"
+          if grep -Eiq 'API KEY REQUIRED|Application error|Internal Server Error' "$response"; then
+            echo 'Known failure marker detected in rendered shell.'
+            exit 1
+          fi
+
+  core-health:
+    name: smoke-core-health
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify Core worker health
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(curl --fail-with-body --silent --show-error \
+            --connect-timeout 10 --max-time 20 --retry 2 --retry-delay 2 \
+            https://roviq-core.admytruk79.workers.dev/health)"
+          echo "$body"
+          echo "$body" | grep -q '"ok":true'
+          echo "$body" | grep -q '"service":"roviq-core"'
+
+      - name: Verify Core ready endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(curl --fail-with-body --silent --show-error \
+            --connect-timeout 10 --max-time 20 --retry 2 --retry-delay 2 \
+            https://roviq-core.admytruk79.workers.dev/ready)"
+          echo "$body"
+          echo "$body" | grep -q '"ok":true'
+          echo "$body" | grep -q '"database":"reachable"'
