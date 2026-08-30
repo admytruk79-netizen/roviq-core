@@ -145,13 +145,156 @@ async function runTriage(env, body) {
   };
 }
 
+async function sweepExpiredDeadlinesNative(sql, limit = 200) {
+  const expired = await sql`
+    select * from workflow_deadlines
+    where state='open' and due_at<=now()
+    order by due_at asc
+    limit ${limit}
+  `;
+  const processed = [];
+  for (const d of expired) {
+    const nextRetry = Number(d.retry_count || 0) + 1;
+    const payload = {
+      deadlineId: d.id,
+      deadlineType: d.deadline_type,
+      retryCount: nextRetry,
+      fallbackAction: d.fallback_action,
+      source: 'cloudflare_cron'
+    };
+    if (nextRetry <= Number(d.max_retries || 0)) {
+      await sql`update workflow_deadlines set retry_count=${nextRetry},due_at=now()+interval '2 minutes' where id=${d.id}`;
+      await sql`
+        insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload)
+        values('service_case',${d.case_id},'WORKFLOW_RETRY_SCHEDULED',null,${JSON.stringify(payload)}::jsonb)
+      `;
+      processed.push({ id: d.id, action: 'retry', retryCount: nextRetry });
+    } else {
+      await sql`update workflow_deadlines set state='expired',resolved_at=now() where id=${d.id}`;
+      const exceptions = await sql`
+        insert into case_exceptions(case_id,exception_code,severity,summary,metadata)
+        values(
+          ${d.case_id},
+          ${`DEADLINE_${String(d.deadline_type).toUpperCase()}`},
+          'warning',
+          ${`Workflow deadline expired: ${d.deadline_type}`},
+          ${JSON.stringify({ deadlineId: d.id, fallbackAction: d.fallback_action, source: 'cloudflare_cron' })}::jsonb
+        ) returning id
+      `;
+      await sql`
+        insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload)
+        values(
+          'service_case',${d.case_id},'WORKFLOW_ESCALATED',null,
+          ${JSON.stringify({ deadlineId: d.id, exceptionId: exceptions[0].id, fallbackAction: d.fallback_action, source: 'cloudflare_cron' })}::jsonb
+        )
+      `;
+      processed.push({ id: d.id, action: 'escalated', exceptionId: exceptions[0].id });
+    }
+  }
+  return processed;
+}
+
+async function retryNotificationNative(sql, notification, attemptNumber, provider, errorMessage) {
+  const dead = attemptNumber >= Number(notification.max_attempts || 5);
+  const delaySeconds = Math.min(3600, Math.pow(2, Math.max(0, attemptNumber - 1)) * 30);
+  await sql`
+    update notification_outbox
+    set state=${dead ? 'dead' : 'pending'},attempt_count=${attemptNumber},provider=${provider},last_error=${errorMessage},
+        available_at=case when ${dead ? 'dead' : 'pending'}='pending' then now()+(${String(delaySeconds)} || ' seconds')::interval else available_at end,
+        locked_at=null,locked_by=null
+    where id=${notification.id}
+  `;
+  return dead ? 'dead' : 'retry';
+}
+
+async function processNotificationBatchNative(sql, workerId = 'cloudflare-cron', limit = 200) {
+  const claimed = await sql`
+    with candidates as (
+      select id from notification_outbox
+      where state='pending' and available_at<=now() and (locked_at is null or locked_at < now()-interval '5 minutes')
+      order by created_at asc
+      for update skip locked
+      limit ${limit}
+    )
+    update notification_outbox n set locked_at=now(),locked_by=${workerId}
+    from candidates c where n.id=c.id returning n.*
+  `;
+
+  const results = [];
+  for (const n of claimed) {
+    const attemptNumber = Number(n.attempt_count || 0) + 1;
+    const configs = await sql`select * from notification_channel_configs where channel=${n.channel}`;
+    const provider = n.provider || configs[0]?.provider || 'internal';
+    if (!configs.length || !configs[0].enabled) {
+      const message = 'Notification channel is disabled';
+      await sql`
+        insert into notification_delivery_attempts(notification_id,attempt_number,provider,state,error_code,error_message)
+        values(${n.id},${attemptNumber},${provider},'failed','channel_disabled',${message})
+      `;
+      results.push({ id: n.id, state: await retryNotificationNative(sql, n, attemptNumber, provider, message) });
+      continue;
+    }
+
+    const templates = await sql`
+      select * from notification_templates
+      where template_key=${n.template_key} and channel=${n.channel} and active=true
+      order by version desc limit 1
+    `;
+    const template = templates[0];
+    const payload = n.payload || {};
+    const render = (value) => String(value || '').replace(/{{\s*([a-zA-Z0-9_.-]+)\s*}}/g, (_m, key) => payload[key] == null ? '' : String(payload[key]));
+    const subject = template?.subject_template ? render(template.subject_template) : undefined;
+    const body = template?.body_template ? render(template.body_template) : JSON.stringify(payload);
+
+    if (provider !== 'internal') {
+      const message = `No adapter registered for ${provider}`;
+      await sql`
+        insert into notification_delivery_attempts(notification_id,attempt_number,provider,state,error_code,error_message)
+        values(${n.id},${attemptNumber},${provider},'failed','provider_not_configured',${message})
+      `;
+      results.push({ id: n.id, state: await retryNotificationNative(sql, n, attemptNumber, provider, message) });
+      continue;
+    }
+
+    const providerMessageId = `internal:${n.recipient_id}:${Date.now()}`;
+    await sql`
+      insert into notification_delivery_attempts(
+        notification_id,attempt_number,provider,provider_message_id,state,request_payload,response_payload
+      ) values(
+        ${n.id},${attemptNumber},${provider},${providerMessageId},'sent',
+        ${JSON.stringify({ subject, body, recipientId: n.recipient_id })}::jsonb,'{}'::jsonb
+      )
+    `;
+    await sql`
+      update notification_outbox
+      set state='sent',attempt_count=${attemptNumber},provider=${provider},provider_message_id=${providerMessageId},
+          sent_at=now(),locked_at=null,locked_by=null,last_error=null
+      where id=${n.id}
+    `;
+    await sql`
+      insert into audit_log(principal_role,principal_actor_id,action,object_type,object_id,rule_basis,metadata)
+      values('system',null,'notification_sent','notification',${n.id},${provider},${JSON.stringify({ channel: n.channel, templateKey: n.template_key, source: 'cloudflare_cron' })}::jsonb)
+    `;
+    results.push({ id: n.id, state: 'sent', providerMessageId });
+  }
+  return results;
+}
+
+async function runScheduledOperations(env) {
+  const sql = await sqlFor(env);
+  const deadlines = await sweepExpiredDeadlinesNative(sql, 200);
+  const notifications = await processNotificationBatchNative(sql, 'cloudflare-cron', 200);
+  console.log(JSON.stringify({ event: 'scheduled_operations_complete', deadlines: deadlines.length, notifications: notifications.length }));
+  return { deadlines, notifications };
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type,x-admin-api-key,authorization', 'access-control-allow-methods': 'GET,POST,OPTIONS' } });
     const url = new URL(request.url);
 
     if (url.pathname === '/' || url.pathname === '/health' || url.pathname === '/edge-health') {
-      return json({ ok: true, service: 'roviq-core', runtime: 'cloudflare-worker', database: 'neon', aiTriage: 'shadow', engine: 'native-worker-v3', local: '/api/local' });
+      return json({ ok: true, service: 'roviq-core', runtime: 'cloudflare-worker', database: 'neon', aiTriage: 'shadow', engine: 'native-worker-v3', local: '/api/local', scheduledOperations: 'cloudflare-cron' });
     }
 
     try {
@@ -162,7 +305,7 @@ export default {
       if (url.pathname === '/ready') {
         const sql = await sqlFor(env);
         const rows = await sql`select now() as database_time, current_database() as database_name, current_user as database_user`;
-        return json({ ok: true, service: 'roviq-core', database: 'reachable', ...rows[0], aiBinding: Boolean(env.AI) });
+        return json({ ok: true, service: 'roviq-core', database: 'reachable', ...rows[0], aiBinding: Boolean(env.AI), scheduledOperations: 'cloudflare-cron' });
       }
 
       if (url.pathname === '/api/core/status') {
@@ -223,5 +366,9 @@ export default {
     } catch (error) {
       return json({ ok: false, error: 'core_runtime_error', detail: String(error?.message || error) }, 500);
     }
+  },
+
+  async scheduled(_controller, env, ctx) {
+    ctx.waitUntil(runScheduledOperations(env));
   }
 };
