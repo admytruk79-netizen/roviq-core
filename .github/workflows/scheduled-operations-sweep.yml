@@ -1,74 +1,22 @@
 name: Scheduled Operations Sweep
 
 on:
-  schedule:
-    - cron: '*/10 * * * *'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  sweep:
+  verify-native-cron:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    env:
-      CORE_API_URL: https://roviq-core.onrender.com
-      SWEEP_ADMIN_EMAIL: ${{ secrets.BOOTSTRAP_ADMIN_EMAIL }}
-      SWEEP_ADMIN_PASSWORD: ${{ secrets.BOOTSTRAP_ADMIN_PASSWORD }}
+    timeout-minutes: 2
     steps:
-      - name: Log in as the operations admin identity
+      - name: Verify native Cloudflare scheduled operations
         run: |
-          test -n "$SWEEP_ADMIN_EMAIL" || (echo "BOOTSTRAP_ADMIN_EMAIL repo secret is missing" && exit 1)
-          test -n "$SWEEP_ADMIN_PASSWORD" || (echo "BOOTSTRAP_ADMIN_PASSWORD repo secret is missing" && exit 1)
-
-          login_body=$(jq -n --arg email "$SWEEP_ADMIN_EMAIL" --arg password "$SWEEP_ADMIN_PASSWORD" '{email:$email,password:$password}')
-
-          status=""
-          body=""
-          for i in $(seq 1 6); do
-            response=$(curl -sS -w '\n%{http_code}' --max-time 20 -X POST \
-              -H "Content-Type: application/json" \
-              -d "$login_body" \
-              "$CORE_API_URL/api/auth/login" || true)
-            status=$(echo "$response" | tail -n1)
-            body=$(echo "$response" | sed '$d')
-            if [ "$status" = "200" ]; then break; fi
-            echo "Login attempt $i failed (HTTP $status), retrying (Render may be waking up)..." >&2
-            sleep 10
-          done
-
-          if [ "$status" != "200" ]; then
-            echo "Could not log in as the operations admin identity:" >&2
-            echo "$body" >&2
+          response=$(curl -sS --max-time 20 https://roviq-core.admytruk79.workers.dev/health)
+          echo "$response"
+          echo "$response" | grep -q '"scheduledOperations":"cloudflare-cron"' || (
+            echo "Native Cloudflare operations cron is not advertised by production Core" >&2
             exit 1
-          fi
-
-          token=$(echo "$body" | jq -r '.accessToken')
-          test -n "$token" && [ "$token" != "null" ] || (echo "Login succeeded but no accessToken was returned" && exit 1)
-          echo "::add-mask::$token"
-          echo "ADMIN_TOKEN=$token" >> "$GITHUB_ENV"
-
-      - name: Sweep expired workflow deadlines
-        run: |
-          response=$(curl -sS -w '\n%{http_code}' --max-time 20 -X POST \
-            -H "Authorization: Bearer $ADMIN_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d '{"limit":200}' \
-            "$CORE_API_URL/api/admin/operations/sweep-deadlines")
-          status=$(echo "$response" | tail -n1)
-          body=$(echo "$response" | sed '$d')
-          echo "sweep-deadlines response: $body"
-          test "$status" = "200" || (echo "sweep-deadlines failed (HTTP $status)" >&2 && exit 1)
-
-      - name: Process the notification outbox
-        run: |
-          response=$(curl -sS -w '\n%{http_code}' --max-time 20 -X POST \
-            -H "Authorization: Bearer $ADMIN_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d '{"workerId":"scheduled-cron","limit":200}' \
-            "$CORE_API_URL/api/admin/notifications/process")
-          status=$(echo "$response" | tail -n1)
-          body=$(echo "$response" | sed '$d')
-          echo "notifications/process response: $body"
-          test "$status" = "200" || (echo "notifications/process failed (HTTP $status)" >&2 && exit 1)
+          )
+          echo "Scheduled operations run natively in the ROVIQ Core Worker every 10 minutes."
