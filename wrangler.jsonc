@@ -15,6 +15,12 @@
   "ai": {
     "binding": "AI"
   },
+  "services": [
+    {
+      "binding": "ROVIQ_LOCAL",
+      "service": "roviq-local2"
+    }
+  ],
   "migrations": [
     {
       "tag": "v1",
