@@ -1,7 +1,9 @@
 const DEFAULT_LOCAL_ORIGIN = 'https://roviq-local2.admytruk79.workers.dev';
 
 const ROUTES = [
-  { core: /^\/api\/local\/health$/, upstream: () => '/api/health', methods: ['GET'] },
+  // The deployed Local worker does not expose /api/health consistently. Probe a
+  // read-only public endpoint and synthesize a stable Core health response.
+  { core: /^\/api\/local\/health$/, upstream: () => '/api/places', methods: ['GET'], healthProbe: true },
   { core: /^\/api\/local\/version$/, upstream: () => '/api/version', methods: ['GET'] },
   { core: /^\/api\/local\/places$/, upstream: () => '/api/places', methods: ['GET'] },
   { core: /^\/api\/local\/places\/(\d+)$/, upstream: (m) => `/api/places/${m[1]}`, methods: ['GET'] },
@@ -92,6 +94,24 @@ export async function handleLocalCoreRequest(request, env, url) {
       error: 'local_upstream_unreachable',
       detail: String(error?.message || error)
     }, 502);
+  }
+
+  if (selected.healthProbe) {
+    if (!upstreamResponse.ok) {
+      return json({
+        ok: false,
+        service: 'roviq-local',
+        integration: 'roviq-core',
+        upstreamStatus: upstreamResponse.status
+      }, 502);
+    }
+    return json({
+      ok: true,
+      service: 'roviq-local',
+      integration: 'roviq-core',
+      upstream: 'reachable',
+      upstreamStatus: upstreamResponse.status
+    });
   }
 
   const responseBody = await upstreamResponse.arrayBuffer();
