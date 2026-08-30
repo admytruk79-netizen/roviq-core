@@ -1,5 +1,5 @@
-import { createContext, useContext, useState, type ReactNode } from 'react';
-import { api, setToken } from './api';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { api, getToken, SESSION_EXPIRED_EVENT, setToken } from './api';
 import type { Principal } from './types';
 
 const PRINCIPAL_KEY = 'roviq_principal';
@@ -15,11 +15,17 @@ type AuthState = {
 const AuthContext = createContext<AuthState | null>(null);
 
 function loadStoredPrincipal(): Principal | null {
+  if (!getToken()) {
+    localStorage.removeItem(PRINCIPAL_KEY);
+    return null;
+  }
   const raw = localStorage.getItem(PRINCIPAL_KEY);
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as Principal;
+    const principal = JSON.parse(raw) as Principal;
+    return principal.role === 'admin' ? principal : null;
   } catch {
+    localStorage.removeItem(PRINCIPAL_KEY);
     return null;
   }
 }
@@ -28,6 +34,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [principal, setPrincipal] = useState<Principal | null>(loadStoredPrincipal);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  function clearSession(message?: string) {
+    setToken(null);
+    localStorage.removeItem(PRINCIPAL_KEY);
+    setPrincipal(null);
+    if (message) setError(message);
+  }
+
+  useEffect(() => {
+    const onExpired = () => clearSession('Your session expired. Please sign in again.');
+    window.addEventListener(SESSION_EXPIRED_EVENT, onExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired);
+  }, []);
 
   async function login(email: string, password: string) {
     setLoading(true);
@@ -42,7 +61,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       localStorage.setItem(PRINCIPAL_KEY, JSON.stringify(res.principal));
       setPrincipal(res.principal);
     } catch (e) {
-      if (!(e instanceof Error && e.message === 'not_admin')) setError('Invalid email or password.');
+      if (!(e instanceof Error && e.message === 'not_admin') && !(e instanceof Error && e.message.includes('session expired'))) setError('Invalid email or password.');
+      if (!(e instanceof Error && e.message === 'not_admin')) clearSession();
       throw new Error('login_failed');
     } finally {
       setLoading(false);
@@ -50,9 +70,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   function logout() {
-    setToken(null);
-    localStorage.removeItem(PRINCIPAL_KEY);
-    setPrincipal(null);
+    clearSession();
   }
 
   return <AuthContext.Provider value={{ principal, loading, error, login, logout }}>{children}</AuthContext.Provider>;
