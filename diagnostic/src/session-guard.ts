@@ -2,13 +2,24 @@ const TOKEN='roviq_diagnostic_token';
 const PRINCIPAL='roviq_diagnostic_principal';
 const nativeFetch=window.fetch.bind(window);
 
-function expired(token:string){
-  try{const p=JSON.parse(atob(token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))) as {exp?:number};return typeof p.exp==='number'&&p.exp*1000<=Date.now()}catch{return false}
+function usableToken(token:string){
+  try{
+    const p=JSON.parse(atob(token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))) as {exp?:number};
+    return typeof p.exp!=='number'||p.exp*1000>Date.now();
+  }catch{return false}
+}
+function validPrincipal(){
+  try{
+    const raw=localStorage.getItem(PRINCIPAL);
+    if(!raw)return false;
+    const p=JSON.parse(raw) as {role?:string;actorId?:string|null};
+    return p.role==='diagnostic'&&typeof p.actorId==='string'&&p.actorId.length>0;
+  }catch{return false}
 }
 function clear(){localStorage.removeItem(TOKEN);localStorage.removeItem(PRINCIPAL)}
 
 const stored=localStorage.getItem(TOKEN);
-if(stored&&expired(stored))clear();
+if(!stored||!usableToken(stored)||!validPrincipal())clear();
 
 window.fetch=async(input:RequestInfo|URL,init?:RequestInit)=>{
   const hadSession=Boolean(localStorage.getItem(TOKEN));
