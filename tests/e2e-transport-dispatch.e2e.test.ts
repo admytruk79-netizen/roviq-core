@@ -130,12 +130,15 @@ describe('transport dispatch end-to-end lifecycle', () => {
     expect(deadlines.rows.length).toBeGreaterThan(0);
     expect(deadlines.rows.every((row) => row.state === 'resolved')).toBe(true);
 
+    // This transport-only scenario has no repair provider pre-assigned. After delivery the
+    // tow provider returns the case to provider selection; a case with an already-related
+    // repair partner may use the explicit tow -> repair handoff covered by the cross-role test.
     const handoffRes = await app.inject({
       method: 'POST', url: `/api/maintenance/cases/${caseId}/transition`, headers: actorHeaders('tow', towActorId),
-      payload: { toState: 'repair_in_progress' }
+      payload: { toState: 'provider_selection' }
     });
     expect(handoffRes.statusCode).toBe(200);
-    expect(JSON.parse(handoffRes.body).case.state).toBe('repair_in_progress');
+    expect(JSON.parse(handoffRes.body).case.state).toBe('provider_selection');
 
     const timelineRes = await app.inject({ method: 'GET', url: `/api/maintenance/cases/${caseId}/timeline`, headers: adminHeaders() });
     const timelineEvents = JSON.parse(timelineRes.body).timeline.map((e: { event_type: string }) => e.event_type);
@@ -143,13 +146,13 @@ describe('transport dispatch end-to-end lifecycle', () => {
       'CASE_CREATED', 'SERVICE_PLAN_CREATED', 'CASE_TRIAGE', 'CASE_TOW_PENDING', 'TRANSPORT_REQUESTED',
       'TRANSPORT_ASSIGNED', 'CASE_TOW_IN_PROGRESS', 'TRANSPORT_ACCEPTED', 'TRANSPORT_EN_ROUTE',
       'TRANSPORT_ARRIVED', 'TRANSPORT_VEHICLE_LOADED', 'TRANSPORT_IN_TRANSIT', 'TRANSPORT_DELIVERED',
-      'CASE_REPAIR_IN_PROGRESS'
+      'CASE_PROVIDER_SELECTION'
     ]));
 
     // Isolation: a customer with no relation to this case must not be able to view it.
     const stranger = await app.inject({ method: 'POST', url: '/api/admin/actors', headers: adminHeaders(), payload: { actorType: 'customer' } });
-    const strangerCustomerId = JSON.parse(stranger.body).actor.id;
-    const forbiddenRes = await app.inject({ method: 'GET', url: `/api/maintenance/cases/${caseId}`, headers: actorHeaders('customer', strangerCustomerId) });
-    expect(forbiddenRes.statusCode).toBe(403);
+    const strangerId = JSON.parse(stranger.body).actor.id;
+    const strangerCase = await app.inject({ method: 'GET', url: `/api/maintenance/cases/${caseId}`, headers: actorHeaders('customer', strangerId) });
+    expect(strangerCase.statusCode).toBe(403);
   });
 });
