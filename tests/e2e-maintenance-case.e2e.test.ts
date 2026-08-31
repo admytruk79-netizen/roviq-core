@@ -30,7 +30,15 @@ describe('maintenance case end-to-end lifecycle', () => {
     const customer = await app.inject({ method: 'POST', url: '/api/admin/actors', headers: adminHeaders(), payload: { actorType: 'customer' } });
     customerActorId = JSON.parse(customer.body).actor.id;
 
-    const partner = await app.inject({ method: 'POST', url: '/api/admin/actors', headers: adminHeaders(), payload: { actorType: 'shop', domain: 'maintenance' } });
+    // Give this scenario's provider a deterministic routing advantage so other
+    // E2E files can create repair-capable shops in the shared CI database
+    // without making this lifecycle test order-dependent.
+    const partner = await app.inject({
+      method: 'POST',
+      url: '/api/admin/actors',
+      headers: adminHeaders(),
+      payload: { actorType: 'shop', domain: 'maintenance', attributes: { rating: 1000000 } }
+    });
     partnerActorId = JSON.parse(partner.body).actor.id;
 
     // No admin endpoint grants capabilities yet, so this is seeded directly.
