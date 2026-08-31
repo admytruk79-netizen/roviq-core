@@ -40,6 +40,7 @@ export async function principalMiddleware(req: FastifyRequest, reply: FastifyRep
 
 export function requireRole(...allowed: RoviqRole[]) {
   return async (req: FastifyRequest, reply: FastifyReply) => {
+    if (!req.principal) return reply.code(401).send({ error:'bearer_token_required' });
     if (!allowed.includes(req.principal.role)) return reply.code(403).send({ error:'forbidden' });
   };
 }
