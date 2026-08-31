@@ -22,6 +22,40 @@ jobs:
       - name: Validate Cloudflare Worker bundle
         run: npx wrangler deploy --dry-run
 
+  portal-builds:
+    name: portal-build (${{ matrix.portal }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        portal: [customer, ops, partner, diagnostic, tow, parts]
+        include:
+          - portal: customer
+            directory: web
+          - portal: ops
+            directory: ops
+          - portal: partner
+            directory: partner
+          - portal: diagnostic
+            directory: diagnostic
+          - portal: tow
+            directory: tow
+          - portal: parts
+            directory: parts-portal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install ${{ matrix.portal }} dependencies
+        working-directory: ${{ matrix.directory }}
+        run: npm ci --no-audit --no-fund
+      - name: Build ${{ matrix.portal }} portal
+        working-directory: ${{ matrix.directory }}
+        env:
+          VITE_API_BASE_URL: https://roviq-core.admytruk79.workers.dev
+        run: npm run build
+
   system-acceptance:
     runs-on: ubuntu-latest
     services:
