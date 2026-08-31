@@ -35,6 +35,17 @@ export async function diagnosticRoutes(app: FastifyInstance) {
     if (!owned.rowCount) return reply.code(403).send({ error:'diagnostic_demand_not_assigned' });
     const caseId = owned.rows[0].case_id ?? (await pool.query('select id from service_cases where demand_id=$1 order by created_at desc limit 1',[id])).rows[0]?.id ?? null;
 
+    // Recording a real finding means diagnostic work has started. Accept a finding while the
+    // assigned case is still pending by advancing it through the explicit in-progress state
+    // before applying the finding's disposition. This preserves the state machine instead of
+    // attempting an invalid diagnostic_pending -> provider/tow/repair jump.
+    if (caseId) {
+      const current = await pool.query('select state from service_cases where id=$1',[caseId]);
+      if (current.rows[0]?.state === 'diagnostic_pending') {
+        await transitionCase(req.principal,caseId,'diagnostic_in_progress',{ source:'diagnostic_finding_started' });
+      }
+    }
+
     const r = await pool.query(
       `insert into diagnostic_findings(demand_id,case_id,diagnostic_actor_id,finding_code,summary,drivability,disposition,confidence,details)
        values($1,$2,$3,$4,$5,$6,$7,$8,$9) returning *`,
