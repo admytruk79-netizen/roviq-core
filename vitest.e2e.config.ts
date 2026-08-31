@@ -1,10 +1,14 @@
 import { defineConfig } from 'vitest/config';
 
-// Runs only the end-to-end tests (`.e2e.test.ts`). Requires a real Postgres
-// database with migrations applied — see the "End-to-end tests" section in
-// README.md. Not run by CI; run locally with `npm run test:e2e`.
+// End-to-end suites share one real Postgres database. Run test files
+// sequentially so actors/capabilities created by one scenario cannot race
+// another scenario's routing assertions. CI applies migrations to a fresh
+// database before invoking this configuration.
 export default defineConfig({
   test: {
-    include: ['tests/**/*.e2e.test.ts']
+    include: ['tests/**/*.e2e.test.ts'],
+    fileParallelism: false,
+    maxWorkers: 1,
+    minWorkers: 1
   }
 });
