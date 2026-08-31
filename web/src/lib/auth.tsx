@@ -1,5 +1,5 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { api, getToken, SESSION_EXPIRED_EVENT, setToken } from './api';
+import { createContext, useContext, useState, type ReactNode } from 'react';
+import { api, setToken } from './api';
 import type { Principal } from './types';
 
 const PRINCIPAL_KEY = 'roviq_principal';
@@ -15,17 +15,11 @@ type AuthState = {
 const AuthContext = createContext<AuthState | null>(null);
 
 function loadStoredPrincipal(): Principal | null {
-  if (!getToken()) {
-    localStorage.removeItem(PRINCIPAL_KEY);
-    return null;
-  }
   const raw = localStorage.getItem(PRINCIPAL_KEY);
   if (!raw) return null;
   try {
-    const principal = JSON.parse(raw) as Principal;
-    return principal.role === 'customer' && principal.actorId ? principal : null;
+    return JSON.parse(raw) as Principal;
   } catch {
-    localStorage.removeItem(PRINCIPAL_KEY);
     return null;
   }
 }
@@ -35,56 +29,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function clearSession(message?: string) {
-    setToken(null);
-    localStorage.removeItem(PRINCIPAL_KEY);
-    setPrincipal(null);
-    if (message) setError(message);
-  }
-
-  useEffect(() => {
-    const onExpired = () => clearSession('Your session expired. Please sign in again.');
-    window.addEventListener(SESSION_EXPIRED_EVENT, onExpired);
-    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired);
-  }, []);
-
   async function login(email: string, password: string) {
     setLoading(true);
     setError(null);
     try {
-      const result = await api.post<{ accessToken: string; principal: Principal }>(
-        '/api/auth/login',
-        { email: email.trim(), password }
-      );
+      const res = await api.post<{ accessToken: string; principal: Principal }>('/api/auth/login', { email, password });
 
-      let session = result;
-      if (result.principal.role === 'admin') {
-        setToken(result.accessToken);
-        session = await api.post<{ accessToken: string; principal: Principal }>(
+      if (res.principal.role === 'admin') {
+        setToken(res.accessToken);
+        const testSession = await api.post<{ accessToken: string; principal: Principal; recoveredCaseCount?: number }>(
           '/api/admin/testing/customer-session',
           {}
         );
+        setToken(testSession.accessToken);
+        localStorage.setItem(PRINCIPAL_KEY, JSON.stringify(testSession.principal));
+        setPrincipal(testSession.principal);
+        return;
       }
 
-      if (session.principal.role !== 'customer' || !session.principal.actorId) {
-        throw new Error('This portal requires a customer account.');
+      if (res.principal.role !== 'customer' || !res.principal.actorId) {
+        setToken(null);
+        localStorage.removeItem(PRINCIPAL_KEY);
+        setError('This portal requires a customer account.');
+        throw new Error('wrong_role');
       }
 
-      setToken(session.accessToken);
-      localStorage.setItem(PRINCIPAL_KEY, JSON.stringify(session.principal));
-      setPrincipal(session.principal);
+      setToken(res.accessToken);
+      localStorage.setItem(PRINCIPAL_KEY, JSON.stringify(res.principal));
+      setPrincipal(res.principal);
     } catch (err) {
-      clearSession();
-      const message = err instanceof Error ? err.message : 'Unable to sign in';
-      setError(message);
-      throw err;
+      if (err instanceof Error && err.message === 'wrong_role') throw err;
+      setToken(null);
+      localStorage.removeItem(PRINCIPAL_KEY);
+      setError('Invalid email or password.');
+      throw new Error('login_failed');
     } finally {
       setLoading(false);
     }
   }
 
   function logout() {
-    clearSession();
+    setToken(null);
+    localStorage.removeItem(PRINCIPAL_KEY);
+    setPrincipal(null);
   }
 
   return <AuthContext.Provider value={{ principal, loading, error, login, logout }}>{children}</AuthContext.Provider>;
