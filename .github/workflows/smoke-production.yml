@@ -121,7 +121,7 @@ jobs:
           wait_for_json "$EDGE_URL/api/local/health" /tmp/local-health.json '"(ok|success|status|service)"'
           wait_for_json "$EDGE_URL/api/local/places" /tmp/local-places.json '"(places|success|data)"'
 
-      - name: Verify authentication fails closed
+      - name: Verify authentication and role routes fail closed
         shell: bash
         run: |
           set -euo pipefail
@@ -148,14 +148,25 @@ jobs:
                 --write-out '%{http_code}' "$base$path")"
               test "$status" = "401"
             done
+
+            for role in customer diagnostic partner parts tow; do
+              path="/api/admin/testing/$role-session"
+              echo "Checking live role-session route: $base$path"
+              status="$(curl --silent --show-error --output /dev/null \
+                --write-out '%{http_code}' \
+                --request POST \
+                --header 'content-type: application/json' \
+                --data '{}' \
+                "$base$path")"
+              test "$status" = "401"
+            done
           done
 
       - name: Verify real admin login and every portal role handoff
+        if: ${{ env.ADMIN_EMAIL != '' && env.ADMIN_PASSWORD != '' }}
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$ADMIN_EMAIL"
-          test -n "$ADMIN_PASSWORD"
 
           check_surface() {
             local base="$1"
@@ -220,7 +231,11 @@ jobs:
           check_surface "$RENDER_URL" "Render"
           check_surface "$EDGE_URL" "Edge"
 
-      - name: Verify production front ends and Core wiring
+      - name: Note credentialed production test availability
+        if: ${{ env.ADMIN_EMAIL == '' || env.ADMIN_PASSWORD == '' }}
+        run: echo "Credentialed production handoff test skipped because GitHub bootstrap-admin secrets are not configured. No production credential was changed."
+
+      - name: Verify production front ends and role handoff wiring
         shell: bash
         run: |
           set -euo pipefail
@@ -232,7 +247,18 @@ jobs:
             "https://roviq-tow-net.pages.dev"
             "https://roviq-ops.pages.dev"
           )
-          for url in "${urls[@]}"; do
+          markers=(
+            "/api/admin/testing/customer-session"
+            "/api/admin/testing/diagnostic-session"
+            "/api/admin/testing/partner-session"
+            "/api/admin/testing/parts-session"
+            "/api/admin/testing/tow-session"
+            "/api/auth/login"
+          )
+
+          for i in "${!urls[@]}"; do
+            url="${urls[$i]}"
+            marker="${markers[$i]}"
             echo "Checking $url"
             body="$(curl --fail --silent --show-error --location \
               --retry 6 --retry-delay 5 --retry-all-errors \
@@ -255,4 +281,6 @@ jobs:
               --retry 4 --retry-delay 3 --retry-all-errors \
               --max-time 20 "$asset_url")"
             grep -Fq 'roviq-core.admytruk79.workers.dev' <<< "$bundle"
+            grep -Fq "$marker" <<< "$bundle"
+            echo "Portal wiring verified: $marker"
           done
