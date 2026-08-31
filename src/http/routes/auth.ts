@@ -12,7 +12,7 @@ const createIdentityBody = z.object({
   actorId: z.string().uuid().nullable().optional()
 });
 
-type TestRole='partner'|'tow'|'diagnostic'|'parts';
+type TestRole='customer'|'partner'|'tow'|'diagnostic'|'parts';
 
 async function adminTestSession(req:any, reply:any, role:TestRole) {
   const domain = await pool.query("select id from domains where code='maintenance' limit 1");
@@ -26,6 +26,7 @@ async function adminTestSession(req:any, reply:any, role:TestRole) {
     const displayName = role === 'tow' ? 'ROVIQ Admin Test Tow / Valet'
       : role === 'diagnostic' ? 'ROVIQ Admin Test Diagnostic'
       : role === 'parts' ? 'ROVIQ Admin Test Parts Vendor'
+      : role === 'customer' ? 'ROVIQ Admin Test Customer'
       : 'ROVIQ Admin Test Partner';
     actor = await pool.query(
       `insert into actors(domain_id,actor_type,status,attributes) values($1,$2,'active',$3) returning id`,
@@ -50,64 +51,7 @@ export async function authRoutes(app: FastifyInstance) {
     return { accessToken, tokenType:'Bearer', expiresIn:28800, principal:{ role:identity.role, actorId:identity.actor_id } };
   });
 
-  app.post('/api/admin/testing/customer-session', { preHandler: requireRole('admin') }, async (req, reply) => {
-    const client = await pool.connect();
-    try {
-      await client.query('begin');
-      const domain = await client.query("select id from domains where code='maintenance' limit 1");
-      if (!domain.rowCount) {
-        await client.query('rollback');
-        return reply.code(500).send({ error:'maintenance_domain_missing' });
-      }
-
-      let actor = await client.query(
-        `select id from actors
-         where actor_type='customer'
-           and status='active'
-           and attributes->>'testContext'='admin_customer_portal'
-         order by created_at asc
-         limit 1`
-      );
-
-      if (!actor.rowCount) {
-        actor = await client.query(
-          `insert into actors(domain_id,actor_type,status,attributes)
-           values($1,'customer','active',$2)
-           returning id`,
-          [domain.rows[0].id, JSON.stringify({ testContext:'admin_customer_portal', displayName:'ROVIQ Admin Test Customer' })]
-        );
-      }
-
-      const actorId = actor.rows[0].id as string;
-      const recovered = await client.query(
-        `update service_cases c
-         set customer_actor_id=$1, updated_at=now()
-         where c.customer_actor_id is null
-           and exists (
-             select 1 from audit_log a
-             where a.object_type='service_case'
-               and a.object_id=c.id::text
-               and a.action='create_case'
-               and a.principal_role='admin'
-               and a.principal_actor_id is null
-           )
-         returning c.id`,
-        [actorId]
-      );
-
-      await client.query('commit');
-      const principal = { role:'customer' as const, actorId };
-      const accessToken = await issueAccessToken(`admin-customer-test:${actorId}`, principal);
-      await audit(req.principal,'create_test_customer_session','actor',actorId,'admin_testing_only',{ recoveredCaseCount:recovered.rowCount ?? 0 });
-      return { accessToken, tokenType:'Bearer', expiresIn:28800, principal, testing:true, recoveredCaseCount:recovered.rowCount ?? 0 };
-    } catch (error) {
-      await client.query('rollback');
-      throw error;
-    } finally {
-      client.release();
-    }
-  });
-
+  app.post('/api/admin/testing/customer-session', { preHandler: requireRole('admin') }, async (req, reply) => adminTestSession(req,reply,'customer'));
   app.post('/api/admin/testing/partner-session', { preHandler: requireRole('admin') }, async (req, reply) => adminTestSession(req,reply,'partner'));
   app.post('/api/admin/testing/tow-session', { preHandler: requireRole('admin') }, async (req, reply) => adminTestSession(req,reply,'tow'));
   app.post('/api/admin/testing/diagnostic-session', { preHandler: requireRole('admin') }, async (req, reply) => adminTestSession(req,reply,'diagnostic'));
