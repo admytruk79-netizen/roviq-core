@@ -23,9 +23,15 @@ function loadStoredPrincipal(): Principal | null {
   if (!raw) return null;
   try {
     const principal = JSON.parse(raw) as Principal;
-    return principal.role === 'admin' ? principal : null;
+    if (principal.role !== 'admin') {
+      localStorage.removeItem(PRINCIPAL_KEY);
+      setToken(null);
+      return null;
+    }
+    return principal;
   } catch {
     localStorage.removeItem(PRINCIPAL_KEY);
+    setToken(null);
     return null;
   }
 }
@@ -51,18 +57,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function login(email: string, password: string) {
     setLoading(true);
     setError(null);
+
+    // Ops stays direct-admin only. Start clean so an old bearer/principal pair
+    // cannot influence a new administrator login attempt.
+    clearSession();
+
     try {
-      const res = await api.post<{ accessToken: string; principal: Principal }>('/api/auth/login', { email, password });
+      const res = await api.post<{ accessToken: string; principal: Principal }>(
+        '/api/auth/login',
+        { email: email.trim(), password }
+      );
       if (res.principal.role !== 'admin') {
-        setError('This account is not an ops staff account.');
         throw new Error('not_admin');
       }
       setToken(res.accessToken);
       localStorage.setItem(PRINCIPAL_KEY, JSON.stringify(res.principal));
       setPrincipal(res.principal);
     } catch (e) {
-      if (!(e instanceof Error && e.message === 'not_admin') && !(e instanceof Error && e.message.includes('session expired'))) setError('Invalid email or password.');
-      if (!(e instanceof Error && e.message === 'not_admin')) clearSession();
+      const message = e instanceof Error && e.message === 'not_admin'
+        ? 'This account is not an ops staff account.'
+        : e instanceof Error && e.message.includes('session expired')
+          ? 'Your session expired. Please sign in again.'
+          : 'Invalid email or password.';
+      clearSession(message);
       throw new Error('login_failed');
     } finally {
       setLoading(false);
