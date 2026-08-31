@@ -27,9 +27,15 @@ function readPrincipal(): Principal | null {
   if (!raw) return null;
   try {
     const principal = JSON.parse(raw) as Principal;
-    return principal.role === 'partner' && principal.actorId ? principal : null;
+    if (principal.role !== 'partner' || !principal.actorId) {
+      localStorage.removeItem(PRINCIPAL_KEY);
+      setToken(null);
+      return null;
+    }
+    return principal;
   } catch {
     localStorage.removeItem(PRINCIPAL_KEY);
+    setToken(null);
     return null;
   }
 }
@@ -55,6 +61,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function login(email: string, password: string) {
     setLoading(true);
     setError(null);
+
+    // Every login starts clean so a remembered/expired partner session cannot
+    // influence the new admin -> partner handoff.
+    clearSession();
+
     try {
       const result = await api.post<{ accessToken: string; principal: Principal }>(
         '/api/auth/login',
