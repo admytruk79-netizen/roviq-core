@@ -1,0 +1,231 @@
+name: Verify Live Customer Ops Diagnostic Journey
+
+on:
+  workflow_dispatch:
+    inputs:
+      admin_email:
+        description: 'Existing production admin email'
+        required: true
+      admin_password:
+        description: 'Existing production admin password'
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: roviq-live-customer-ops-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      API_BASE: https://roviq-core.admytruk79.workers.dev
+      ADMIN_EMAIL: ${{ inputs.admin_email }}
+      ADMIN_PASSWORD: ${{ inputs.admin_password }}
+      RUN_TAG: live-customer-ops-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Mask credentials
+        shell: bash
+        run: |
+          echo "::add-mask::$ADMIN_EMAIL"
+          echo "::add-mask::$ADMIN_PASSWORD"
+
+      - name: Run live Customer to Ops to Diagnostic journey
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          admin_token=""
+          customer_token=""
+          customer_actor=""
+          diagnostic_token=""
+          diagnostic_actor=""
+          case_id=""
+          demand_id=""
+
+          cleanup() {
+            if [[ -n "$case_id" && -n "$admin_token" ]]; then
+              cleanup_payload="$(jq -cn --arg runTag "$RUN_TAG" '{toState:"cancelled",metadata:{source:"github_live_acceptance_cleanup",runTag:$runTag}}')"
+              cleanup_status="$(curl --silent --show-error --location \
+                --max-time 25 \
+                --output /tmp/cleanup.json \
+                --write-out '%{http_code}' \
+                --request POST \
+                --header 'content-type: application/json' \
+                --header "authorization: Bearer $admin_token" \
+                --data "$cleanup_payload" \
+                "$API_BASE/api/maintenance/cases/$case_id/transition" || true)"
+              if [[ "$cleanup_status" == "200" ]]; then
+                echo "Cleaned up live acceptance case $case_id by cancelling it."
+              else
+                echo "WARNING: live acceptance cleanup returned HTTP ${cleanup_status:-none} for case $case_id" >&2
+                cat /tmp/cleanup.json >&2 || true
+              fi
+            fi
+          }
+          trap cleanup EXIT
+
+          login_payload="$(jq -cn --arg email "$ADMIN_EMAIL" --arg password "$ADMIN_PASSWORD" '{email:$email,password:$password}')"
+          login_status="$(curl --silent --show-error --location \
+            --max-time 25 \
+            --output /tmp/admin-login.json \
+            --write-out '%{http_code}' \
+            --header 'content-type: application/json' \
+            --data "$login_payload" \
+            "$API_BASE/api/auth/login")"
+          test "$login_status" = "200"
+          admin_token="$(jq -r '.accessToken // empty' /tmp/admin-login.json)"
+          test -n "$admin_token"
+          test "$(jq -r '.principal.role // empty' /tmp/admin-login.json)" = "admin"
+          echo "::add-mask::$admin_token"
+          echo "Admin login verified."
+
+          get_role_session() {
+            local role="$1"
+            local output="/tmp/${role}-session.json"
+            local status
+            status="$(curl --silent --show-error --location \
+              --max-time 25 \
+              --output "$output" \
+              --write-out '%{http_code}' \
+              --request POST \
+              --header 'content-type: application/json' \
+              --header "authorization: Bearer $admin_token" \
+              --data '{}' \
+              "$API_BASE/api/admin/testing/${role}-session")"
+            test "$status" = "200"
+            test "$(jq -r '.principal.role // empty' "$output")" = "$role"
+            test -n "$(jq -r '.principal.actorId // empty' "$output")"
+            test -n "$(jq -r '.accessToken // empty' "$output")"
+          }
+
+          get_role_session customer
+          customer_token="$(jq -r '.accessToken' /tmp/customer-session.json)"
+          customer_actor="$(jq -r '.principal.actorId' /tmp/customer-session.json)"
+          echo "::add-mask::$customer_token"
+
+          get_role_session diagnostic
+          diagnostic_token="$(jq -r '.accessToken' /tmp/diagnostic-session.json)"
+          diagnostic_actor="$(jq -r '.principal.actorId' /tmp/diagnostic-session.json)"
+          echo "::add-mask::$diagnostic_token"
+          echo "Customer and Diagnostic test sessions verified."
+
+          demand_payload="$(jq -cn --arg runTag "$RUN_TAG" '{domain:"maintenance",demandType:"live_acceptance",urgency:"normal",attributes:{liveAcceptance:true,runTag:$runTag,source:"github_live_customer_ops_diagnostic"}}')"
+          demand_status="$(curl --silent --show-error --location \
+            --max-time 25 \
+            --output /tmp/demand.json \
+            --write-out '%{http_code}' \
+            --request POST \
+            --header 'content-type: application/json' \
+            --header "authorization: Bearer $customer_token" \
+            --data "$demand_payload" \
+            "$API_BASE/api/demands")"
+          test "$demand_status" = "201"
+          demand_id="$(jq -r '.demand.id // empty' /tmp/demand.json)"
+          case_id="$(jq -r '.case.id // empty' /tmp/demand.json)"
+          test -n "$demand_id"
+          test -n "$case_id"
+          test "$(jq -r '.case.state // empty' /tmp/demand.json)" = "triage"
+          echo "Customer created live acceptance case $case_id."
+
+          customer_cases_status="$(curl --silent --show-error --location \
+            --max-time 25 \
+            --output /tmp/customer-cases.json \
+            --write-out '%{http_code}' \
+            --header "authorization: Bearer $customer_token" \
+            "$API_BASE/api/customers/me/cases")"
+          test "$customer_cases_status" = "200"
+          jq -e --arg caseId "$case_id" '.cases | any(.id == $caseId)' /tmp/customer-cases.json >/dev/null
+          echo "Customer portal projection contains the new case."
+
+          ops_status="$(curl --silent --show-error --location \
+            --max-time 25 \
+            --output /tmp/admin-cases.json \
+            --write-out '%{http_code}' \
+            --header "authorization: Bearer $admin_token" \
+            "$API_BASE/api/admin/cases?limit=200")"
+          test "$ops_status" = "200"
+          jq -e --arg caseId "$case_id" --arg customerActor "$customer_actor" \
+            '.cases | any(.id == $caseId and .customer_actor_id == $customerActor and .state == "triage")' \
+            /tmp/admin-cases.json >/dev/null
+          echo "Ops projection contains the same Customer case."
+
+          diagnostic_pending_payload='{"toState":"diagnostic_pending","metadata":{"source":"github_live_customer_ops_diagnostic"}}'
+          transition_status="$(curl --silent --show-error --location \
+            --max-time 25 \
+            --output /tmp/diagnostic-pending.json \
+            --write-out '%{http_code}' \
+            --request POST \
+            --header 'content-type: application/json' \
+            --header "authorization: Bearer $admin_token" \
+            --data "$diagnostic_pending_payload" \
+            "$API_BASE/api/maintenance/cases/$case_id/transition")"
+          test "$transition_status" = "200"
+          test "$(jq -r '.case.state // empty' /tmp/diagnostic-pending.json)" = "diagnostic_pending"
+
+          offer_payload="$(jq -cn --arg demandId "$demand_id" --arg actorId "$diagnostic_actor" --arg runTag "$RUN_TAG" '{demandId:$demandId,actorId:$actorId,rank:1,ruleBasis:("live_acceptance_" + $runTag)}')"
+          offer_status="$(curl --silent --show-error --location \
+            --max-time 25 \
+            --output /tmp/diagnostic-offer.json \
+            --write-out '%{http_code}' \
+            --request POST \
+            --header 'content-type: application/json' \
+            --header "authorization: Bearer $admin_token" \
+            --data "$offer_payload" \
+            "$API_BASE/api/admin/offers")"
+          test "$offer_status" = "201"
+          offer_id="$(jq -r '.offer.id // empty' /tmp/diagnostic-offer.json)"
+          test -n "$offer_id"
+          test "$(jq -r '.offer.case_id // empty' /tmp/diagnostic-offer.json)" = "$case_id"
+
+          queue_status="$(curl --silent --show-error --location \
+            --max-time 25 \
+            --output /tmp/diagnostic-queue-offered.json \
+            --write-out '%{http_code}' \
+            --header "authorization: Bearer $diagnostic_token" \
+            "$API_BASE/api/diagnostics/me/queue")"
+          test "$queue_status" = "200"
+          jq -e --arg caseId "$case_id" --arg offerId "$offer_id" \
+            '.queue | any(.case_id == $caseId and .offer_id == $offerId and .outcome == "offered")' \
+            /tmp/diagnostic-queue-offered.json >/dev/null
+          echo "Diagnostic portal received the live case offer."
+
+          accept_status="$(curl --silent --show-error --location \
+            --max-time 25 \
+            --output /tmp/diagnostic-accepted.json \
+            --write-out '%{http_code}' \
+            --request POST \
+            --header 'content-type: application/json' \
+            --header "authorization: Bearer $diagnostic_token" \
+            --data '{"outcome":"accepted"}' \
+            "$API_BASE/api/offers/$offer_id/respond")"
+          test "$accept_status" = "200"
+          test "$(jq -r '.case.state // empty' /tmp/diagnostic-accepted.json)" = "diagnostic_in_progress"
+
+          accepted_queue_status="$(curl --silent --show-error --location \
+            --max-time 25 \
+            --output /tmp/diagnostic-queue-accepted.json \
+            --write-out '%{http_code}' \
+            --header "authorization: Bearer $diagnostic_token" \
+            "$API_BASE/api/diagnostics/me/queue")"
+          test "$accepted_queue_status" = "200"
+          jq -e --arg caseId "$case_id" --arg offerId "$offer_id" \
+            '.queue | any(.case_id == $caseId and .offer_id == $offerId and .outcome == "accepted")' \
+            /tmp/diagnostic-queue-accepted.json >/dev/null
+
+          timeline_status="$(curl --silent --show-error --location \
+            --max-time 25 \
+            --output /tmp/timeline.json \
+            --write-out '%{http_code}' \
+            --header "authorization: Bearer $admin_token" \
+            "$API_BASE/api/maintenance/cases/$case_id/timeline")"
+          test "$timeline_status" = "200"
+          for event in CASE_CREATED CASE_TRIAGE CASE_DIAGNOSTIC_PENDING CASE_DIAGNOSTIC_IN_PROGRESS; do
+            jq -e --arg event "$event" '.timeline | any(.event_type == $event)' /tmp/timeline.json >/dev/null
+          done
+
+          echo "LIVE JOURNEY PASSED: Customer -> Ops -> Diagnostic for case $case_id"
+          echo "The case will now be cancelled by the cleanup trap."
