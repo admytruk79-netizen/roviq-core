@@ -2,9 +2,9 @@ import type { FastifyInstance } from 'fastify';
 import { pool } from '../../db/pool.js';
 
 export async function healthRoutes(app: FastifyInstance) {
-  app.get('/health', async () => ({ ok: true, service: 'roviq-core' }));
+  app.get('/health', { config: { public: true } }, async () => ({ ok: true, service: 'roviq-core' }));
 
-  app.get('/ready', async (_req, reply) => {
+  app.get('/ready', { config: { public: true } }, async (_req, reply) => {
     try {
       const result = await pool.query('select now() as database_time');
       return {
