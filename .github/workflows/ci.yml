@@ -49,7 +49,12 @@ jobs:
           node-version: 22
       - name: Install ${{ matrix.portal }} dependencies
         working-directory: ${{ matrix.directory }}
-        run: npm ci --no-audit --no-fund
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --no-audit --no-fund
+          else
+            npm install --no-audit --no-fund
+          fi
       - name: Build ${{ matrix.portal }} portal
         working-directory: ${{ matrix.directory }}
         env:
