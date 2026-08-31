@@ -84,6 +84,22 @@ describe('ROVIQ system acceptance journey', () => {
     const diagnosticOffer = JSON.parse(diagnosticOfferRes.body).offer;
     expect(diagnosticOffer.case_id).toBe(caseId);
 
+    const offeredQueueRes = await app.inject({
+      method: 'GET',
+      url: '/api/diagnostics/me/queue',
+      headers: actorHeaders('diagnostic', diagnosticId)
+    });
+    expect(offeredQueueRes.statusCode).toBe(200);
+    const offeredQueueItem = JSON.parse(offeredQueueRes.body).queue.find(
+      (item: { offer_id: string }) => item.offer_id === diagnosticOffer.id
+    );
+    expect(offeredQueueItem).toMatchObject({
+      offer_id: diagnosticOffer.id,
+      case_id: caseId,
+      demand_id: demandId,
+      outcome: 'offered'
+    });
+
     const diagnosticAccept = await app.inject({
       method: 'POST',
       url: `/api/offers/${diagnosticOffer.id}/respond`,
@@ -92,6 +108,22 @@ describe('ROVIQ system acceptance journey', () => {
     });
     expect(diagnosticAccept.statusCode).toBe(200);
     expect(JSON.parse(diagnosticAccept.body).case.state).toBe('diagnostic_in_progress');
+
+    const acceptedQueueRes = await app.inject({
+      method: 'GET',
+      url: '/api/diagnostics/me/queue',
+      headers: actorHeaders('diagnostic', diagnosticId)
+    });
+    expect(acceptedQueueRes.statusCode).toBe(200);
+    const acceptedQueueItem = JSON.parse(acceptedQueueRes.body).queue.find(
+      (item: { offer_id: string }) => item.offer_id === diagnosticOffer.id
+    );
+    expect(acceptedQueueItem).toMatchObject({
+      offer_id: diagnosticOffer.id,
+      case_id: caseId,
+      demand_id: demandId,
+      outcome: 'accepted'
+    });
 
     const findingRes = await app.inject({
       method: 'POST',
