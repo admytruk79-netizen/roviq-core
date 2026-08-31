@@ -53,48 +53,56 @@ export async function authRoutes(app: FastifyInstance) {
   app.post('/api/admin/testing/customer-session', { preHandler: requireRole('admin') }, async (req, reply) => {
     const client = await pool.connect();
     try {
+      await client.query('begin');
       const domain = await client.query("select id from domains where code='maintenance' limit 1");
-      if (!domain.rowCount) return reply.code(500).send({ error:'maintenance_domain_missing' });
+      if (!domain.rowCount) {
+        await client.query('rollback');
+        return reply.code(500).send({ error:'maintenance_domain_missing' });
+      }
 
       let actor = await client.query(
-        `select id from actors where actor_type='customer' and status='active' and attributes->>'testContext'='admin_customer_portal' order by created_at asc limit 1`
+        `select id from actors
+         where actor_type='customer'
+           and status='active'
+           and attributes->>'testContext'='admin_customer_portal'
+         order by created_at asc
+         limit 1`
       );
+
       if (!actor.rowCount) {
         actor = await client.query(
-          `insert into actors(domain_id,actor_type,status,attributes) values($1,'customer','active',$2) returning id`,
-          [domain.rows[0].id,JSON.stringify({ testContext:'admin_customer_portal', displayName:'ROVIQ Admin Test Customer' })]
+          `insert into actors(domain_id,actor_type,status,attributes)
+           values($1,'customer','active',$2)
+           returning id`,
+          [domain.rows[0].id, JSON.stringify({ testContext:'admin_customer_portal', displayName:'ROVIQ Admin Test Customer' })]
         );
       }
 
       const actorId = actor.rows[0].id as string;
-      let recoveredCaseCount = 0;
-
-      // Legacy admin-created case recovery is useful, but it must never prevent
-      // a valid admin credential from opening the customer portal. Keep it in
-      // a savepoint so schema/data drift rolls back only this optional recovery.
-      try {
-        await client.query('savepoint customer_case_recovery');
-        const recovered = await client.query(
-          `update service_cases c set customer_actor_id=$1, updated_at=now()
-           where c.customer_actor_id is null and exists (
+      const recovered = await client.query(
+        `update service_cases c
+         set customer_actor_id=$1, updated_at=now()
+         where c.customer_actor_id is null
+           and exists (
              select 1 from audit_log a
-             where a.object_type='service_case' and a.object_id=c.id
-             and a.action='create_case' and a.principal_role='admin'
-             and a.principal_actor_id is null
-           ) returning c.id`,
-          [actorId]
-        );
-        recoveredCaseCount = recovered.rowCount ?? 0;
-        await client.query('release savepoint customer_case_recovery');
-      } catch (recoveryError) {
-        await client.query('rollback to savepoint customer_case_recovery').catch(() => undefined);
-        req.log.warn({ err: recoveryError }, 'customer_case_recovery_skipped');
-      }
+             where a.object_type='service_case'
+               and a.object_id=c.id
+               and a.action='create_case'
+               and a.principal_role='admin'
+               and a.principal_actor_id is null
+           )
+         returning c.id`,
+        [actorId]
+      );
 
+      await client.query('commit');
       const principal = { role:'customer' as const, actorId };
       const accessToken = await issueAccessToken(`admin-customer-test:${actorId}`, principal);
-      await audit(req.principal,'create_test_customer_session','actor',actorId,'admin_testing_only',{ recoveredCaseCount });
-      return { accessToken, tokenType:'Bearer', expiresIn:28800, principal, testing:true, recoveredCaseCount };
+      await audit(req.principal,'create_test_customer_session','actor',actorId,'admin_testing_only',{ recoveredCaseCount:recovered.rowCount ?? 0 });
+      return { accessToken, tokenType:'Bearer', expiresIn:28800, principal, testing:true, recoveredCaseCount:recovered.rowCount ?? 0 };
+    } catch (error) {
+      await client.query('rollback');
+      throw error;
     } finally {
       client.release();
     }
