@@ -1,0 +1,153 @@
+name: Verify Live Portal Access
+
+on:
+  workflow_dispatch:
+    inputs:
+      admin_email:
+        description: 'Existing production admin email'
+        required: true
+      admin_password:
+        description: 'Existing production admin password'
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: roviq-live-portal-access
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      RENDER_URL: https://roviq-core.onrender.com
+      EDGE_URL: https://roviq-core.admytruk79.workers.dev
+      ADMIN_EMAIL: ${{ inputs.admin_email }}
+      ADMIN_PASSWORD: ${{ inputs.admin_password }}
+    steps:
+      - name: Mask credentials
+        shell: bash
+        run: |
+          echo "::add-mask::$ADMIN_EMAIL"
+          echo "::add-mask::$ADMIN_PASSWORD"
+
+      - name: Verify live admin login and every role handoff
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          verify_surface() {
+            local base="$1"
+            local label="$2"
+            local login_payload login_status admin_token admin_role
+
+            login_payload="$(jq -cn --arg email "$ADMIN_EMAIL" --arg password "$ADMIN_PASSWORD" '{email:$email,password:$password}')"
+            login_status="$(curl --silent --show-error --location \
+              --max-time 25 \
+              --output /tmp/roviq-login.json \
+              --write-out '%{http_code}' \
+              --header 'content-type: application/json' \
+              --data "$login_payload" \
+              "$base/api/auth/login")"
+
+            if [[ "$login_status" != "200" ]]; then
+              echo "$label admin login failed with HTTP $login_status" >&2
+              exit 1
+            fi
+
+            admin_token="$(jq -r '.accessToken // empty' /tmp/roviq-login.json)"
+            admin_role="$(jq -r '.principal.role // empty' /tmp/roviq-login.json)"
+            test -n "$admin_token"
+            test "$admin_role" = "admin"
+            echo "::add-mask::$admin_token"
+            echo "$label admin login verified"
+
+            admin_status="$(curl --silent --show-error --location \
+              --max-time 25 \
+              --output /dev/null \
+              --write-out '%{http_code}' \
+              --header "authorization: Bearer $admin_token" \
+              "$base/api/admin/cases")"
+            test "$admin_status" = "200"
+            echo "$label Ops/admin access verified"
+
+            roles=(customer diagnostic partner parts tow)
+            paths=(
+              "/api/customers/me/cases"
+              "/api/diagnostics/me/queue"
+              "/api/partners/me/offers"
+              "/api/parts/me/orders"
+              "/api/transport/me/dispatches"
+            )
+
+            for i in "${!roles[@]}"; do
+              role="${roles[$i]}"
+              path="${paths[$i]}"
+
+              session_status="$(curl --silent --show-error --location \
+                --max-time 25 \
+                --output /tmp/roviq-role-session.json \
+                --write-out '%{http_code}' \
+                --request POST \
+                --header 'content-type: application/json' \
+                --header "authorization: Bearer $admin_token" \
+                --data '{}' \
+                "$base/api/admin/testing/${role}-session")"
+
+              if [[ "$session_status" != "200" ]]; then
+                echo "$label $role handoff failed with HTTP $session_status" >&2
+                cat /tmp/roviq-role-session.json >&2 || true
+                exit 1
+              fi
+
+              session_role="$(jq -r '.principal.role // empty' /tmp/roviq-role-session.json)"
+              actor_id="$(jq -r '.principal.actorId // empty' /tmp/roviq-role-session.json)"
+              role_token="$(jq -r '.accessToken // empty' /tmp/roviq-role-session.json)"
+              test "$session_role" = "$role"
+              test -n "$actor_id"
+              test -n "$role_token"
+              echo "::add-mask::$role_token"
+
+              protected_status="$(curl --silent --show-error --location \
+                --max-time 25 \
+                --output /tmp/roviq-role-protected.json \
+                --write-out '%{http_code}' \
+                --header "authorization: Bearer $role_token" \
+                "$base$path")"
+
+              if [[ "$protected_status" != "200" ]]; then
+                echo "$label $role protected access failed with HTTP $protected_status" >&2
+                cat /tmp/roviq-role-protected.json >&2 || true
+                exit 1
+              fi
+
+              echo "$label $role login handoff and protected access verified"
+            done
+          }
+
+          verify_surface "$RENDER_URL" "Render"
+          verify_surface "$EDGE_URL" "Edge"
+
+      - name: Verify deployed portal surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          urls=(
+            "https://roviq-web-dxv.pages.dev"
+            "https://roviq-diagnostic-net.pages.dev"
+            "https://roviq-partner.pages.dev"
+            "https://roviq-parts-net.pages.dev"
+            "https://roviq-tow-net.pages.dev"
+            "https://roviq-ops.pages.dev"
+          )
+          for url in "${urls[@]}"; do
+            curl --fail --silent --show-error --location \
+              --retry 3 --retry-delay 2 --retry-all-errors \
+              --max-time 20 "$url" >/dev/null
+            echo "$url reachable"
+          done
+
+      - name: Access verification complete
+        run: echo "Production admin login, every portal role handoff, protected role access and all six portal surfaces passed."
