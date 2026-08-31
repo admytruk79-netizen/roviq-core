@@ -27,6 +27,7 @@ export function CaseDetail() {
 
   const load = useCallback(async () => {
     if (!id) return;
+    setError(null);
     try {
       const [caseRes, planRes, paymentsRes, timelineRes, transitionsRes] = await Promise.all([
         api.get<{ case: ServiceCase; customerSnapshot: CustomerSnapshot }>(`/api/maintenance/cases/${id}`),
@@ -47,7 +48,7 @@ export function CaseDetail() {
   }, [id]);
 
   useEffect(() => {
-    load();
+    void load();
   }, [load]);
 
   async function submitQuote(e: FormEvent) {
