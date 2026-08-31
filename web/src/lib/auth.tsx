@@ -22,7 +22,8 @@ function loadStoredPrincipal(): Principal | null {
   const raw = localStorage.getItem(PRINCIPAL_KEY);
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as Principal;
+    const principal = JSON.parse(raw) as Principal;
+    return principal.role === 'customer' && principal.actorId ? principal : null;
   } catch {
     localStorage.removeItem(PRINCIPAL_KEY);
     return null;
@@ -51,36 +52,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setLoading(true);
     setError(null);
     try {
-      const res = await api.post<{ accessToken: string; principal: Principal }>('/api/auth/login', { email, password });
+      const result = await api.post<{ accessToken: string; principal: Principal }>(
+        '/api/auth/login',
+        { email: email.trim(), password }
+      );
 
-      if (res.principal.role === 'admin') {
-        setToken(res.accessToken);
-        const testSession = await api.post<{ accessToken: string; principal: Principal; recoveredCaseCount?: number }>(
+      let session = result;
+      if (result.principal.role === 'admin') {
+        setToken(result.accessToken);
+        session = await api.post<{ accessToken: string; principal: Principal }>(
           '/api/admin/testing/customer-session',
           {}
         );
-        setToken(testSession.accessToken);
-        localStorage.setItem(PRINCIPAL_KEY, JSON.stringify(testSession.principal));
-        setPrincipal(testSession.principal);
-        return;
       }
 
-      if (res.principal.role !== 'customer' || !res.principal.actorId) {
-        clearSession();
-        setError('This portal requires a customer account.');
-        throw new Error('wrong_role');
+      if (session.principal.role !== 'customer' || !session.principal.actorId) {
+        throw new Error('This portal requires a customer account.');
       }
 
-      setToken(res.accessToken);
-      localStorage.setItem(PRINCIPAL_KEY, JSON.stringify(res.principal));
-      setPrincipal(res.principal);
+      setToken(session.accessToken);
+      localStorage.setItem(PRINCIPAL_KEY, JSON.stringify(session.principal));
+      setPrincipal(session.principal);
     } catch (err) {
-      if (err instanceof Error && err.message === 'wrong_role') throw err;
-      if (!(err instanceof Error && err.message.includes('session expired'))) {
-        clearSession();
-        setError('Invalid email or password.');
-      }
-      throw new Error('login_failed');
+      clearSession();
+      const message = err instanceof Error ? err.message : 'Unable to sign in';
+      setError(message);
+      throw err;
     } finally {
       setLoading(false);
     }
