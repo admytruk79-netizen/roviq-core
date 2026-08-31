@@ -1,5 +1,5 @@
-import { createContext, useContext, useState, type ReactNode } from 'react';
-import { api, setToken } from './api';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { api, getToken, SESSION_EXPIRED_EVENT, setToken } from './api';
 import type { Principal } from './types';
 
 const PRINCIPAL_KEY = 'roviq_principal';
@@ -15,11 +15,27 @@ type AuthState = {
 const AuthContext = createContext<AuthState | null>(null);
 
 function loadStoredPrincipal(): Principal | null {
+  // A remembered principal without a live bearer token is not an authenticated
+  // session. Customer used to restore the principal independently, which could
+  // bounce users away from /login while the token was already missing/expired.
+  if (!getToken()) {
+    localStorage.removeItem(PRINCIPAL_KEY);
+    return null;
+  }
+
   const raw = localStorage.getItem(PRINCIPAL_KEY);
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as Principal;
+    const principal = JSON.parse(raw) as Principal;
+    if (principal.role !== 'customer' || !principal.actorId) {
+      localStorage.removeItem(PRINCIPAL_KEY);
+      setToken(null);
+      return null;
+    }
+    return principal;
   } catch {
+    localStorage.removeItem(PRINCIPAL_KEY);
+    setToken(null);
     return null;
   }
 }
@@ -29,9 +45,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    const handleExpiredSession = () => {
+      localStorage.removeItem(PRINCIPAL_KEY);
+      setPrincipal(null);
+    };
+    window.addEventListener(SESSION_EXPIRED_EVENT, handleExpiredSession);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, handleExpiredSession);
+  }, []);
+
   async function login(email: string, password: string) {
     setLoading(true);
     setError(null);
+
+    // Start every login from a clean Customer session. In particular, do not
+    // send an expired Customer bearer token along with the public login call.
+    setToken(null);
+    localStorage.removeItem(PRINCIPAL_KEY);
+    setPrincipal(null);
+
     try {
       const result = await api.post<{ accessToken: string; principal: Principal }>(
         '/api/auth/login',
@@ -40,6 +72,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       let session = result;
       if (result.principal.role === 'admin') {
+        // Mirror the working Tow / Valet handoff: authenticate as admin first,
+        // then exchange that bearer token for a Customer-scoped session.
         setToken(result.accessToken);
         session = await api.post<{ accessToken: string; principal: Principal }>(
           '/api/admin/testing/customer-session',
@@ -57,6 +91,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       setToken(null);
       localStorage.removeItem(PRINCIPAL_KEY);
+      setPrincipal(null);
       const message = err instanceof Error ? err.message : 'Unable to sign in';
       setError(message);
       throw err;
