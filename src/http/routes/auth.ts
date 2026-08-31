@@ -86,7 +86,7 @@ export async function authRoutes(app: FastifyInstance) {
            and exists (
              select 1 from audit_log a
              where a.object_type='service_case'
-               and a.object_id=c.id
+               and a.object_id=c.id::text
                and a.action='create_case'
                and a.principal_role='admin'
                and a.principal_actor_id is null
