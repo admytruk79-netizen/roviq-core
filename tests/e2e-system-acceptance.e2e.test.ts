@@ -74,24 +74,24 @@ describe('ROVIQ system acceptance journey', () => {
     });
     expect(diagnosticPending.statusCode).toBe(200);
 
-    await pool.query(
-      `insert into matches_offers(demand_id,case_id,actor_id,rank,outcome,responded_at,rule_basis)
-       values($1,$2,$3,1,'accepted',now(),'system_acceptance_seed')`,
-      [demandId, caseId, diagnosticId]
-    );
-    await pool.query(
-      `insert into matches_offers(demand_id,case_id,actor_id,rank,outcome,responded_at,rule_basis)
-       values($1,$2,$3,2,'accepted',now(),'system_acceptance_seed')`,
-      [demandId, caseId, partnerId]
-    );
-
-    const diagnosticStart = await app.inject({
+    const diagnosticOfferRes = await app.inject({
       method: 'POST',
-      url: `/api/maintenance/cases/${caseId}/transition`,
-      headers: actorHeaders('diagnostic', diagnosticId),
-      payload: { toState: 'diagnostic_in_progress' }
+      url: '/api/admin/offers',
+      headers: adminHeaders(),
+      payload: { demandId, actorId: diagnosticId, rank: 1, ruleBasis: 'system_acceptance_diagnostic' }
     });
-    expect(diagnosticStart.statusCode).toBe(200);
+    expect(diagnosticOfferRes.statusCode).toBe(201);
+    const diagnosticOffer = JSON.parse(diagnosticOfferRes.body).offer;
+    expect(diagnosticOffer.case_id).toBe(caseId);
+
+    const diagnosticAccept = await app.inject({
+      method: 'POST',
+      url: `/api/offers/${diagnosticOffer.id}/respond`,
+      headers: actorHeaders('diagnostic', diagnosticId),
+      payload: { outcome: 'accepted' }
+    });
+    expect(diagnosticAccept.statusCode).toBe(200);
+    expect(JSON.parse(diagnosticAccept.body).case.state).toBe('diagnostic_in_progress');
 
     const findingRes = await app.inject({
       method: 'POST',
@@ -140,14 +140,24 @@ describe('ROVIQ system acceptance journey', () => {
       expect(res.statusCode, `tow status ${status}`).toBe(200);
     }
 
-    const repairStart = await app.inject({
+    const partnerOfferRes = await app.inject({
       method: 'POST',
-      url: `/api/maintenance/cases/${caseId}/transition`,
-      headers: actorHeaders('partner', partnerId),
-      payload: { toState: 'repair_in_progress', metadata: { source: 'tow_handoff' } }
+      url: '/api/admin/offers',
+      headers: adminHeaders(),
+      payload: { demandId, actorId: partnerId, rank: 2, ruleBasis: 'system_acceptance_repair' }
     });
-    expect(repairStart.statusCode).toBe(200);
-    expect(JSON.parse(repairStart.body).case.state).toBe('repair_in_progress');
+    expect(partnerOfferRes.statusCode).toBe(201);
+    const partnerOffer = JSON.parse(partnerOfferRes.body).offer;
+    expect(partnerOffer.case_id).toBe(caseId);
+
+    const repairAccept = await app.inject({
+      method: 'POST',
+      url: `/api/offers/${partnerOffer.id}/respond`,
+      headers: actorHeaders('partner', partnerId),
+      payload: { outcome: 'accepted' }
+    });
+    expect(repairAccept.statusCode).toBe(200);
+    expect(JSON.parse(repairAccept.body).case.state).toBe('repair_in_progress');
 
     const orderRes = await app.inject({
       method: 'POST',
