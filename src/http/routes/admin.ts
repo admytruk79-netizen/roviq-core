@@ -23,12 +23,17 @@ export async function adminRoutes(app: FastifyInstance) {
 
   app.post('/api/admin/offers', { preHandler: requireRole('admin') }, async (req, reply) => {
     const body = z.object({ demandId:z.string().uuid(), actorId:z.string().uuid(), resourceId:z.string().uuid().optional(), rank:z.number().int().positive().default(1), score:z.number().optional(), ruleBasis:z.string().default('manual_dispatch') }).parse(req.body);
-    const r = await pool.query(
-      `insert into matches_offers(demand_id,actor_id,resource_id,score,rank,rule_basis,outcome)
-       values($1,$2,$3,$4,$5,$6,'offered') returning *`,
-      [body.demandId,body.actorId,body.resourceId ?? null,body.score ?? null,body.rank,body.ruleBasis]
+    const caseResult = await pool.query(
+      'select id from service_cases where demand_id=$1 order by created_at desc limit 1',
+      [body.demandId]
     );
-    await audit(req.principal,'create_offer','match_offer',r.rows[0].id,body.ruleBasis,{ demandId:body.demandId, actorId:body.actorId });
+    const caseId = caseResult.rows[0]?.id ?? null;
+    const r = await pool.query(
+      `insert into matches_offers(demand_id,case_id,actor_id,resource_id,score,rank,rule_basis,outcome)
+       values($1,$2,$3,$4,$5,$6,$7,'offered') returning *`,
+      [body.demandId,caseId,body.actorId,body.resourceId ?? null,body.score ?? null,body.rank,body.ruleBasis]
+    );
+    await audit(req.principal,'create_offer','match_offer',r.rows[0].id,body.ruleBasis,{ demandId:body.demandId, caseId, actorId:body.actorId });
     return reply.code(201).send({ offer:r.rows[0] });
   });
 
