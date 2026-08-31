@@ -35,10 +35,12 @@ export function CaseDetail() {
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [spatial, setSpatial] = useState<Spatial | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
   const [decidingId, setDecidingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!id) return;
+    setError(null);
     try {
       const [caseRes, planRes, paymentsRes, timelineRes, spatialRes] = await Promise.all([
         api.get<{ case: ServiceCase; customerSnapshot: CustomerSnapshot }>(`/api/maintenance/cases/${id}`),
@@ -63,10 +65,18 @@ export function CaseDetail() {
   async function decide(approvalId: string, decision: 'approved' | 'rejected') {
     if (!id) return;
     setDecidingId(approvalId);
+    setApprovalError(null);
     try {
       await api.post(`/api/maintenance/cases/${id}/approvals/${approvalId}/decision`, { decision });
       await load();
-    } finally { setDecidingId(null); }
+    } catch (e) {
+      const message = e instanceof ApiError && e.status === 409
+        ? 'This approval is no longer pending. Refresh the case and try again.'
+        : 'Could not save your decision. Please try again.';
+      setApprovalError(message);
+    } finally {
+      setDecidingId(null);
+    }
   }
 
   if (error) return <p className="text-sm text-red-600">{error}</p>;
@@ -97,7 +107,7 @@ export function CaseDetail() {
         </div>
       </section>
 
-      {pendingApproval && <div className="rounded-lg border border-amber-300 bg-amber-50 p-4"><p className="text-sm font-medium text-amber-900">Approval needed: {formatMinorAmount(pendingApproval.amount_minor, pendingApproval.currency)}</p><p className="mt-1 text-xs text-amber-800">Review the service plan below before approving.</p><div className="mt-3 flex gap-2"><button onClick={() => decide(pendingApproval.id, 'approved')} disabled={decidingId === pendingApproval.id} className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50">Approve</button><button onClick={() => decide(pendingApproval.id, 'rejected')} disabled={decidingId === pendingApproval.id} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">Decline</button></div></div>}
+      {pendingApproval && <div className="rounded-lg border border-amber-300 bg-amber-50 p-4"><p className="text-sm font-medium text-amber-900">Approval needed: {formatMinorAmount(pendingApproval.amount_minor, pendingApproval.currency)}</p><p className="mt-1 text-xs text-amber-800">Review the service plan below before approving.</p><div className="mt-3 flex gap-2"><button onClick={() => void decide(pendingApproval.id, 'approved')} disabled={decidingId === pendingApproval.id} className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50">{decidingId === pendingApproval.id ? 'Saving…' : 'Approve'}</button><button onClick={() => void decide(pendingApproval.id, 'rejected')} disabled={decidingId === pendingApproval.id} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">Decline</button></div>{approvalError && <p className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{approvalError}</p>}</div>}
 
       {plan && <section><h2 className="text-sm font-semibold text-slate-700">Service plan</h2>{plan.plan.customer_summary && <p className="mt-1 text-sm text-slate-600">{plan.plan.customer_summary}</p>}<ul className="mt-2 divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">{plan.tasks.length === 0 && <li className="px-4 py-3 text-sm text-slate-400">No tasks yet.</li>}{plan.tasks.map((task) => <li key={task.id} className="flex items-center justify-between px-4 py-3"><span className="text-sm">{task.title}</span><span className="text-sm text-slate-500">{formatMinorAmount(task.estimated_amount_minor, task.currency)}</span></li>)}</ul></section>}
 
