@@ -6,11 +6,13 @@ on:
     branches: [main]
     paths:
       - 'src/**'
+      - 'migrations/**'
+      - 'render.yaml'
       - 'cloudflare/**'
       - 'web/**'
       - 'diagnostic/**'
       - 'partner/**'
-      - 'parts/**'
+      - 'parts-portal/**'
       - 'tow/**'
       - 'ops/**'
       - '.github/workflows/deploy-cloudflare.yml'
@@ -32,21 +34,60 @@ concurrency:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 20
     env:
-      CORE_URL: https://roviq-core.admytruk79.workers.dev
+      EDGE_URL: https://roviq-core.admytruk79.workers.dev
+      RENDER_URL: https://roviq-core.onrender.com
+      EXPECTED_SHA: ${{ github.sha }}
+      ADMIN_EMAIL: ${{ secrets.BOOTSTRAP_ADMIN_EMAIL }}
+      ADMIN_PASSWORD: ${{ secrets.BOOTSTRAP_ADMIN_PASSWORD }}
     steps:
-      - name: Verify Core health
+      - name: Wait for exact Render Core revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 72); do
+            status="$(curl --silent --show-error --location \
+              --max-time 25 --output /tmp/render-health.json --write-out '%{http_code}' \
+              "$RENDER_URL/health" || true)"
+            revision="$(jq -r '.revision // empty' /tmp/render-health.json 2>/dev/null || true)"
+
+            if [[ "$status" == "200" && "$revision" == "$EXPECTED_SHA" ]]; then
+              echo "Render Core is running expected revision $EXPECTED_SHA"
+              cat /tmp/render-health.json
+              break
+            fi
+
+            if [[ "$attempt" == "72" ]]; then
+              echo "Render Core did not reach expected revision $EXPECTED_SHA"
+              echo "Last HTTP status: $status"
+              echo "Last reported revision: ${revision:-none}"
+              cat /tmp/render-health.json || true
+              exit 1
+            fi
+
+            echo "Waiting for Render deploy: status=$status revision=${revision:-none} attempt=$attempt/72"
+            sleep 10
+          done
+
+          ready_status="$(curl --silent --show-error --location \
+            --max-time 25 --output /tmp/render-ready.json --write-out '%{http_code}' \
+            "$RENDER_URL/ready")"
+          test "$ready_status" = "200"
+          test "$(jq -r '.database' /tmp/render-ready.json)" = "reachable"
+          test "$(jq -r '.revision' /tmp/render-ready.json)" = "$EXPECTED_SHA"
+
+      - name: Verify Edge health
         shell: bash
         run: |
           set -euo pipefail
           curl --fail --silent --show-error --location \
             --retry 6 --retry-delay 5 --retry-all-errors \
-            "$CORE_URL/health" \
-            | tee /tmp/core-health.json
-          grep -Eq '"(ok|status|service)"' /tmp/core-health.json
+            "$EDGE_URL/health" \
+            | tee /tmp/edge-health.json
+          grep -Eq '"(ok|status|service)"' /tmp/edge-health.json
 
-      - name: Verify ROVIQ Local through Core
+      - name: Verify ROVIQ Local through Edge
         shell: bash
         run: |
           set -euo pipefail
@@ -76,36 +117,108 @@ jobs:
             return 1
           }
 
-          wait_for_json "$CORE_URL/api/local" /tmp/local-capabilities.json 'roviq-local'
-          wait_for_json "$CORE_URL/api/local/health" /tmp/local-health.json '"(ok|success|status|service)"'
-          wait_for_json "$CORE_URL/api/local/places" /tmp/local-places.json '"(places|success|data)"'
+          wait_for_json "$EDGE_URL/api/local" /tmp/local-capabilities.json 'roviq-local'
+          wait_for_json "$EDGE_URL/api/local/health" /tmp/local-health.json '"(ok|success|status|service)"'
+          wait_for_json "$EDGE_URL/api/local/places" /tmp/local-places.json '"(places|success|data)"'
 
       - name: Verify authentication fails closed
         shell: bash
         run: |
           set -euo pipefail
 
-          login_status="$(curl --silent --show-error --output /tmp/login-response.json \
-            --write-out '%{http_code}' \
-            --header 'content-type: application/json' \
-            --data '{"email":"smoke-invalid@roviq.invalid","password":"not-a-real-password"}' \
-            "$CORE_URL/api/auth/login")"
-          test "$login_status" = "401"
+          for base in "$RENDER_URL" "$EDGE_URL"; do
+            login_status="$(curl --silent --show-error --output /tmp/login-response.json \
+              --write-out '%{http_code}' \
+              --header 'content-type: application/json' \
+              --data '{"email":"smoke-invalid@roviq.invalid","password":"not-a-real-password"}' \
+              "$base/api/auth/login")"
+            test "$login_status" = "401"
 
-          protected_paths=(
-            "/api/customers/me/cases"
-            "/api/diagnostics/me/queue"
-            "/api/partners/me/offers"
-            "/api/parts/me/orders"
-            "/api/transport/me/dispatches"
-            "/api/admin/cases"
-          )
-          for path in "${protected_paths[@]}"; do
-            echo "Checking unauthenticated rejection: $path"
-            status="$(curl --silent --show-error --output /dev/null \
-              --write-out '%{http_code}' "$CORE_URL$path")"
-            test "$status" = "401"
+            protected_paths=(
+              "/api/customers/me/cases"
+              "/api/diagnostics/me/queue"
+              "/api/partners/me/offers"
+              "/api/parts/me/orders"
+              "/api/transport/me/dispatches"
+              "/api/admin/cases"
+            )
+            for path in "${protected_paths[@]}"; do
+              echo "Checking unauthenticated rejection: $base$path"
+              status="$(curl --silent --show-error --output /dev/null \
+                --write-out '%{http_code}' "$base$path")"
+              test "$status" = "401"
+            done
           done
+
+      - name: Verify real admin login and every portal role handoff
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$ADMIN_EMAIL"
+          test -n "$ADMIN_PASSWORD"
+
+          check_surface() {
+            local base="$1"
+            local label="$2"
+            local login_payload admin_status admin_token admin_role
+
+            login_payload="$(jq -cn --arg email "$ADMIN_EMAIL" --arg password "$ADMIN_PASSWORD" '{email:$email,password:$password}')"
+            admin_status="$(curl --silent --show-error --output /tmp/admin-login.json \
+              --write-out '%{http_code}' \
+              --header 'content-type: application/json' \
+              --data "$login_payload" \
+              "$base/api/auth/login")"
+            test "$admin_status" = "200"
+            admin_token="$(jq -r '.accessToken // empty' /tmp/admin-login.json)"
+            admin_role="$(jq -r '.principal.role // empty' /tmp/admin-login.json)"
+            test -n "$admin_token"
+            test "$admin_role" = "admin"
+
+            admin_cases_status="$(curl --silent --show-error --output /dev/null \
+              --write-out '%{http_code}' \
+              --header "authorization: Bearer $admin_token" \
+              "$base/api/admin/cases")"
+            test "$admin_cases_status" = "200"
+
+            roles=(customer diagnostic partner parts tow)
+            paths=(
+              "/api/customers/me/cases"
+              "/api/diagnostics/me/queue"
+              "/api/partners/me/offers"
+              "/api/parts/me/orders"
+              "/api/transport/me/dispatches"
+            )
+
+            for i in "${!roles[@]}"; do
+              role="${roles[$i]}"
+              path="${paths[$i]}"
+              session_status="$(curl --silent --show-error --output /tmp/role-session.json \
+                --write-out '%{http_code}' \
+                --request POST \
+                --header 'content-type: application/json' \
+                --header "authorization: Bearer $admin_token" \
+                --data '{}' \
+                "$base/api/admin/testing/$role-session")"
+              test "$session_status" = "200"
+
+              session_role="$(jq -r '.principal.role // empty' /tmp/role-session.json)"
+              actor_id="$(jq -r '.principal.actorId // empty' /tmp/role-session.json)"
+              role_token="$(jq -r '.accessToken // empty' /tmp/role-session.json)"
+              test "$session_role" = "$role"
+              test -n "$actor_id"
+              test -n "$role_token"
+
+              protected_status="$(curl --silent --show-error --output /dev/null \
+                --write-out '%{http_code}' \
+                --header "authorization: Bearer $role_token" \
+                "$base$path")"
+              test "$protected_status" = "200"
+              echo "$label $role access verified"
+            done
+          }
+
+          check_surface "$RENDER_URL" "Render"
+          check_surface "$EDGE_URL" "Edge"
 
       - name: Verify production front ends and Core wiring
         shell: bash
