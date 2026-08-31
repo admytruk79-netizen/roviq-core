@@ -46,7 +46,8 @@ export async function buildApp() {
 
   await app.register(healthRoutes);
   app.addHook('preHandler', async (req, reply) => {
-    if (req.url === '/health' || req.url === '/ready' || req.url === '/api/auth/login') return;
+    const routeConfig = req.routeOptions.config as { public?: boolean } | undefined;
+    if (routeConfig?.public || req.url === '/health' || req.url === '/ready') return;
     await principalMiddleware(req, reply);
   });
   await app.register(authRoutes);
