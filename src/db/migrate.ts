@@ -9,6 +9,17 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const migrationsDir = path.resolve(here, '../../migrations');
 const advisoryLockId = 7_605_173_481;
 
+// Migration 017 was edited after its first production application on Aug 28.
+// Production therefore legitimately contains the original checksum while the
+// repository contains the later, expanded file. Keep checksum enforcement
+// strict everywhere else, but accept that one known historical checksum so
+// Render can continue to later idempotent alignment migrations (notably 022).
+const acceptedHistoricalChecksums: Record<string, ReadonlySet<string>> = {
+  '017_coherence_invariants.sql': new Set([
+    '0c79975d4149019aa5ad433f6c4911ce622a29d5e93757970296d756731ba121'
+  ])
+};
+
 const files = (await readdir(migrationsDir))
   .filter((file) => /^\d{3}.*\.sql$/.test(file))
   .sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
@@ -38,7 +49,9 @@ try {
 
     if (existing.rowCount) {
       if (existing.rows[0].checksum_sha256 !== checksum) {
-        throw new Error(`Migration checksum mismatch: ${filename}`);
+        const accepted = acceptedHistoricalChecksums[filename]?.has(existing.rows[0].checksum_sha256) ?? false;
+        if (!accepted) throw new Error(`Migration checksum mismatch: ${filename}`);
+        console.warn(`Accepted historical checksum for ${filename}; later alignment migrations remain authoritative.`);
       }
       continue;
     }
