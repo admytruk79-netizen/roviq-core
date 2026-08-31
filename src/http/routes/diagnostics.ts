@@ -17,7 +17,7 @@ const findingBody = z.object({
 export async function diagnosticRoutes(app: FastifyInstance) {
   app.get('/api/diagnostics/me/queue', { preHandler: requireRole('diagnostic') }, async (req) => {
     const r = await pool.query(
-      `select m.id as offer_id, m.case_id, m.demand_id, m.offered_at, d.demand_type, d.urgency, d.location, d.attributes
+      `select m.id as offer_id, m.case_id, m.demand_id, m.outcome, m.offered_at, d.demand_type, d.urgency, d.location, d.attributes
        from matches_offers m join demand_requests d on d.id=m.demand_id
        where m.actor_id=$1 and m.outcome in ('offered','accepted')
        order by d.urgency desc, m.offered_at asc`, [req.principal.actorId]
