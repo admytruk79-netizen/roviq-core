@@ -56,32 +56,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setLoading(true);
     setError(null);
     try {
-      const result = await api.post<{ accessToken: string; principal: Principal }>('/api/auth/login', { email: email.trim(), password });
+      const result = await api.post<{ accessToken: string; principal: Principal }>(
+        '/api/auth/login',
+        { email: email.trim(), password }
+      );
 
+      let session = result;
       if (result.principal.role === 'admin') {
         setToken(result.accessToken);
-        const testSession = await api.post<{ accessToken: string; principal: Principal }>('/api/admin/testing/partner-session', {});
-        setToken(testSession.accessToken);
-        localStorage.setItem(PRINCIPAL_KEY, JSON.stringify(testSession.principal));
-        setPrincipal(testSession.principal);
-        return;
+        session = await api.post<{ accessToken: string; principal: Principal }>(
+          '/api/admin/testing/partner-session',
+          {}
+        );
       }
 
-      if (result.principal.role !== 'partner' || !result.principal.actorId) {
-        clearSession();
-        setError('This portal requires a shop or dealership partner account.');
-        throw new Error('wrong_role');
+      if (session.principal.role !== 'partner' || !session.principal.actorId) {
+        throw new Error('This portal requires a shop or dealership partner account.');
       }
 
-      setToken(result.accessToken);
-      localStorage.setItem(PRINCIPAL_KEY, JSON.stringify(result.principal));
-      setPrincipal(result.principal);
+      setToken(session.accessToken);
+      localStorage.setItem(PRINCIPAL_KEY, JSON.stringify(session.principal));
+      setPrincipal(session.principal);
     } catch (err) {
-      const message = err instanceof Error ? err.message : '';
-      if (message !== 'wrong_role' && !message.includes('session expired')) {
-        clearSession();
-        setError('Invalid email or password.');
-      }
+      clearSession();
+      const message = err instanceof Error ? err.message : 'Unable to sign in';
+      setError(message);
       throw err;
     } finally {
       setLoading(false);
