@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { api, getToken, SESSION_EXPIRED_EVENT, setToken } from './api';
+import { authenticateCustomer } from './customer-auth';
 import type { Principal } from './types';
 
 const PRINCIPAL_KEY = 'roviq_principal';
@@ -15,9 +16,6 @@ type AuthState = {
 const AuthContext = createContext<AuthState | null>(null);
 
 function loadStoredPrincipal(): Principal | null {
-  // A remembered principal without a live bearer token is not an authenticated
-  // session. Customer used to restore the principal independently, which could
-  // bounce users away from /login while the token was already missing/expired.
   if (!getToken()) {
     localStorage.removeItem(PRINCIPAL_KEY);
     return null;
@@ -57,35 +55,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function login(email: string, password: string) {
     setLoading(true);
     setError(null);
-
-    // Start every login from a clean Customer session. In particular, do not
-    // send an expired Customer bearer token along with the public login call.
-    setToken(null);
     localStorage.removeItem(PRINCIPAL_KEY);
     setPrincipal(null);
 
     try {
-      const result = await api.post<{ accessToken: string; principal: Principal }>(
-        '/api/auth/login',
-        { email: email.trim(), password }
-      );
+      const session = await authenticateCustomer(email, password, {
+        post: api.post,
+        setToken
+      });
 
-      let session = result;
-      if (result.principal.role === 'admin') {
-        // Mirror the working Tow / Valet handoff: authenticate as admin first,
-        // then exchange that bearer token for a Customer-scoped session.
-        setToken(result.accessToken);
-        session = await api.post<{ accessToken: string; principal: Principal }>(
-          '/api/admin/testing/customer-session',
-          {}
-        );
-      }
-
-      if (session.principal.role !== 'customer' || !session.principal.actorId) {
-        throw new Error('This portal requires a customer account.');
-      }
-
-      setToken(session.accessToken);
       localStorage.setItem(PRINCIPAL_KEY, JSON.stringify(session.principal));
       setPrincipal(session.principal);
     } catch (err) {
