@@ -54,6 +54,10 @@ describe('maintenance case end-to-end lifecycle', () => {
     expect(openedCase.state).toBe('triage');
     const caseId = openedCase.id;
 
+    // This scenario specifically verifies Core-authorized auto-dispatch. Customer intake
+    // defaults to customer_choice, so the test opts this case into auto-dispatch explicitly.
+    await pool.query("update service_cases set selection_mode='auto_dispatch' where id=$1", [caseId]);
+
     // Only the transitions actually valid from the current state (and role) are offered.
     const adminTransitionsRes = await app.inject({ method: 'GET', url: `/api/maintenance/cases/${caseId}/transitions`, headers: adminHeaders() });
     expect(adminTransitionsRes.statusCode).toBe(200);
