@@ -235,8 +235,8 @@ describe('ROVIQ system acceptance journey', () => {
 
     const revisionRes = await app.inject({
       method: 'POST',
-      url: `/api/admin/maintenance/cases/${caseId}/service-plan/revisions`,
-      headers: adminHeaders(),
+      url: `/api/maintenance/cases/${caseId}/service-plan/revisions`,
+      headers: actorHeaders('partner', partnerId),
       payload: {
         changeReason: 'Repair confirmed after diagnosis, transport and parts fulfilment',
         estimatedTotalMinor: 15900,
