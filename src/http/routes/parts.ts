@@ -23,6 +23,15 @@ export async function partsRoutes(app: FastifyInstance) {
     }
   });
 
+  app.get('/api/admin/maintenance/cases/:caseId/parts-orders', { preHandler: requireRole('admin') }, async (req) => {
+    const { caseId } = req.params as { caseId:string };
+    const r = await pool.query(
+      `select * from parts_orders where case_id=$1 order by created_at desc`,
+      [caseId]
+    );
+    return { orders:r.rows };
+  });
+
   app.get('/api/maintenance/parts-orders/:id', async (req, reply) => {
     const { id } = req.params as { id:string };
     const result = await getPartsOrder(id);
@@ -62,8 +71,7 @@ export async function partsRoutes(app: FastifyInstance) {
   });
 
   app.post('/api/parts/orders/:id/status', { preHandler: requireRole('parts','partner','admin') }, async (req, reply) => {
-    const { id } = req.params as { id:string };
-    const body = z.object({ status:z.enum(['ordered','shipped','delivered','cancelled','failed']), trackingReference:z.string().optional(), externalOrderReference:z.string().optional() }).parse(req.body);
+    const { id } = req.params as { id:string }; const body = z.object({ status:z.enum(['ordered','shipped','delivered','cancelled','failed']), trackingReference:z.string().optional(), externalOrderReference:z.string().optional() }).parse(req.body);
     try { return { order:await markPartsOrderStatus(req.principal,id,body.status,body) }; }
     catch (e) {
       const message = e instanceof Error ? e.message : 'parts_transition_failed';
