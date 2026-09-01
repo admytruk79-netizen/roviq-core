@@ -3,12 +3,24 @@ import { useParams } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import { formatAmount, formatDateTime, formatMinorAmount, humanizeToken } from '../lib/format';
 import { StatusBadge } from '../components/StatusBadge';
-import type { ActorSummary, CaseTransition, CustomerSnapshot, PaymentIntent, ServiceCase, ServicePlanResponse, TimelineEvent } from '../lib/types';
+import type {
+  ActorSummary,
+  CaseTransition,
+  CustomerSnapshot,
+  PaymentIntent,
+  RoutingCandidate,
+  ServiceCase,
+  ServicePlanResponse,
+  TimelineEvent,
+  TransportDispatch
+} from '../lib/types';
 
 function actorLabel(actor: ActorSummary) {
   const attributes = actor.attributes ?? {};
   const displayName = [attributes.displayName, attributes.name, attributes.businessName].find((value) => typeof value === 'string');
-  return typeof displayName === 'string' && displayName.trim() ? displayName : `Diagnostic ${actor.id.slice(0, 8)}`;
+  return typeof displayName === 'string' && displayName.trim()
+    ? displayName
+    : `${humanizeToken(actor.actor_type)} ${actor.id.slice(0, 8)}`;
 }
 
 export function CaseDetail() {
@@ -19,7 +31,8 @@ export function CaseDetail() {
   const [payments, setPayments] = useState<PaymentIntent[]>([]);
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [transitions, setTransitions] = useState<CaseTransition[]>([]);
-  const [diagnostics, setDiagnostics] = useState<ActorSummary[]>([]);
+  const [actors, setActors] = useState<ActorSummary[]>([]);
+  const [dispatches, setDispatches] = useState<TransportDispatch[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const [quoteReason, setQuoteReason] = useState('');
@@ -37,17 +50,37 @@ export function CaseDetail() {
   const [diagnosticDispatchError, setDiagnosticDispatchError] = useState<string | null>(null);
   const [diagnosticDispatchSuccess, setDiagnosticDispatchSuccess] = useState<string | null>(null);
 
+  const [towActorId, setTowActorId] = useState('');
+  const [dispatchingTow, setDispatchingTow] = useState(false);
+  const [towDispatchError, setTowDispatchError] = useState<string | null>(null);
+  const [towDispatchSuccess, setTowDispatchSuccess] = useState<string | null>(null);
+
+  const [routingCandidates, setRoutingCandidates] = useState<RoutingCandidate[]>([]);
+  const [repairActorId, setRepairActorId] = useState('');
+  const [routingProviders, setRoutingProviders] = useState(false);
+  const [dispatchingRepair, setDispatchingRepair] = useState(false);
+  const [repairDispatchError, setRepairDispatchError] = useState<string | null>(null);
+  const [repairDispatchSuccess, setRepairDispatchSuccess] = useState<string | null>(null);
+
+  const diagnostics = actors.filter((actor) => actor.actor_type === 'diagnostic');
+  const towProviders = actors.filter((actor) => actor.actor_type === 'tow');
+  const latestTowDispatch = dispatches.find((dispatch) => dispatch.transport_type === 'tow' && dispatch.status !== 'cancelled') ?? null;
+  const repairCandidates = routingCandidates
+    .map((candidate) => ({ candidate, actor: actors.find((actor) => actor.id === candidate.actorId) }))
+    .filter((entry): entry is { candidate: RoutingCandidate; actor: ActorSummary } => Boolean(entry.actor));
+
   const load = useCallback(async () => {
     if (!id) return;
     setError(null);
     try {
-      const [caseRes, planRes, paymentsRes, timelineRes, transitionsRes, diagnosticsRes] = await Promise.all([
+      const [caseRes, planRes, paymentsRes, timelineRes, transitionsRes, actorsRes, dispatchRes] = await Promise.all([
         api.get<{ case: ServiceCase; customerSnapshot: CustomerSnapshot }>(`/api/maintenance/cases/${id}`),
         api.get<ServicePlanResponse>(`/api/maintenance/cases/${id}/service-plan`).catch(() => null),
         api.get<{ payments: PaymentIntent[] }>(`/api/maintenance/cases/${id}/payments`),
         api.get<{ timeline: TimelineEvent[] }>(`/api/maintenance/cases/${id}/timeline`),
         api.get<{ transitions: CaseTransition[] }>(`/api/maintenance/cases/${id}/transitions`),
-        api.get<{ actors: ActorSummary[] }>('/api/admin/actors?actorType=diagnostic&status=active')
+        api.get<{ actors: ActorSummary[] }>('/api/admin/actors?status=active'),
+        api.get<{ dispatches: TransportDispatch[] }>(`/api/admin/transport?caseId=${id}`).catch(() => ({ dispatches: [] }))
       ]);
       setCaseData(caseRes.case);
       setSnapshot(caseRes.customerSnapshot);
@@ -55,12 +88,18 @@ export function CaseDetail() {
       setPayments(paymentsRes.payments);
       setTimeline(timelineRes.timeline);
       setTransitions(transitionsRes.transitions);
-      setDiagnostics(diagnosticsRes.actors);
-      if (diagnosticActorId && !diagnosticsRes.actors.some((actor) => actor.id === diagnosticActorId)) setDiagnosticActorId('');
+      setActors(actorsRes.actors);
+      setDispatches(dispatchRes.dispatches);
+      setDiagnosticActorId((current) => current && actorsRes.actors.some((actor) => actor.id === current && actor.actor_type === 'diagnostic') ? current : '');
+      setTowActorId((current) => current && actorsRes.actors.some((actor) => actor.id === current && actor.actor_type === 'tow') ? current : '');
+      if (caseRes.case.state !== 'provider_selection') {
+        setRoutingCandidates([]);
+        setRepairActorId('');
+      }
     } catch (e) {
       setError(e instanceof ApiError && e.status === 403 ? "You don't have access to this case." : 'Could not load this case.');
     }
-  }, [id, diagnosticActorId]);
+  }, [id]);
 
   useEffect(() => {
     void load();
@@ -98,6 +137,8 @@ export function CaseDetail() {
       await api.post(`/api/maintenance/cases/${id}/transition`, { toState });
       setToState('');
       setDiagnosticDispatchSuccess(null);
+      setTowDispatchSuccess(null);
+      setRepairDispatchSuccess(null);
       await load();
     } catch {
       setTransitionError('That transition was rejected — it may not be valid from the current state.');
@@ -127,6 +168,98 @@ export function CaseDetail() {
       setDiagnosticDispatchError('Could not send this case to the selected diagnostic provider.');
     } finally {
       setDispatchingDiagnostic(false);
+    }
+  }
+
+  async function dispatchTow(e: FormEvent) {
+    e.preventDefault();
+    if (!caseData || !towActorId || !['tow_pending', 'tow_in_progress'].includes(caseData.state)) return;
+    setDispatchingTow(true);
+    setTowDispatchError(null);
+    setTowDispatchSuccess(null);
+    try {
+      let dispatch = latestTowDispatch;
+      if (!dispatch) {
+        const created = await api.post<{ dispatch: TransportDispatch }>('/api/admin/transport', {
+          caseId: caseData.id,
+          transportType: 'tow',
+          metadata: { source: 'ops_case_control', demandId: caseData.demand_id ?? null }
+        });
+        dispatch = created.dispatch;
+      }
+      if (!['requested', 'declined', 'failed'].includes(dispatch.status)) {
+        setTowDispatchSuccess(`Tow dispatch is already ${humanizeToken(dispatch.status)}.`);
+        await load();
+        return;
+      }
+      await api.post(`/api/admin/transport/${dispatch.id}/assign`, { providerActorId: towActorId });
+      const provider = towProviders.find((actor) => actor.id === towActorId);
+      setTowDispatchSuccess(`${provider ? actorLabel(provider) : 'Tow provider'} has been assigned. The job is now visible in Tow / Valet.`);
+      setTowActorId('');
+      await load();
+    } catch (e) {
+      const message = e instanceof ApiError && e.status === 409
+        ? 'The selected provider cannot take this transport dispatch.'
+        : 'Could not create or assign the tow dispatch.';
+      setTowDispatchError(message);
+    } finally {
+      setDispatchingTow(false);
+    }
+  }
+
+  async function evaluateRepairProviders() {
+    if (!caseData?.demand_id || caseData.state !== 'provider_selection') return;
+    setRoutingProviders(true);
+    setRepairDispatchError(null);
+    setRepairDispatchSuccess(null);
+    try {
+      const result = await api.post<{
+        ranked: RoutingCandidate[];
+        eligible?: RoutingCandidate[];
+        recommendedActorId?: string | null;
+        policyRequired?: boolean;
+      }>(`/api/admin/demands/${caseData.demand_id}/route`, { createOffer: false });
+      const candidates = result.ranked.length ? result.ranked : (result.eligible ?? []);
+      setRoutingCandidates(candidates);
+      const preferred = result.recommendedActorId ?? candidates[0]?.actorId ?? '';
+      setRepairActorId(preferred);
+      if (candidates.length === 0) {
+        setRepairDispatchError('Core did not find an eligible repair provider for this case.');
+      } else if (result.policyRequired) {
+        setRepairDispatchSuccess('Eligible providers found. No active ranking policy is available, so Ops must choose from the eligible set.');
+      } else {
+        setRepairDispatchSuccess('Core evaluated the repair network. Review the ranked provider and send the offer.');
+      }
+    } catch {
+      setRepairDispatchError('Could not evaluate repair providers for this case.');
+    } finally {
+      setRoutingProviders(false);
+    }
+  }
+
+  async function dispatchRepair(e: FormEvent) {
+    e.preventDefault();
+    if (!caseData || caseData.state !== 'provider_selection' || !repairActorId) return;
+    setDispatchingRepair(true);
+    setRepairDispatchError(null);
+    setRepairDispatchSuccess(null);
+    try {
+      await api.post(`/api/maintenance/cases/${caseData.id}/select-provider`, {
+        actorId: repairActorId,
+        rationale: { source: 'ops_case_control', reason: 'diagnostic_repair_handoff' }
+      });
+      const provider = actors.find((actor) => actor.id === repairActorId);
+      setRepairDispatchSuccess(`${provider ? actorLabel(provider) : 'Repair provider'} has been selected and offered the case.`);
+      setRepairActorId('');
+      setRoutingCandidates([]);
+      await load();
+    } catch (e) {
+      const message = e instanceof ApiError && e.status === 409
+        ? 'That provider is not eligible under the current routing decision.'
+        : 'Could not hand this case to the selected repair provider.';
+      setRepairDispatchError(message);
+    } finally {
+      setDispatchingRepair(false);
     }
   }
 
@@ -216,6 +349,98 @@ export function CaseDetail() {
           )}
           {diagnosticDispatchError && <p className="mt-2 text-sm text-red-600">{diagnosticDispatchError}</p>}
           {diagnosticDispatchSuccess && <p className="mt-2 text-sm text-emerald-700">{diagnosticDispatchSuccess}</p>}
+        </section>
+      )}
+
+      {['tow_pending', 'tow_in_progress'].includes(caseData.state) && (
+        <section className="rounded-lg border border-slate-200 bg-white p-4">
+          <h2 className="text-sm font-semibold text-slate-700">Tow handoff</h2>
+          {latestTowDispatch && (
+            <p className="mt-2 text-sm text-slate-500">
+              Current dispatch {latestTowDispatch.id.slice(0, 8)} · {humanizeToken(latestTowDispatch.status)}
+              {latestTowDispatch.provider_actor_id ? ` · provider ${latestTowDispatch.provider_actor_id.slice(0, 8)}` : ''}
+            </p>
+          )}
+          {latestTowDispatch?.status === 'delivered' ? (
+            <p className="mt-2 text-sm text-slate-500">Transport is delivered. Move the case to provider selection above to coordinate the repair provider.</p>
+          ) : towProviders.length === 0 ? (
+            <p className="mt-2 text-sm text-slate-500">No active Tow providers are registered yet.</p>
+          ) : latestTowDispatch && !['requested', 'declined', 'failed'].includes(latestTowDispatch.status) ? (
+            <p className="mt-2 text-sm text-emerald-700">This transport job is already in the Tow / Valet workflow.</p>
+          ) : (
+            <form onSubmit={dispatchTow} className="mt-3 flex flex-wrap items-center gap-2">
+              <select
+                value={towActorId}
+                onChange={(e) => setTowActorId(e.target.value)}
+                className="min-w-64 rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:border-slate-500 focus:outline-none"
+              >
+                <option value="">Select Tow provider…</option>
+                {towProviders.map((actor) => <option key={actor.id} value={actor.id}>{actorLabel(actor)}</option>)}
+              </select>
+              <button
+                type="submit"
+                disabled={!towActorId || dispatchingTow}
+                className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+              >
+                {dispatchingTow ? 'Assigning…' : latestTowDispatch ? 'Assign Tow provider' : 'Create and assign tow'}
+              </button>
+            </form>
+          )}
+          {towDispatchError && <p className="mt-2 text-sm text-red-600">{towDispatchError}</p>}
+          {towDispatchSuccess && <p className="mt-2 text-sm text-emerald-700">{towDispatchSuccess}</p>}
+        </section>
+      )}
+
+      {caseData.state === 'provider_selection' && (
+        <section className="rounded-lg border border-slate-200 bg-white p-4">
+          <h2 className="text-sm font-semibold text-slate-700">Repair provider handoff</h2>
+          {!caseData.demand_id ? (
+            <p className="mt-2 text-sm text-red-600">This case is missing its originating demand and cannot be routed.</p>
+          ) : (
+            <>
+              <p className="mt-2 text-sm text-slate-500">Run Core routing first. Ops can then select only a provider that is eligible under the current decision.</p>
+              <button
+                type="button"
+                onClick={() => void evaluateRepairProviders()}
+                disabled={routingProviders}
+                className="mt-3 rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                {routingProviders ? 'Evaluating…' : 'Evaluate repair providers'}
+              </button>
+              {repairCandidates.length > 0 && (
+                <form onSubmit={dispatchRepair} className="mt-3 flex flex-wrap items-center gap-2">
+                  <select
+                    value={repairActorId}
+                    onChange={(e) => setRepairActorId(e.target.value)}
+                    className="min-w-64 rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:border-slate-500 focus:outline-none"
+                  >
+                    <option value="">Select eligible provider…</option>
+                    {repairCandidates.map(({ candidate, actor }, index) => (
+                      <option key={candidate.actorId} value={candidate.actorId}>
+                        {index === 0 ? 'Recommended · ' : ''}{actorLabel(actor)}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="submit"
+                    disabled={!repairActorId || dispatchingRepair}
+                    className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                  >
+                    {dispatchingRepair ? 'Sending…' : 'Select and offer repair'}
+                  </button>
+                </form>
+              )}
+            </>
+          )}
+          {repairDispatchError && <p className="mt-2 text-sm text-red-600">{repairDispatchError}</p>}
+          {repairDispatchSuccess && <p className="mt-2 text-sm text-emerald-700">{repairDispatchSuccess}</p>}
+        </section>
+      )}
+
+      {caseData.state === 'provider_pending' && (
+        <section className="rounded-lg border border-slate-200 bg-white p-4">
+          <h2 className="text-sm font-semibold text-slate-700">Repair offer pending</h2>
+          <p className="mt-2 text-sm text-slate-500">The selected provider has the offer. Acceptance in the Partner portal advances the case into repair.</p>
         </section>
       )}
 
