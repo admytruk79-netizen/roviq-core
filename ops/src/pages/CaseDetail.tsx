@@ -3,7 +3,13 @@ import { useParams } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import { formatAmount, formatDateTime, formatMinorAmount, humanizeToken } from '../lib/format';
 import { StatusBadge } from '../components/StatusBadge';
-import type { CaseTransition, CustomerSnapshot, PaymentIntent, ServiceCase, ServicePlanResponse, TimelineEvent } from '../lib/types';
+import type { ActorSummary, CaseTransition, CustomerSnapshot, PaymentIntent, ServiceCase, ServicePlanResponse, TimelineEvent } from '../lib/types';
+
+function actorLabel(actor: ActorSummary) {
+  const attributes = actor.attributes ?? {};
+  const displayName = [attributes.displayName, attributes.name, attributes.businessName].find((value) => typeof value === 'string');
+  return typeof displayName === 'string' && displayName.trim() ? displayName : `Diagnostic ${actor.id.slice(0, 8)}`;
+}
 
 export function CaseDetail() {
   const { id } = useParams<{ id: string }>();
@@ -13,6 +19,7 @@ export function CaseDetail() {
   const [payments, setPayments] = useState<PaymentIntent[]>([]);
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [transitions, setTransitions] = useState<CaseTransition[]>([]);
+  const [diagnostics, setDiagnostics] = useState<ActorSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const [quoteReason, setQuoteReason] = useState('');
@@ -25,16 +32,22 @@ export function CaseDetail() {
   const [transitioning, setTransitioning] = useState(false);
   const [transitionError, setTransitionError] = useState<string | null>(null);
 
+  const [diagnosticActorId, setDiagnosticActorId] = useState('');
+  const [dispatchingDiagnostic, setDispatchingDiagnostic] = useState(false);
+  const [diagnosticDispatchError, setDiagnosticDispatchError] = useState<string | null>(null);
+  const [diagnosticDispatchSuccess, setDiagnosticDispatchSuccess] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     if (!id) return;
     setError(null);
     try {
-      const [caseRes, planRes, paymentsRes, timelineRes, transitionsRes] = await Promise.all([
+      const [caseRes, planRes, paymentsRes, timelineRes, transitionsRes, diagnosticsRes] = await Promise.all([
         api.get<{ case: ServiceCase; customerSnapshot: CustomerSnapshot }>(`/api/maintenance/cases/${id}`),
         api.get<ServicePlanResponse>(`/api/maintenance/cases/${id}/service-plan`).catch(() => null),
         api.get<{ payments: PaymentIntent[] }>(`/api/maintenance/cases/${id}/payments`),
         api.get<{ timeline: TimelineEvent[] }>(`/api/maintenance/cases/${id}/timeline`),
-        api.get<{ transitions: CaseTransition[] }>(`/api/maintenance/cases/${id}/transitions`)
+        api.get<{ transitions: CaseTransition[] }>(`/api/maintenance/cases/${id}/transitions`),
+        api.get<{ actors: ActorSummary[] }>('/api/admin/actors?actorType=diagnostic&status=active')
       ]);
       setCaseData(caseRes.case);
       setSnapshot(caseRes.customerSnapshot);
@@ -42,10 +55,12 @@ export function CaseDetail() {
       setPayments(paymentsRes.payments);
       setTimeline(timelineRes.timeline);
       setTransitions(transitionsRes.transitions);
+      setDiagnostics(diagnosticsRes.actors);
+      if (diagnosticActorId && !diagnosticsRes.actors.some((actor) => actor.id === diagnosticActorId)) setDiagnosticActorId('');
     } catch (e) {
       setError(e instanceof ApiError && e.status === 403 ? "You don't have access to this case." : 'Could not load this case.');
     }
-  }, [id]);
+  }, [id, diagnosticActorId]);
 
   useEffect(() => {
     void load();
@@ -82,11 +97,36 @@ export function CaseDetail() {
     try {
       await api.post(`/api/maintenance/cases/${id}/transition`, { toState });
       setToState('');
+      setDiagnosticDispatchSuccess(null);
       await load();
     } catch {
       setTransitionError('That transition was rejected — it may not be valid from the current state.');
     } finally {
       setTransitioning(false);
+    }
+  }
+
+  async function dispatchDiagnostic(e: FormEvent) {
+    e.preventDefault();
+    if (!caseData?.demand_id || !diagnosticActorId || caseData.state !== 'diagnostic_pending') return;
+    setDispatchingDiagnostic(true);
+    setDiagnosticDispatchError(null);
+    setDiagnosticDispatchSuccess(null);
+    try {
+      await api.post('/api/admin/offers', {
+        demandId: caseData.demand_id,
+        actorId: diagnosticActorId,
+        rank: 1,
+        ruleBasis: 'ops_manual_diagnostic_dispatch'
+      });
+      const selectedActor = diagnostics.find((actor) => actor.id === diagnosticActorId);
+      setDiagnosticDispatchSuccess(`${selectedActor ? actorLabel(selectedActor) : 'Diagnostic provider'} has been offered this case.`);
+      setDiagnosticActorId('');
+      await load();
+    } catch {
+      setDiagnosticDispatchError('Could not send this case to the selected diagnostic provider.');
+    } finally {
+      setDispatchingDiagnostic(false);
     }
   }
 
@@ -145,6 +185,39 @@ export function CaseDetail() {
         )}
         {transitionError && <p className="mt-2 text-sm text-red-600">{transitionError}</p>}
       </section>
+
+      {(caseData.state === 'triage' || caseData.state === 'diagnostic_pending') && (
+        <section className="rounded-lg border border-slate-200 bg-white p-4">
+          <h2 className="text-sm font-semibold text-slate-700">Diagnostic handoff</h2>
+          {caseData.state === 'triage' ? (
+            <p className="mt-2 text-sm text-slate-500">Move this case to diagnostic pending above, then assign an active diagnostic provider here.</p>
+          ) : !caseData.demand_id ? (
+            <p className="mt-2 text-sm text-red-600">This case is missing its originating demand and cannot be dispatched.</p>
+          ) : diagnostics.length === 0 ? (
+            <p className="mt-2 text-sm text-slate-500">No active diagnostic providers are registered yet.</p>
+          ) : (
+            <form onSubmit={dispatchDiagnostic} className="mt-2 flex flex-wrap items-center gap-2">
+              <select
+                value={diagnosticActorId}
+                onChange={(e) => setDiagnosticActorId(e.target.value)}
+                className="min-w-64 rounded-md border border-slate-300 px-3 py-1.5 text-sm focus:border-slate-500 focus:outline-none"
+              >
+                <option value="">Select diagnostic provider…</option>
+                {diagnostics.map((actor) => <option key={actor.id} value={actor.id}>{actorLabel(actor)}</option>)}
+              </select>
+              <button
+                type="submit"
+                disabled={!diagnosticActorId || dispatchingDiagnostic}
+                className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+              >
+                {dispatchingDiagnostic ? 'Sending…' : 'Send diagnostic offer'}
+              </button>
+            </form>
+          )}
+          {diagnosticDispatchError && <p className="mt-2 text-sm text-red-600">{diagnosticDispatchError}</p>}
+          {diagnosticDispatchSuccess && <p className="mt-2 text-sm text-emerald-700">{diagnosticDispatchSuccess}</p>}
+        </section>
+      )}
 
       {plan && (
         <section>
