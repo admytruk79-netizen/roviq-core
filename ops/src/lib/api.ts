@@ -52,18 +52,23 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (token) headers.set('Authorization', `Bearer ${token}`);
 
   const method = (options.method ?? 'GET').toUpperCase();
-  let res: Response;
-  try {
-    res = await doFetch(path, options, headers);
-    if (method === 'GET' && [502, 503, 504].includes(res.status)) {
-      await new Promise(resolve => setTimeout(resolve, 350));
+  let res: Response | null = null;
+  let lastNetworkError: unknown = null;
+  const attempts = method === 'GET' ? 3 : 1;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
       res = await doFetch(path, options, headers);
+      lastNetworkError = null;
+      if (method !== 'GET' || ![500, 502, 503, 504].includes(res.status) || attempt === attempts - 1) break;
+    } catch (error) {
+      lastNetworkError = error;
+      if (method !== 'GET' || attempt === attempts - 1) throw error;
     }
-  } catch (error) {
-    if (method !== 'GET') throw error;
-    await new Promise(resolve => setTimeout(resolve, 350));
-    res = await doFetch(path, options, headers);
+    await new Promise(resolve => setTimeout(resolve, 350 * (attempt + 1)));
   }
+
+  if (!res) throw lastNetworkError ?? new Error('Request failed');
 
   const text = await res.text();
   let body: unknown = null;
