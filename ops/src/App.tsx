@@ -7,6 +7,7 @@ import { Cases } from './pages/Cases';
 import { Exceptions } from './pages/Exceptions';
 import { CaseDetail } from './pages/CaseDetail';
 import { PartsHandoff } from './pages/PartsHandoff';
+import { PaymentHandoff } from './pages/PaymentHandoff';
 import { NetworkMap } from './pages/NetworkMap';
 
 function CaseControl() {
@@ -14,6 +15,7 @@ function CaseControl() {
     <div className="space-y-6">
       <CaseDetail />
       <PartsHandoff />
+      <PaymentHandoff />
     </div>
   );
 }
