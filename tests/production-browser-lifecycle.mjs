@@ -67,13 +67,20 @@ async function requestJson(apiPath, { token, method = 'GET', body } = {}) {
 async function waitForCaseState(caseId, adminToken, expected, timeoutMs = 30_000) {
   const start = Date.now();
   let last = null;
+  let lastError = null;
   while (Date.now() - start < timeoutMs) {
-    const result = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken });
-    last = result?.case?.state ?? null;
-    if (last === expected) return result.case;
+    try {
+      const result = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken });
+      last = result?.case?.state ?? null;
+      lastError = null;
+      if (last === expected) return result.case;
+    } catch (error) {
+      lastError = error;
+    }
     await new Promise(resolve => setTimeout(resolve, 700));
   }
-  throw new Error(`Case ${caseId} did not reach ${expected}; last state=${last}`);
+  const errorDetail = lastError instanceof Error ? `; last read error=${lastError.message}` : '';
+  throw new Error(`Case ${caseId} did not reach ${expected}; last state=${last}${errorDetail}`);
 }
 
 async function setPortalSession(page, portalUrl, tokenKey, principalKey, session) {
@@ -210,7 +217,7 @@ async function productionLifecycle(browser) {
     await button.waitFor({ state: 'visible', timeout: 20_000 });
     await button.click();
   }
-  await waitForCaseState(caseId, adminToken, 'provider_selection');
+  await waitForCaseState(caseId, adminToken, 'tow_in_progress');
   await screenshot(tow, 'lifecycle-04-tow-delivered');
 
   log('6/10 Partner: offer the exact test partner, accept through Partner UI, send quote and request a part.');
@@ -223,6 +230,7 @@ async function productionLifecycle(browser) {
   await setPortalSession(partner, PORTALS.partner, 'roviq_partner_token', 'roviq_partner_principal', partnerSession);
   const offerCard = partner.locator('article.offer').filter({ hasText: `Case ${casePrefix}` }).first();
   await offerCard.getByRole('button', { name: 'Accept work' }).click();
+  await waitForCaseState(caseId, adminToken, 'repair_in_progress');
   await partner.getByRole('heading', { name: 'Repair workbench' }).waitFor({ timeout: 20_000 });
   const quoteForm = partner.locator('form').filter({ hasText: 'Customer quote' }).first();
   await quoteForm.getByPlaceholder('Reason for quote').fill('Browser acceptance verified repair');
