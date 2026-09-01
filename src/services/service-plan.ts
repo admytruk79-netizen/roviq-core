@@ -25,11 +25,21 @@ export async function reviseServicePlan(principal:Principal, caseId:string, inpu
   currency?:string;
   tasks?:Array<{ taskType:string; title:string; instructions?:string; dueAt?:string; estimatedAmountMinor?:number; currency?:string; metadata?:Record<string,unknown> }>;
 }) {
-  if (principal.role !== 'admin') throw new Error('forbidden');
+  if (!['admin','partner'].includes(principal.role)) throw new Error('forbidden');
   const client = await pool.connect();
   try {
     await client.query('begin');
     await assertCaseAccess(principal,caseId,client);
+    if (principal.role === 'partner') {
+      if (!principal.actorId) throw new Error('forbidden');
+      const accepted = await client.query(
+        `select 1 from matches_offers
+         where case_id=$1 and actor_id=$2 and outcome='accepted'
+         limit 1`,
+        [caseId,principal.actorId]
+      );
+      if (!accepted.rowCount) throw new Error('forbidden');
+    }
     const current = await client.query('select * from service_plans where case_id=$1 for update',[caseId]);
     if (!current.rowCount) throw new Error('service_plan_not_found');
     const plan = current.rows[0];
