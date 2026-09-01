@@ -25,6 +25,23 @@ export type ActorSummary = {
   created_at: string;
 };
 
+export type TransportDispatch = {
+  id: string;
+  case_id: string;
+  transport_type: 'tow' | 'valet';
+  provider_actor_id: string | null;
+  status: string;
+  eta_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type RoutingCandidate = {
+  actorId: string;
+  score?: number;
+  signals?: Record<string, unknown>;
+};
+
 export type CustomerSnapshot = {
   customer_status: string;
   customer_message: string | null;
