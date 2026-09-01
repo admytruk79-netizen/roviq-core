@@ -19,6 +19,20 @@ const revisionBody = z.object({
   })).max(100).optional()
 });
 
+async function createRevision(req:any, reply:any) {
+  const { id } = req.params as { id:string };
+  const body = revisionBody.parse(req.body);
+  try {
+    const plan = await reviseServicePlan(req.principal,id,body);
+    return reply.code(201).send({plan});
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'service_plan_revision_failed';
+    if (message === 'case_not_found' || message === 'service_plan_not_found') return reply.code(404).send({error:message});
+    if (message === 'forbidden') return reply.code(403).send({error:message});
+    throw error;
+  }
+}
+
 export async function servicePlanRoutes(app:FastifyInstance) {
   app.get('/api/maintenance/cases/:id/service-plan', async (req,reply) => {
     const { id } = req.params as { id:string };
@@ -34,19 +48,8 @@ export async function servicePlanRoutes(app:FastifyInstance) {
     }
   });
 
-  app.post('/api/admin/maintenance/cases/:id/service-plan/revisions', { preHandler:requireRole('admin') }, async (req,reply) => {
-    const { id } = req.params as { id:string };
-    const body = revisionBody.parse(req.body);
-    try {
-      const plan = await reviseServicePlan(req.principal,id,body);
-      return reply.code(201).send({plan});
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'service_plan_revision_failed';
-      if (message === 'case_not_found' || message === 'service_plan_not_found') return reply.code(404).send({error:message});
-      if (message === 'forbidden') return reply.code(403).send({error:message});
-      throw error;
-    }
-  });
+  app.post('/api/admin/maintenance/cases/:id/service-plan/revisions', { preHandler:requireRole('admin') }, createRevision);
+  app.post('/api/maintenance/cases/:id/service-plan/revisions', { preHandler:requireRole('partner') }, createRevision);
 
   app.post('/api/maintenance/cases/:id/approvals/:approvalId/decision', async (req, reply) => {
     const { id, approvalId } = req.params as { id:string; approvalId:string };
