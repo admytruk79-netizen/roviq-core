@@ -1,0 +1,67 @@
+name: Smoke ROVIQ Production Browser
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'tests/production-browser-lifecycle.mjs'
+      - '.github/workflows/smoke-production-browser.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: roviq-production-browser
+  cancel-in-progress: false
+
+jobs:
+  browser-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      EDGE_URL: https://roviq-core.admytruk79.workers.dev
+      ADMIN_EMAIL: ${{ secrets.BOOTSTRAP_ADMIN_EMAIL }}
+      ADMIN_PASSWORD: ${{ secrets.BOOTSTRAP_ADMIN_PASSWORD }}
+      BROWSER_ARTIFACT_DIR: artifacts/production-browser
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install pinned Playwright runtime
+        run: npm install --no-save --ignore-scripts playwright@1.55.0
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser render smoke - desktop and mobile
+        env:
+          BROWSER_MODE: render
+        run: node tests/production-browser-lifecycle.mjs
+
+      - name: Credentialed full production lifecycle
+        if: ${{ env.ADMIN_EMAIL != '' && env.ADMIN_PASSWORD != '' }}
+        env:
+          BROWSER_MODE: lifecycle
+        run: node tests/production-browser-lifecycle.mjs
+
+      - name: Note credentialed lifecycle availability
+        if: ${{ env.ADMIN_EMAIL == '' || env.ADMIN_PASSWORD == '' }}
+        run: |
+          echo 'Credentialed browser lifecycle skipped because BOOTSTRAP_ADMIN_EMAIL / BOOTSTRAP_ADMIN_PASSWORD are not injected into GitHub Actions.'
+          echo 'This does not change or invalidate the working production credentials.'
+          echo 'The desktop/mobile browser render smoke still ran against all six deployed portals.'
+
+      - name: Upload browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: roviq-production-browser-evidence-${{ github.run_number }}
+          path: artifacts/production-browser
+          if-no-files-found: warn
+          retention-days: 14
