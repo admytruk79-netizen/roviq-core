@@ -21,6 +21,25 @@ export async function adminRoutes(app: FastifyInstance) {
     return reply.code(201).send({ actor:r.rows[0] });
   });
 
+  app.get('/api/admin/actors', { preHandler: requireRole('admin') }, async (req) => {
+    const query = z.object({
+      actorType: z.string().min(1).optional(),
+      domain: z.string().min(1).optional(),
+      status: z.string().min(1).optional()
+    }).parse(req.query ?? {});
+    const r = await pool.query(
+      `select a.id,a.actor_type,a.status,a.attributes,d.code as domain,a.created_at
+       from actors a
+       left join domains d on d.id=a.domain_id
+       where ($1::text is null or a.actor_type=$1)
+         and ($2::text is null or d.code=$2)
+         and ($3::text is null or a.status=$3)
+       order by a.created_at asc`,
+      [query.actorType ?? null,query.domain ?? null,query.status ?? null]
+    );
+    return { actors:r.rows };
+  });
+
   app.post('/api/admin/offers', { preHandler: requireRole('admin') }, async (req, reply) => {
     const body = z.object({ demandId:z.string().uuid(), actorId:z.string().uuid(), resourceId:z.string().uuid().optional(), rank:z.number().int().positive().default(1), score:z.number().optional(), ruleBasis:z.string().default('manual_dispatch') }).parse(req.body);
     const caseResult = await pool.query(
