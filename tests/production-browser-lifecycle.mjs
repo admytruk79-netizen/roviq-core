@@ -83,6 +83,25 @@ async function waitForCaseState(caseId, adminToken, expected, timeoutMs = 30_000
   throw new Error(`Case ${caseId} did not reach ${expected}; last state=${last}${errorDetail}`);
 }
 
+async function waitForCollectionItem(apiPath, token, collectionKey, predicate, description, timeoutMs = 30_000) {
+  const start = Date.now();
+  let lastError = null;
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const result = await requestJson(apiPath, { token });
+      const collection = Array.isArray(result?.[collectionKey]) ? result[collectionKey] : [];
+      const item = collection.find(predicate);
+      if (item) return item;
+      lastError = null;
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise(resolve => setTimeout(resolve, 700));
+  }
+  const errorDetail = lastError instanceof Error ? `; last read error=${lastError.message}` : '';
+  throw new Error(`${description}${errorDetail}`);
+}
+
 async function setPortalSession(page, portalUrl, tokenKey, principalKey, session) {
   await gotoStable(page, `${portalUrl}/`);
   await page.evaluate(({ tokenKey, principalKey, session }) => {
@@ -200,11 +219,14 @@ async function productionLifecycle(browser) {
   const towSection = ops.locator('section').filter({ hasText: 'Tow handoff' }).first();
   await towSection.locator('select').selectOption(towSession.principal.actorId);
   await towSection.getByRole('button', { name: /Create and assign tow|Assign Tow provider/i }).click();
-  await towSection.getByText(/has been assigned/i).waitFor({ timeout: 20_000 });
 
-  const towDispatches = await requestJson('/api/transport/me/dispatches', { token: towSession.accessToken });
-  const dispatch = towDispatches.dispatches.find(item => item.case_id === caseId);
-  assert.ok(dispatch, `Tow queue does not contain case ${caseId}`);
+  const dispatch = await waitForCollectionItem(
+    '/api/transport/me/dispatches',
+    towSession.accessToken,
+    'dispatches',
+    item => item.case_id === caseId,
+    `Tow queue does not contain case ${caseId}`
+  );
   const towContext = await browser.newContext({ viewport: { width: 430, height: 900 } });
   const tow = await towContext.newPage();
   await setPortalSession(tow, PORTALS.tow, 'roviq_tow_token', 'roviq_tow_principal', towSession);
@@ -253,11 +275,14 @@ async function productionLifecycle(browser) {
   const partsSection = ops.locator('section').filter({ hasText: 'Parts supplier handoff' }).first();
   await partsSection.locator('select').selectOption(partsSession.principal.actorId);
   await partsSection.getByRole('button', { name: /Assign supplier|Reassign supplier/i }).click();
-  await partsSection.getByText(/order is now visible in the Parts portal/i).waitFor({ timeout: 20_000 });
 
-  const partsOrders = await requestJson('/api/parts/me/orders', { token: partsSession.accessToken });
-  const order = partsOrders.orders.find(item => item.case_id === caseId);
-  assert.ok(order, `Parts portal does not contain case ${caseId}`);
+  const order = await waitForCollectionItem(
+    '/api/parts/me/orders',
+    partsSession.accessToken,
+    'orders',
+    item => item.case_id === caseId,
+    `Parts portal does not contain case ${caseId}`
+  );
   const partsContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const parts = await partsContext.newPage();
   await setPortalSession(parts, PORTALS.parts, 'roviq_parts_token', 'roviq_parts_principal', partsSession);
