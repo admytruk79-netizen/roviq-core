@@ -156,13 +156,14 @@ export default function App() {
   }
 
   function selectOrder(orderId: string) {
+    setError('');
+    setMessage('');
+    if (orderId === selected) return;
     detailRequest.current += 1;
     setSelected(orderId);
     setDetail(null);
     setDetailLoading(true);
     clearInventoryForm();
-    setError('');
-    setMessage('');
   }
 
   function chooseItem(item: OrderItem) {
