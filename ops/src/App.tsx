@@ -6,7 +6,17 @@ import { Login } from './pages/Login';
 import { Cases } from './pages/Cases';
 import { Exceptions } from './pages/Exceptions';
 import { CaseDetail } from './pages/CaseDetail';
+import { PartsHandoff } from './pages/PartsHandoff';
 import { NetworkMap } from './pages/NetworkMap';
+
+function CaseControl() {
+  return (
+    <div className="space-y-6">
+      <CaseDetail />
+      <PartsHandoff />
+    </div>
+  );
+}
 
 function App() {
   return (
@@ -19,7 +29,7 @@ function App() {
               <Route path="/" element={<Cases />} />
               <Route path="/exceptions" element={<Exceptions />} />
               <Route path="/map" element={<NetworkMap />} />
-              <Route path="/cases/:id" element={<CaseDetail />} />
+              <Route path="/cases/:id" element={<CaseControl />} />
             </Route>
           </Route>
         </Routes>
