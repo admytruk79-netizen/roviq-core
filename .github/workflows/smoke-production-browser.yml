@@ -7,6 +7,7 @@ on:
     paths:
       - 'tests/production-browser-lifecycle.mjs'
       - 'tests/production-auth-probe.mjs'
+      - 'tow/**'
       - '.github/workflows/smoke-production-browser.yml'
 
 permissions:
