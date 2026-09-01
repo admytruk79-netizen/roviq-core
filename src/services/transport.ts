@@ -34,6 +34,7 @@ export async function createTransportDispatch(principal: Principal, input:{
 
 export async function assignTransportDispatch(principal: Principal, dispatchId:string, providerActorId:string, etaAt?:string) {
   const client = await pool.connect();
+  let committed = false;
   try {
     await client.query('begin');
     const d = await client.query('select * from transport_dispatches where id=$1 for update',[dispatchId]);
@@ -52,13 +53,25 @@ export async function assignTransportDispatch(principal: Principal, dispatchId:s
     );
     await client.query(`update service_cases set current_owner_role='tow',current_owner_actor_id=$1,updated_at=now() where id=$2`,[providerActorId,d.rows[0].case_id]);
     await client.query('commit');
-    await appendCaseEvent(d.rows[0].case_id,'TRANSPORT_ASSIGNED',principal,{ dispatchId, providerActorId, etaAt:updated.rows[0].eta_at });
-    await setCustomerSnapshot(d.rows[0].case_id,'transport_assigned','A transport provider has been assigned.','Provider confirmation pending',updated.rows[0].eta_at);
-    await queueNotification({ caseId:d.rows[0].case_id, channel:'push', recipientType:'actor', recipientId:providerActorId, templateKey:'transport_assignment', payload:{ dispatchId, transportType:d.rows[0].transport_type } });
-    await audit(principal,'assign_transport','transport_dispatch',dispatchId,'transport_provider_assigned',{ providerActorId });
+    committed = true;
+
+    const sideEffects = await Promise.allSettled([
+      appendCaseEvent(d.rows[0].case_id,'TRANSPORT_ASSIGNED',principal,{ dispatchId, providerActorId, etaAt:updated.rows[0].eta_at }),
+      setCustomerSnapshot(d.rows[0].case_id,'transport_assigned','A transport provider has been assigned.','Provider confirmation pending',updated.rows[0].eta_at),
+      queueNotification({ caseId:d.rows[0].case_id, channel:'push', recipientType:'actor', recipientId:providerActorId, templateKey:'transport_assignment', payload:{ dispatchId, transportType:d.rows[0].transport_type } }),
+      audit(principal,'assign_transport','transport_dispatch',dispatchId,'transport_provider_assigned',{ providerActorId })
+    ]);
+    const failedSideEffects = sideEffects.filter((result) => result.status === 'rejected');
+    if (failedSideEffects.length > 0) {
+      console.warn('transport_assignment_side_effect_failed', {
+        dispatchId,
+        caseId:d.rows[0].case_id,
+        failedCount:failedSideEffects.length
+      });
+    }
     return updated.rows[0];
   } catch (e) {
-    await client.query('rollback');
+    if (!committed) await client.query('rollback');
     throw e;
   } finally { client.release(); }
 }
