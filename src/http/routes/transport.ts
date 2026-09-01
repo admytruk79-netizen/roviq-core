@@ -8,6 +8,18 @@ const location = z.record(z.unknown()).optional();
 const status = z.enum(['accepted','en_route','arrived','vehicle_loaded','in_transit','delivered','declined','cancelled','failed']);
 
 export async function transportRoutes(app: FastifyInstance) {
+  app.get('/api/admin/transport', { preHandler: requireRole('admin') }, async (req) => {
+    const query = z.object({ caseId:z.string().uuid().optional(), status:status.optional() }).parse(req.query ?? {});
+    const r = await pool.query(
+      `select * from transport_dispatches
+       where ($1::uuid is null or case_id=$1)
+         and ($2::text is null or status=$2)
+       order by created_at desc limit 200`,
+      [query.caseId ?? null, query.status ?? null]
+    );
+    return { dispatches:r.rows };
+  });
+
   app.post('/api/admin/transport', { preHandler: requireRole('admin') }, async (req, reply) => {
     const body = z.object({ caseId:z.string().uuid(), transportType:z.enum(['tow','valet']), pickupLocation:location, dropoffLocation:location, vehicleContext:z.record(z.unknown()).optional(), etaAt:z.string().datetime().optional(), metadata:z.record(z.unknown()).optional() }).parse(req.body);
     try { return reply.code(201).send({ dispatch:await createTransportDispatch(req.principal,body) }); }
