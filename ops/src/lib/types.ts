@@ -36,6 +36,18 @@ export type TransportDispatch = {
   updated_at: string;
 };
 
+export type PartsOrder = {
+  id: string;
+  case_id: string;
+  requested_by_actor_id: string | null;
+  supplier_actor_id: string | null;
+  status: string;
+  needed_by: string | null;
+  tracking_reference: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type RoutingCandidate = {
   actorId: string;
   score?: number;
