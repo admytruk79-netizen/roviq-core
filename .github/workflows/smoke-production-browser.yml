@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - 'tests/production-browser-lifecycle.mjs'
+      - 'tests/production-auth-probe.mjs'
       - '.github/workflows/smoke-production-browser.yml'
 
 permissions:
@@ -43,6 +44,10 @@ jobs:
         env:
           BROWSER_MODE: render
         run: node tests/production-browser-lifecycle.mjs
+
+      - name: Diagnose credentialed Customer auth path
+        if: ${{ env.ADMIN_EMAIL != '' && env.ADMIN_PASSWORD != '' }}
+        run: node tests/production-auth-probe.mjs
 
       - name: Credentialed full production lifecycle
         if: ${{ env.ADMIN_EMAIL != '' && env.ADMIN_PASSWORD != '' }}
