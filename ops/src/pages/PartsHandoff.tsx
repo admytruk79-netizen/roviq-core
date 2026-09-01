@@ -20,6 +20,7 @@ export function PartsHandoff() {
   const [providers, setProviders] = useState<ActorSummary[]>([]);
   const [providerId, setProviderId] = useState('');
   const [assigning, setAssigning] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -47,6 +48,11 @@ export function PartsHandoff() {
     () => orders.find(order => !['delivered', 'cancelled', 'failed'].includes(order.status)) ?? orders[0] ?? null,
     [orders]
   );
+
+  async function refresh() {
+    setRefreshing(true);
+    try { await load(); } finally { setRefreshing(false); }
+  }
 
   async function assignSupplier(event: FormEvent) {
     event.preventDefault();
@@ -85,7 +91,7 @@ export function PartsHandoff() {
           <h2 className="text-sm font-semibold text-slate-700">Parts supplier handoff</h2>
           <p className="mt-1 text-sm text-slate-500">Route the repair partner's parts request into the Parts portal without leaving case control.</p>
         </div>
-        {currentOrder && <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">{humanizeToken(currentOrder.status)}</span>}
+        <div className="flex items-center gap-2"><button type="button" onClick={()=>void refresh()} disabled={refreshing} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">{refreshing ? 'Refreshing…' : 'Refresh'}</button>{currentOrder && <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">{humanizeToken(currentOrder.status)}</span>}</div>
       </div>
 
       {message && <p className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{message}</p>}
