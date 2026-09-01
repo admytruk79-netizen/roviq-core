@@ -2,6 +2,7 @@ export type Principal = { role: string; actorId: string | null };
 
 export type ServiceCase = {
   id: string;
+  demand_id?: string | null;
   state: string;
   priority: string;
   drivability: string;
@@ -13,6 +14,15 @@ export type ServiceCase = {
   completed_at: string | null;
   cancelled_at: string | null;
   attributes?: { description?: string; demandType?: string } & Record<string, unknown>;
+};
+
+export type ActorSummary = {
+  id: string;
+  actor_type: string;
+  status: string;
+  domain: string | null;
+  attributes: Record<string, unknown>;
+  created_at: string;
 };
 
 export type CustomerSnapshot = {
