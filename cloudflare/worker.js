@@ -7,7 +7,7 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), {
     'cache-control': 'no-store',
     'access-control-allow-origin': '*',
     'access-control-allow-headers': 'content-type,x-admin-api-key,authorization',
-    'access-control-allow-methods': 'GET,POST,OPTIONS'
+    'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS'
   }
 });
 
@@ -290,7 +290,7 @@ async function runScheduledOperations(env) {
 
 export default {
   async fetch(request, env) {
-    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type,x-admin-api-key,authorization', 'access-control-allow-methods': 'GET,POST,OPTIONS' } });
+    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type,x-admin-api-key,authorization', 'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS' } });
     const url = new URL(request.url);
 
     if (url.pathname === '/' || url.pathname === '/health' || url.pathname === '/edge-health') {
@@ -357,7 +357,7 @@ export default {
             'cache-control': 'no-store',
             'access-control-allow-origin': '*',
             'access-control-allow-headers': 'content-type,x-admin-api-key,authorization',
-            'access-control-allow-methods': 'GET,POST,OPTIONS'
+            'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS'
           }
         });
       }
