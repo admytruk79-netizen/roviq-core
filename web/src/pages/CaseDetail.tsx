@@ -37,6 +37,7 @@ export function CaseDetail() {
   const [error, setError] = useState<string | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const [decidingId, setDecidingId] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -61,6 +62,11 @@ export function CaseDetail() {
   }, [id]);
 
   useEffect(() => { void load(); }, [load]);
+
+  async function refresh() {
+    setRefreshing(true);
+    try { await load(); } finally { setRefreshing(false); }
+  }
 
   async function decide(approvalId: string, decision: 'approved' | 'rejected') {
     if (!id) return;
@@ -88,9 +94,9 @@ export function CaseDetail() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <div><h1 className="text-lg font-semibold capitalize">{caseData.case_type} case</h1><p className="text-xs text-slate-500">Opened {formatDateTime(caseData.created_at)}</p></div>
-        <StatusBadge state={caseData.state} />
+        <div className="flex items-center gap-2"><button type="button" onClick={()=>void refresh()} disabled={refreshing} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">{refreshing ? 'Refreshing…' : 'Refresh'}</button><StatusBadge state={caseData.state} /></div>
       </div>
 
       {caseData.attributes?.description && <p className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-600">{caseData.attributes.description}</p>}
