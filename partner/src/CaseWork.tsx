@@ -79,6 +79,10 @@ export function CaseWork({ caseId }: { caseId: string }) {
     () => plan?.approvals.find(approval => approval.approval_type === 'quote' && approval.state === 'pending') ?? null,
     [plan]
   );
+  const latestApproval = useMemo(
+    () => plan?.approvals.find(approval => approval.approval_type === 'quote') ?? null,
+    [plan]
+  );
 
   async function submitQuote(event: FormEvent) {
     event.preventDefault();
@@ -167,14 +171,18 @@ export function CaseWork({ caseId }: { caseId: string }) {
         <h2 className="mt-1 text-xl font-bold">Repair workbench</h2>
         <p className="muted mt-2 text-sm">Build the customer quote, request required parts and advance the case when repair is ready for approval and payment.</p>
       </div>
-      <div className="rounded-xl border border-white/10 bg-white/[.035] px-3 py-2 text-right">
-        <p className="kicker">Case state</p>
-        <p className="mt-1 text-sm font-bold">{caseData?.state.replaceAll('_', ' ') ?? '—'}</p>
+      <div className="flex items-center gap-2">
+        <button type="button" className="secondary" disabled={loading} onClick={()=>void load()}>{loading ? 'Refreshing…' : 'Refresh case'}</button>
+        <div className="rounded-xl border border-white/10 bg-white/[.035] px-3 py-2 text-right">
+          <p className="kicker">Case state</p>
+          <p className="mt-1 text-sm font-bold">{caseData?.state.replaceAll('_', ' ') ?? '—'}</p>
+        </div>
       </div>
     </div>
 
     {message && <div className="mt-4 rounded-xl border border-[rgba(140,255,31,.2)] bg-[rgba(140,255,31,.07)] px-4 py-3 text-sm text-white/85">{message}</div>}
     {error && <div className="mt-4 rounded-xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">{error}</div>}
+    {latestApproval && !pendingApproval && <div className="mt-4 rounded-xl border border-white/10 bg-white/[.035] px-4 py-3 text-sm text-white/80">Latest customer quote: <strong>{latestApproval.state.replaceAll('_',' ')}</strong> · {money(latestApproval.amount_minor, latestApproval.currency ?? 'USD')}</div>}
 
     <div className="mt-5 grid gap-5 lg:grid-cols-2">
       <form onSubmit={submitQuote} className="rounded-xl border border-white/10 bg-black/10 p-4">
