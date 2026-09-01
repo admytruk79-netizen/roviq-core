@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 
 type Principal = { role: string; actorId?: string | null };
 type Order = { id: string; case_id: string; status: string; needed_by?: string; created_at?: string };
@@ -81,6 +81,7 @@ export default function App() {
   const [selected, setSelected] = useState<string | null>(null);
   const [detail, setDetail] = useState<OrderDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const detailRequest = useRef(0);
   const [sku, setSku] = useState('');
   const [description, setDescription] = useState('');
   const [quantityOnHand, setQuantityOnHand] = useState('');
@@ -127,21 +128,42 @@ export default function App() {
   }
 
   async function loadDetail(orderId: string) {
+    const requestId = ++detailRequest.current;
     setDetailLoading(true);
     try {
       const result = await req<OrderDetail>(`/api/maintenance/parts-orders/${orderId}`);
+      if (requestId !== detailRequest.current) return;
       setDetail(result);
-      if (result.items[0] && !sku) chooseItem(result.items[0]);
+      if (result.items[0]) chooseItem(result.items[0]);
+      else clearInventoryForm();
     } catch (err) {
+      if (requestId !== detailRequest.current) return;
       setDetail(null);
       setError(err instanceof Error ? err.message : 'Unable to load order detail');
     } finally {
-      setDetailLoading(false);
+      if (requestId === detailRequest.current) setDetailLoading(false);
     }
   }
 
   useEffect(() => { if (principal) void load(); }, [principal]);
   useEffect(() => { if (principal && selected) void loadDetail(selected); }, [principal, selected]);
+
+  function clearInventoryForm() {
+    setSku('');
+    setDescription('');
+    setQuantityOnHand('');
+    setUnitPrice('');
+  }
+
+  function selectOrder(orderId: string) {
+    detailRequest.current += 1;
+    setSelected(orderId);
+    setDetail(null);
+    setDetailLoading(true);
+    clearInventoryForm();
+    setError('');
+    setMessage('');
+  }
 
   function chooseItem(item: OrderItem) {
     setSku(item.sku);
@@ -226,7 +248,7 @@ export default function App() {
         <div className="grid">
           {orders.map((order) => (
             <article className={`card order-card ${active?.id === order.id ? 'active' : ''}`} key={order.id}>
-              <button type="button" className="order-select" onClick={() => setSelected(order.id)}>
+              <button type="button" className="order-select" onClick={() => selectOrder(order.id)}>
                 <span className="pill">{order.status.replaceAll('_', ' ')}</span>
                 <h3>Order {order.id.slice(0, 8)}</h3>
                 <p>Case {order.case_id.slice(0, 8)}</p>
