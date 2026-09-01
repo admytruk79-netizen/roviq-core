@@ -1,0 +1,105 @@
+name: Smoke ROVIQ Lifecycle UI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - 'diagnostic/**'
+      - 'partner/**'
+      - 'parts-portal/**'
+      - 'tow/**'
+      - 'ops/**'
+      - '.github/workflows/smoke-lifecycle-ui.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: roviq-lifecycle-ui-smoke
+  cancel-in-progress: true
+
+jobs:
+  lifecycle-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Verify deployed lifecycle controls
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bundle_for() {
+            local url="$1"
+            local html asset
+            html="$(curl --fail --silent --show-error --location --max-time 20 "$url")"
+            if [[ "$html" =~ src=\"([^\"]+\.js)\" ]]; then
+              asset="${BASH_REMATCH[1]}"
+            else
+              return 1
+            fi
+            case "$asset" in
+              http://*|https://*) printf '%s' "$asset" ;;
+              /*) printf '%s%s' "$url" "$asset" ;;
+              *) printf '%s/%s' "$url" "$asset" ;;
+            esac
+          }
+
+          wait_for_markers() {
+            local url="$1"
+            shift
+            local markers=("$@")
+            local asset_url bundle matched
+
+            for attempt in $(seq 1 48); do
+              asset_url="$(bundle_for "$url" || true)"
+              if [[ -n "$asset_url" ]]; then
+                bundle="$(curl --fail --silent --show-error --location --max-time 20 "$asset_url" || true)"
+                matched=true
+                for marker in "${markers[@]}"; do
+                  if ! grep -Fq "$marker" <<< "$bundle"; then
+                    matched=false
+                    break
+                  fi
+                done
+                if [[ "$matched" == true ]]; then
+                  echo "Lifecycle wiring verified for $url"
+                  return 0
+                fi
+              fi
+              echo "Waiting for lifecycle deployment at $url (attempt $attempt/48)"
+              sleep 5
+            done
+
+            echo "Lifecycle markers did not appear at $url"
+            return 1
+          }
+
+          wait_for_markers "https://roviq-web-dxv.pages.dev" \
+            "/approvals/" \
+            "/api/maintenance/cases/"
+
+          wait_for_markers "https://roviq-diagnostic-net.pages.dev" \
+            "/findings" \
+            "/api/diagnostics/me/queue"
+
+          wait_for_markers "https://roviq-tow-net.pages.dev" \
+            "/status" \
+            "/api/transport/me/dispatches"
+
+          wait_for_markers "https://roviq-partner.pages.dev" \
+            "/service-plan/revisions" \
+            "/parts-orders" \
+            "/api/partners/me/offers"
+
+          wait_for_markers "https://roviq-parts-net.pages.dev" \
+            "/reserve" \
+            "/status" \
+            "/api/parts/me/orders"
+
+          wait_for_markers "https://roviq-ops.pages.dev" \
+            "/api/admin/transport" \
+            "/select-provider" \
+            "/api/admin/parts-orders/" \
+            "/api/admin/payments"
