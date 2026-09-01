@@ -7,6 +7,11 @@ on:
     paths:
       - 'tests/production-browser-lifecycle.mjs'
       - 'tests/production-auth-probe.mjs'
+      - 'src/**'
+      - 'web/**'
+      - 'diagnostic/**'
+      - 'partner/**'
+      - 'parts-portal/**'
       - 'tow/**'
       - 'ops/**'
       - '.github/workflows/smoke-production-browser.yml'
