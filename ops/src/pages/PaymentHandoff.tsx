@@ -28,13 +28,14 @@ export function PaymentHandoff() {
       setCaseData(caseRes.case);
       setPlan(planRes);
       setPayments(paymentRes.payments);
-      if (!amount && planRes?.plan.estimated_total_minor != null) {
-        setAmount((planRes.plan.estimated_total_minor / 100).toFixed(2));
+      if (planRes?.plan.estimated_total_minor != null) {
+        const suggested = (planRes.plan.estimated_total_minor / 100).toFixed(2);
+        setAmount(current => current || suggested);
       }
     } catch (err) {
       setError(err instanceof ApiError && err.status === 403 ? 'You do not have access to this payment handoff.' : 'Could not load payment handoff state.');
     }
-  }, [id, amount]);
+  }, [id]);
 
   useEffect(() => { void load(); }, [load]);
 
