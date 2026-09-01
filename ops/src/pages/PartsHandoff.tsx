@@ -21,24 +21,36 @@ export function PartsHandoff() {
   const [providerId, setProviderId] = useState('');
   const [assigning, setAssigning] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!id) return;
+    setLoading(true);
     setError(null);
     try {
-      const [caseRes, orderRes, providerRes] = await Promise.all([
-        api.get<{ case: ServiceCase }>(`/api/maintenance/cases/${id}`),
+      const caseRes = await api.get<{ case: ServiceCase }>(`/api/maintenance/cases/${id}`);
+      setCaseData(caseRes.case);
+
+      if (caseRes.case.state !== 'parts_pending') {
+        setOrders([]);
+        setProviders([]);
+        setProviderId('');
+        return;
+      }
+
+      const [orderRes, providerRes] = await Promise.all([
         api.get<{ orders: PartsOrder[] }>(`/api/admin/maintenance/cases/${id}/parts-orders`),
         api.get<{ actors: ActorSummary[] }>('/api/admin/actors?actorType=parts&status=active')
       ]);
-      setCaseData(caseRes.case);
       setOrders(orderRes.orders);
       setProviders(providerRes.actors);
       setProviderId(current => current && providerRes.actors.some(actor => actor.id === current) ? current : '');
     } catch (err) {
       setError(err instanceof ApiError && err.status === 403 ? 'You do not have access to this parts handoff.' : 'Could not load parts handoff state.');
+    } finally {
+      setLoading(false);
     }
   }, [id]);
 
@@ -67,17 +79,35 @@ export function PartsHandoff() {
       setProviderId('');
       await load();
     } catch (err) {
-      const message = err instanceof ApiError && err.status === 409
+      const assignmentError = err instanceof ApiError && err.status === 409
         ? 'This parts order is no longer assignable.'
         : 'Could not assign the selected parts provider.';
-      setError(message);
+      setError(assignmentError);
     } finally {
       setAssigning(false);
     }
   }
 
-  if (!caseData) return null;
-  if (caseData.state !== 'parts_pending' && orders.length === 0) return null;
+  if (loading && !caseData) {
+    return (
+      <section className="rounded-lg border border-slate-200 bg-white p-4">
+        <h2 className="text-sm font-semibold text-slate-700">Parts supplier handoff</h2>
+        <p className="mt-2 text-sm text-slate-500">Loading case handoff state…</p>
+      </section>
+    );
+  }
+
+  if (!caseData) {
+    return error ? (
+      <section className="rounded-lg border border-slate-200 bg-white p-4">
+        <h2 className="text-sm font-semibold text-slate-700">Parts supplier handoff</h2>
+        <p className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+        <button type="button" onClick={() => void refresh()} disabled={refreshing} className="mt-3 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">{refreshing ? 'Refreshing…' : 'Retry'}</button>
+      </section>
+    ) : null;
+  }
+
+  if (caseData.state !== 'parts_pending') return null;
 
   const assignedProvider = currentOrder?.supplier_actor_id
     ? providers.find(provider => provider.id === currentOrder.supplier_actor_id) ?? null
@@ -91,13 +121,15 @@ export function PartsHandoff() {
           <h2 className="text-sm font-semibold text-slate-700">Parts supplier handoff</h2>
           <p className="mt-1 text-sm text-slate-500">Route the repair partner's parts request into the Parts portal without leaving case control.</p>
         </div>
-        <div className="flex items-center gap-2"><button type="button" onClick={()=>void refresh()} disabled={refreshing} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">{refreshing ? 'Refreshing…' : 'Refresh'}</button>{currentOrder && <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">{humanizeToken(currentOrder.status)}</span>}</div>
+        <div className="flex items-center gap-2"><button type="button" onClick={() => void refresh()} disabled={refreshing || loading} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">{refreshing || loading ? 'Refreshing…' : 'Refresh'}</button>{currentOrder && <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">{humanizeToken(currentOrder.status)}</span>}</div>
       </div>
 
       {message && <p className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{message}</p>}
       {error && <p className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
 
-      {!currentOrder ? (
+      {loading ? (
+        <p className="mt-3 text-sm text-slate-500">Loading parts order and supplier network…</p>
+      ) : !currentOrder ? (
         <p className="mt-3 text-sm text-slate-500">The case is waiting for the repair partner to submit its parts request.</p>
       ) : (
         <div className="mt-3 space-y-3">
