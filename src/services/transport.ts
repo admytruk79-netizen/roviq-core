@@ -22,14 +22,26 @@ export async function createTransportDispatch(principal: Principal, input:{
      values($1,$2,$3,$4,$5,$6,$7) returning *`,
     [input.caseId,input.transportType,JSON.stringify(input.pickupLocation ?? {}),JSON.stringify(input.dropoffLocation ?? {}),JSON.stringify(input.vehicleContext ?? {}),input.etaAt ?? null,JSON.stringify(input.metadata ?? {})]
   );
+  const dispatch = r.rows[0];
   if (c.rows[0].state !== 'tow_pending' && c.rows[0].state !== 'tow_in_progress') {
-    await transitionCase(principal,input.caseId,'tow_pending',{ transportDispatchId:r.rows[0].id, transportType:input.transportType });
+    await transitionCase(principal,input.caseId,'tow_pending',{ transportDispatchId:dispatch.id, transportType:input.transportType });
   }
-  await appendCaseEvent(input.caseId,'TRANSPORT_REQUESTED',principal,{ dispatchId:r.rows[0].id, transportType:input.transportType });
-  await setCustomerSnapshot(input.caseId,'transport_requested','Vehicle transport has been requested.','Waiting for a transport provider',input.etaAt);
-  await createDeadline(input.caseId,'transport_assignment',new Date(Date.now()+5*60*1000).toISOString(),'escalate_transport_assignment',{ dispatchId:r.rows[0].id });
-  await audit(principal,'create_transport_dispatch','transport_dispatch',r.rows[0].id,'transport_requested',{ caseId:input.caseId, transportType:input.transportType });
-  return r.rows[0];
+
+  const sideEffects = await Promise.allSettled([
+    appendCaseEvent(input.caseId,'TRANSPORT_REQUESTED',principal,{ dispatchId:dispatch.id, transportType:input.transportType }),
+    setCustomerSnapshot(input.caseId,'transport_requested','Vehicle transport has been requested.','Waiting for a transport provider',input.etaAt),
+    createDeadline(input.caseId,'transport_assignment',new Date(Date.now()+5*60*1000).toISOString(),'escalate_transport_assignment',{ dispatchId:dispatch.id }),
+    audit(principal,'create_transport_dispatch','transport_dispatch',dispatch.id,'transport_requested',{ caseId:input.caseId, transportType:input.transportType })
+  ]);
+  const failedSideEffects = sideEffects.filter((result) => result.status === 'rejected');
+  if (failedSideEffects.length > 0) {
+    console.warn('transport_creation_side_effect_failed', {
+      dispatchId:dispatch.id,
+      caseId:input.caseId,
+      failedCount:failedSideEffects.length
+    });
+  }
+  return dispatch;
 }
 
 export async function assignTransportDispatch(principal: Principal, dispatchId:string, providerActorId:string, etaAt?:string) {
