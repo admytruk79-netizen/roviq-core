@@ -230,9 +230,9 @@ async function productionLifecycle(browser) {
   const towContext = await browser.newContext({ viewport: { width: 430, height: 900 } });
   const tow = await towContext.newPage();
   await setPortalSession(tow, PORTALS.tow, 'roviq_tow_token', 'roviq_tow_principal', towSession);
-  const dispatchCard = tow.locator('button.dispatch-card').filter({ hasText: `Case ${casePrefix}` }).first();
-  await dispatchCard.click();
-  const acceptTow = tow.getByRole('button', { name: 'Accept case' });
+  const activeDispatch = tow.locator('section.active-dispatch').filter({ hasText: `Case ${casePrefix}` }).first();
+  await activeDispatch.waitFor({ state: 'visible', timeout: 20_000 });
+  const acceptTow = activeDispatch.getByRole('button', { name: 'Accept' });
   if (await acceptTow.isVisible().catch(() => false)) await acceptTow.click();
   for (const label of ['en route', 'arrived', 'vehicle loaded', 'in transit', 'delivered']) {
     const button = tow.getByRole('button', { name: new RegExp(`Mark ${label}`, 'i') });
