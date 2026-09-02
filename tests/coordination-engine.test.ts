@@ -42,6 +42,22 @@ describe('ROVIQ coordination engine', () => {
     expect(byActor.b).not.toContain('balance');
   });
 
+  it('gives the counterweight boost only to the below-mean candidate, not to balance', () => {
+    // Isolate the balance/counterweight signal from every other boost so the adjustment
+    // difference can only come from that one mechanism.
+    const isolatedPolicy = {
+      weights: { capacity: 1 },
+      coordination: { enabled: true, maxAdjustment: 0.1, balanceBoost: 0.05, continuityBoost: 0, spatialBoost: 0, reliabilityBoost: 0 }
+    };
+    const ranked = rankCoordinationCandidates([
+      { actorId: 'strong', signals: { capacity: 4 } },
+      { actorId: 'weak', signals: { capacity: 1 } }
+    ], isolatedPolicy, 'case-5');
+    const byActor = Object.fromEntries(ranked.map((r) => [r.actorId, r]));
+    expect(byActor.weak.adjustment).toBeCloseTo(0.05);
+    expect(byActor.strong.adjustment).toBe(0);
+  });
+
   it('can be disabled to preserve policy-only scoring', () => {
     const ranked = rankCoordinationCandidates([
       { actorId:'a', signals:{ capacity:3, rating:4, onTime:0.9 } }
