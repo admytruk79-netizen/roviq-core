@@ -91,4 +91,116 @@ describe('field service on-site assessment', () => {
     });
     expect(forbiddenAssess.statusCode).toBe(403);
   });
+
+  it('blocks restarting or re-authorizing a decision once it has left its startable state', async () => {
+    const demandRes = await app.inject({
+      method: 'POST', url: '/api/demands', headers: actorHeaders('customer', customerActorId),
+      payload: { domain: 'maintenance', demandType: 'wont_start', urgency: 'normal' }
+    });
+    const caseId = JSON.parse(demandRes.body).case.id as string;
+
+    // Give towActorId a transport_dispatches relation to this case so it clears loadCaseForPrincipal.
+    await app.inject({ method: 'POST', url: `/api/maintenance/cases/${caseId}/transition`, headers: adminHeaders(), payload: { toState: 'tow_pending' } });
+    const dispatchRes = await app.inject({
+      method: 'POST', url: '/api/admin/transport', headers: adminHeaders(),
+      payload: { caseId, transportType: 'tow', pickupLocation: { lat: 45.52, lng: -122.67 }, dropoffLocation: { lat: 45.54, lng: -122.65 } }
+    });
+    const dispatchId = JSON.parse(dispatchRes.body).dispatch.id as string;
+    await app.inject({ method: 'POST', url: `/api/admin/transport/${dispatchId}/assign`, headers: adminHeaders(), payload: { providerActorId: towActorId } });
+
+    await app.inject({
+      method: 'PUT', url: `/api/admin/field-service/actors/${towActorId}/capabilities`, headers: adminHeaders(),
+      payload: { active: true, repairClasses: ['battery'] }
+    });
+
+    // customerAuthorizationRequired:false -> action is directly executable from 'proposed', no
+    // customer authorize step in the loop.
+    const assessRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/assess`, headers: actorHeaders('tow', towActorId),
+      payload: {
+        operatorActorId: towActorId, summary: 'Dead battery, on-site swap possible',
+        repairClass: 'battery', drivability: 'drivable', confidence: 0.9, safety: {},
+        customerAuthorizationRequired: false
+      }
+    });
+    expect(assessRes.statusCode).toBe(201);
+    const decision = JSON.parse(assessRes.body).decision;
+    expect(decision.action).toBe('field_repair');
+    expect(decision.status).toBe('proposed');
+
+    const startRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/${decision.id}/start`, headers: actorHeaders('tow', towActorId)
+    });
+    expect(startRes.statusCode).toBe(200);
+
+    // Restarting an already-in-progress decision must not silently re-run 'start'.
+    const restartRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/${decision.id}/start`, headers: actorHeaders('tow', towActorId)
+    });
+    expect(restartRes.statusCode).toBe(409);
+
+    const completeRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/${decision.id}/complete`, headers: actorHeaders('tow', towActorId),
+      payload: { outcome: 'fixed' }
+    });
+    expect(completeRes.statusCode).toBe(200);
+    expect(JSON.parse(completeRes.body).decision.status).toBe('completed');
+
+    // Once completed, 'start' must not revive it (it's no longer 'proposed' or 'authorized').
+    const restartAfterCompleteRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/${decision.id}/start`, headers: actorHeaders('tow', towActorId)
+    });
+    expect(restartAfterCompleteRes.statusCode).toBe(409);
+
+    // Completing an already-completed decision must not be accepted a second time either.
+    const recompleteRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/${decision.id}/complete`, headers: actorHeaders('tow', towActorId),
+      payload: { outcome: 'fixed' }
+    });
+    expect(recompleteRes.statusCode).toBe(409);
+  });
+
+  it('rejects authorize/complete from an actor with no real relation to the case, even when named as the decision operator', async () => {
+    const demandRes = await app.inject({
+      method: 'POST', url: '/api/demands', headers: actorHeaders('customer', customerActorId),
+      payload: { domain: 'maintenance', demandType: 'wont_start', urgency: 'normal' }
+    });
+    const caseId = JSON.parse(demandRes.body).case.id as string;
+
+    const attacker = await app.inject({ method: 'POST', url: '/api/admin/actors', headers: adminHeaders(), payload: { actorType: 'tow' } });
+    const attackerActorId = JSON.parse(attacker.body).actor.id;
+    await app.inject({
+      method: 'PUT', url: `/api/admin/field-service/actors/${attackerActorId}/capabilities`, headers: adminHeaders(),
+      payload: { active: true, repairClasses: ['battery'] }
+    });
+
+    // Only admin can name an operator other than itself -- this models a decision whose recorded
+    // operator has no transport_dispatches (or any other) relation to this case.
+    const assessRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/assess`, headers: adminHeaders(),
+      payload: {
+        operatorActorId: attackerActorId, summary: 'Dead battery, on-site swap possible',
+        repairClass: 'battery', drivability: 'drivable', confidence: 0.9, safety: {},
+        customerAuthorizationRequired: false
+      }
+    });
+    expect(assessRes.statusCode).toBe(201);
+    const decision = JSON.parse(assessRes.body).decision;
+
+    // Admin bypasses both the operator-match and case-access checks, so this succeeds even though
+    // the attacker itself never could -- matching how a legitimate dispatcher would kick this off.
+    const startRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/${decision.id}/start`, headers: adminHeaders()
+    });
+    expect(startRes.statusCode).toBe(200);
+
+    // The attacker is the recorded operator (passes the operator-match check) but has no
+    // transport_dispatch, matches_offers, parts_orders, or mobility_allocations row on this case --
+    // loadCaseForPrincipal must still reject it.
+    const completeRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/${decision.id}/complete`, headers: actorHeaders('tow', attackerActorId),
+      payload: { outcome: 'fixed' }
+    });
+    expect(completeRes.statusCode).toBe(403);
+  });
 });

@@ -137,8 +137,10 @@ export async function fieldServiceRoutes(app:FastifyInstance){
     catch(e){if(e instanceof Error&&e.message==='forbidden')return reply.code(403).send({error:'forbidden'});throw e;}
     if(!c)return reply.code(404).send({error:'case_not_found'});
     const existing=await pool.query('select * from field_service_decisions where id=$1 and case_id=$2',[decisionId,id]);if(!existing.rowCount)return reply.code(404).send({error:'field_service_decision_not_found'});
+    if(existing.rows[0].status!=='authorization_required')return reply.code(409).send({error:'field_service_not_awaiting_authorization'});
     const status=b.approved?'authorized':'declined';
-    const r=await pool.query(`update field_service_decisions set status=$1,authorized_by_actor_id=$2,customer_authorized_at=case when $3 then now() else customer_authorized_at end,updated_at=now() where id=$4 returning *`,[status,req.principal.actorId??null,b.approved,decisionId]);
+    const r=await pool.query(`update field_service_decisions set status=$1,authorized_by_actor_id=$2,customer_authorized_at=case when $3 then now() else customer_authorized_at end,updated_at=now() where id=$4 and status='authorization_required' returning *`,[status,req.principal.actorId??null,b.approved,decisionId]);
+    if(!r.rowCount)return reply.code(409).send({error:'field_service_not_awaiting_authorization'});
     await appendCaseEvent(id,b.approved?'FIELD_SERVICE_AUTHORIZED':'FIELD_SERVICE_DECLINED',req.principal,{decisionId,action:r.rows[0].action});
     await setCustomerSnapshot(id,b.approved?'field_service_authorized':'field_service_declined',b.approved?'On-site work has been authorized.':'On-site work was declined.',b.approved?'Field operator may begin approved work':'ROVIQ will arrange another service path');
     return{decision:r.rows[0]};
@@ -146,20 +148,34 @@ export async function fieldServiceRoutes(app:FastifyInstance){
 
   app.post('/api/maintenance/cases/:id/field-service/:decisionId/start',{preHandler:requireRole('diagnostic','tow','partner','admin')},async(req,reply)=>{
     const{id,decisionId}=req.params as{id:string;decisionId:string};
+    let c;
+    try{c=await loadCaseForPrincipal(req.principal,id);}
+    catch(e){if(e instanceof Error&&e.message==='forbidden')return reply.code(403).send({error:'forbidden'});throw e;}
+    if(!c)return reply.code(404).send({error:'case_not_found'});
     const d=await pool.query('select * from field_service_decisions where id=$1 and case_id=$2',[decisionId,id]);if(!d.rowCount)return reply.code(404).send({error:'field_service_decision_not_found'});
-    if(d.rows[0].customer_authorization_required&&d.rows[0].status!=='authorized')return reply.code(409).send({error:'field_service_authorization_required'});
-    if(!['field_repair','temporary_stabilization'].includes(d.rows[0].action))return reply.code(409).send({error:'field_service_action_not_executable'});
-    const operatorActorId=d.rows[0].operator_context?.operatorActorId??req.principal.actorId;
+    const decision=d.rows[0];
+    // Source state must match exactly: when authorization is waived, only a fresh 'proposed'
+    // decision may start; otherwise a completed/escalated/in-progress decision (status != 'proposed'
+    // or 'authorized') would restart and clobber its own terminal outcome.
+    const startableStatus=decision.customer_authorization_required?'authorized':'proposed';
+    if(decision.status!==startableStatus)return reply.code(409).send({error:'field_service_not_startable'});
+    if(!['field_repair','temporary_stabilization'].includes(decision.action))return reply.code(409).send({error:'field_service_action_not_executable'});
+    const operatorActorId=decision.operator_context?.operatorActorId??req.principal.actorId;
     if(req.principal.role!=='admin'&&operatorActorId!==req.principal.actorId)return reply.code(403).send({error:'field_service_operator_mismatch'});
     const profile=await pool.query('select active,verified_at from field_service_actor_capabilities where actor_id=$1',[operatorActorId]);
     if(!profile.rows[0]?.active||!profile.rows[0]?.verified_at)return reply.code(409).send({error:'field_service_operator_not_verified'});
-    const r=await pool.query(`update field_service_decisions set status='in_progress',started_at=now(),updated_at=now() where id=$1 returning *`,[decisionId]);
+    const r=await pool.query(`update field_service_decisions set status='in_progress',started_at=now(),updated_at=now() where id=$1 and status=$2 returning *`,[decisionId,startableStatus]);
+    if(!r.rowCount)return reply.code(409).send({error:'field_service_not_startable'});
     await appendCaseEvent(id,'FIELD_SERVICE_STARTED',req.principal,{decisionId,action:r.rows[0].action,operatorActorId});return{decision:r.rows[0]};
   });
 
   app.post('/api/maintenance/cases/:id/field-service/:decisionId/complete',{preHandler:requireRole('diagnostic','tow','partner','admin')},async(req,reply)=>{
     const{id,decisionId}=req.params as{id:string;decisionId:string};
     const b=z.object({outcome:z.enum(['fixed','stabilized','failed','escalated']),notes:z.string().optional(),evidence:z.record(z.unknown()).optional()}).parse(req.body);
+    let c;
+    try{c=await loadCaseForPrincipal(req.principal,id);}
+    catch(e){if(e instanceof Error&&e.message==='forbidden')return reply.code(403).send({error:'forbidden'});throw e;}
+    if(!c)return reply.code(404).send({error:'case_not_found'});
     const d=await pool.query('select * from field_service_decisions where id=$1 and case_id=$2',[decisionId,id]);
     if(!d.rowCount)return reply.code(404).send({error:'field_service_decision_not_found'});
     const operatorActorId=d.rows[0].operator_context?.operatorActorId??null;
