@@ -227,6 +227,15 @@ async function productionLifecycle(browser) {
     item => item.case_id === caseId,
     `Tow queue does not contain case ${caseId}`
   );
+  for (const probePath of ['/api/transport/me/dispatches', '/api/transport/me/history']) {
+    const startedAt = Date.now();
+    try {
+      await requestJson(`${probePath}?ts=${Date.now()}`, { token: towSession.accessToken });
+      log(`DEBUG ${probePath} responded in ${Date.now() - startedAt}ms`);
+    } catch (error) {
+      log(`DEBUG ${probePath} failed after ${Date.now() - startedAt}ms: ${error instanceof Error ? error.message : error}`);
+    }
+  }
   const towContext = await browser.newContext({ viewport: { width: 430, height: 900 } });
   const tow = await towContext.newPage();
   await setPortalSession(tow, PORTALS.tow, 'roviq_tow_token', 'roviq_tow_principal', towSession);
