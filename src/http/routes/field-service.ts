@@ -7,6 +7,7 @@ import { audit } from '../../services/audit.js';
 import { appendCaseEvent } from '../../services/orchestration.js';
 import { setCustomerSnapshot } from '../../services/operations.js';
 
+const executableRepairClass = z.enum(['battery','tire','ignition','electrical_minor','fluid_service','minor_mechanical']);
 const repairClass = z.enum(['battery','tire','ignition','electrical_minor','fluid_service','minor_mechanical','unknown']);
 const safetySchema = z.object({
   fireRisk:z.boolean().default(false),
@@ -71,7 +72,7 @@ export async function fieldServiceRoutes(app:FastifyInstance){
     const {actorId}=req.params as{actorId:string};
     const b=z.object({
       active:z.boolean().default(true),
-      repairClasses:z.array(repairClass.exclude(['unknown'])).default([]),
+      repairClasses:z.array(executableRepairClass).default([]),
       capabilities:z.array(z.string().min(1)).default([]),
       tools:z.array(z.string().min(1)).default([]),
       maxEstimatedMinutes:z.number().int().positive().max(720).nullable().optional(),
