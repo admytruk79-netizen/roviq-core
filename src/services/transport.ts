@@ -6,6 +6,11 @@ import { queueNotification, setCustomerSnapshot } from './operations.js';
 
 export type TransportStatus = 'requested'|'assigned'|'accepted'|'en_route'|'arrived'|'vehicle_loaded'|'in_transit'|'delivered'|'declined'|'cancelled'|'failed';
 
+function hasLocation(value:unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  return Object.keys(value as Record<string,unknown>).length > 0;
+}
+
 export async function createTransportDispatch(principal: Principal, input:{
   caseId:string;
   transportType:'tow'|'valet';
@@ -125,6 +130,7 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
     in_transit:['delivered','failed']
   };
   if (!(allowed[current.status] ?? []).includes(status)) throw new Error('invalid_dispatch_transition');
+  if (status === 'delivered' && !hasLocation(current.dropoff_location)) throw new Error('dropoff_location_required');
   const timestampColumn:Record<string,string> = { accepted:'accepted_at', en_route:'en_route_at', arrived:'arrived_at', delivered:'completed_at' };
   const ts = timestampColumn[status] ? `, ${timestampColumn[status]}=now()` : '';
   const updated = await pool.query(`update transport_dispatches set status=$1,metadata=metadata || $2::jsonb,updated_at=now() ${ts} where id=$3 returning *`,[status,JSON.stringify(metadata),dispatchId]);
