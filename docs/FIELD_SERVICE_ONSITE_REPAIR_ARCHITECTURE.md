@@ -10,183 +10,96 @@ The on-scene operator does not independently choose the commercial or safety out
 
 ## Authority model
 
-1. **On-scene operator** — captures symptoms, photos, OBD/diagnostic data, battery/tire/vehicle observations and tool/part availability.
-2. **Diagnostic workflow** — records the diagnostic finding, drivability and whether the case should enter field-service assessment.
-3. **ROVIQ Core field-service policy** — checks safety exclusions, confidence, required capabilities, tools, parts and whether the operator is permitted to perform the work.
-4. **Customer authorization** — required before chargeable on-site repair or stabilization when configured by the decision.
-5. **Core-issued action** — the operational source of truth. Supported actions are `field_repair`, `temporary_stabilization`, `dispatch_field_technician`, `route_to_shop`, `tow_required`, and `remote_review`.
-6. **Field operator** — executes only an authorized action and records completion evidence/outcome.
-7. **Ops** — handles exceptions, low-confidence cases, unavailable parts/capability, reassignment and escalation.
+1. **On-scene operator** captures symptoms, photos, OBD/diagnostic data and observations.
+2. **Diagnostic workflow** records finding, drivability and whether the case enters field-service assessment.
+3. **ROVIQ Core field-service policy** checks safety exclusions, confidence, verified operator capability/tools and required parts.
+4. **Parts fulfilment** is authoritative for availability. Clients do not self-declare that a part is available.
+5. **Customer authorization** is required before chargeable on-site repair or stabilization when configured.
+6. **Core-issued action** is the operational source of truth: `field_repair`, `temporary_stabilization`, `dispatch_field_technician`, `route_to_shop`, `tow_required`, or `remote_review`.
+7. **Field operator** executes only an authorized action and records completion evidence/outcome.
+8. **Ops** handles exceptions, low-confidence cases, unavailable parts/capability, reassignment and escalation.
 
 ## Case lifecycle integration
 
-Field service is a sub-workflow attached to `service_cases`; it does not create a second case and does not bypass the main state machine.
-
-Typical path:
+Field service remains a sub-workflow attached to `service_cases`; it does not create a second case.
 
 `customer intake + GPS -> triage -> diagnostic -> field_service_assessment -> Core decision`
 
 Then one of:
 
-- `field_repair -> customer authorization -> work in progress -> fixed`
-- `temporary_stabilization -> customer authorization -> stabilization -> continue approved route`
+- `field_repair -> customer authorization -> inventory reservation -> work in progress -> fixed`
+- `temporary_stabilization -> authorization -> inventory reservation where required -> stabilization -> next approved route`
 - `dispatch_field_technician -> specialist assignment -> reassess`
 - `route_to_shop -> provider selection / valet`
 - `tow_required -> transport dispatch`
 - `remote_review -> diagnostic/Ops review -> new decision`
 
-A transport operator who arrives first can contribute evidence and operator capability, but cannot self-authorize unsafe or unsupported repair work.
-
 ## Data model
 
 Migration: `migrations/020_field_service_decisions.sql`
 
-`field_service_decisions` stores:
+`field_service_decisions` stores case/finding links, Core action, repair class, drivability, confidence, safety flags, required capabilities/tools/parts, verified operator context, evidence, estimates, customer authorization, execution state and outcome.
 
-- case, demand and optional diagnostic-finding links;
-- Core-issued action and decision status;
-- repair class and drivability;
-- diagnostic confidence;
-- safety flags;
-- required capabilities, tools and parts;
-- operator capability/tool/parts context;
-- evidence;
-- estimated time and cost;
-- customer authorization requirement and timestamp;
-- execution start/completion and outcome;
-- audit metadata.
-
-The decision record is append-oriented: new assessments produce new decisions rather than silently rewriting diagnostic history.
-
-## API contract
-
-### Read decisions
-
-`GET /api/maintenance/cases/:id/field-service`
-
-Returns the case field-service decision history subject to normal case access control.
-
-### Assess field service
-
-`POST /api/maintenance/cases/:id/field-service/assess`
-
-Roles: diagnostic, tow, partner, admin.
-
-Inputs include repair class, drivability, confidence, safety flags, required capabilities/tools/parts, operator capabilities/tools, part availability, estimate and evidence.
-
-Core computes the action. The client does not send the authoritative action.
-
-### Customer authorization
-
-`POST /api/maintenance/cases/:id/field-service/:decisionId/authorize`
-
-Roles: customer or admin. Sets `authorized` or `declined`.
-
-### Start approved work
-
-`POST /api/maintenance/cases/:id/field-service/:decisionId/start`
-
-Roles: diagnostic, tow, partner, admin. Start is rejected if customer authorization is required but absent, or if the Core action is not executable on site.
-
-### Complete work
-
-`POST /api/maintenance/cases/:id/field-service/:decisionId/complete`
-
-Records `fixed`, `stabilized`, `failed`, or `escalated`, plus evidence and notes.
-
-## Deterministic safety policy baseline
-
-The first policy version intentionally errs toward escalation.
-
-- Any fire risk, fuel leak, high-voltage risk, brake/steering risk, unstable vehicle or unsafe roadside condition -> `tow_required`.
-- `non_drivable` -> `tow_required`.
-- Diagnostic confidence below 0.75 -> `remote_review`.
-- Operator cannot perform work -> `dispatch_field_technician`.
-- Missing required capability/tool -> `dispatch_field_technician`.
-- Required part unavailable -> `dispatch_field_technician`.
-- Unknown repair class -> `remote_review`.
-- Otherwise -> `field_repair`, with customer authorization where required.
-
-These rules are a safety floor, not a final clinical/technical diagnostic model. Policy versions can become more granular by repair class after supervised evidence is available.
-
-## Diagnostic integration
-
-`diagnostic_findings.disposition` now supports `field_service_assessment`.
-
-This disposition keeps the case in the diagnostic work context while signaling that the next authoritative step is a field-service decision. The diagnostic frontend should surface this as **Assess for on-site repair** rather than treating it as an automatic repair instruction.
-
-Diagnostic tools should attach structured evidence to the finding and/or field-service assessment, including where available:
-
-- OBD codes and freeze-frame data;
-- battery voltage/charging readings;
-- tire pressure/damage observations;
-- visual evidence;
-- symptoms and test results;
-- confidence and uncertainty;
-- safety exclusions.
-
-## Transport integration
-
-Transport remains an execution pathway, not the repair authority.
-
-- New dispatches inherit the canonical case pickup location from `case_spatial_context` or the case intake GPS when a pickup was not explicitly supplied.
-- A declined assignment is released back to `requested`, clears the provider link and case transport owner, and becomes eligible for reassignment.
-- The declining provider no longer owns or sees the released dispatch in their personal queue.
-- Tow/Valet can participate in field-service assessment when the operator is physically present, but Core controls the resulting action.
+Verified field capability profiles are stored separately and administered by Core. An operator cannot self-declare qualification at execution time.
 
 ## Parts integration
 
-Field-service assessment records required parts and whether they are available. The next implementation layer should connect `required_parts` to the existing parts fulfilment system so a field repair can reserve/dispatch a part without opening a second case.
+Field-service assessment accepts required parts as structured `{sku, quantity, partNumber?, description?}` items.
 
-No on-site repair should start merely because a part name was entered by a client. Part availability must be confirmed by Core/parts fulfilment.
+Core queries `parts_inventory` and identifies an active supplier that can satisfy the complete required set. If the parts cannot be fulfilled, Core does not authorize field repair; the decision escalates to field technician / alternate fulfilment.
+
+When approved work starts, Core reserves the required inventory transactionally by incrementing `quantity_reserved` under row locks. If stock changed after assessment and reservation can no longer be made, start is rejected with a parts-unavailable conflict rather than allowing unsupported work.
+
+This prevents two field jobs from consuming the same inventory and removes the former client-controlled `partsAvailable` boolean from the decision authority path.
+
+## API contract
+
+- `GET /api/maintenance/cases/:id/field-service` — decision history.
+- `POST /api/maintenance/cases/:id/field-service/assess` — diagnostic/tow/partner/admin assessment; Core computes the action.
+- `POST /api/maintenance/cases/:id/field-service/:decisionId/authorize` — customer/admin approval.
+- `POST /api/maintenance/cases/:id/field-service/:decisionId/start` — rechecks operator authority and reserves parts before work begins.
+- `POST /api/maintenance/cases/:id/field-service/:decisionId/complete` — fixed/stabilized/failed/escalated result.
+
+## Deterministic safety baseline
+
+- Fire, fuel leak, high-voltage, brake/steering, unstable vehicle or unsafe roadside -> `tow_required`.
+- Non-drivable -> `tow_required`.
+- Confidence below 0.75 -> `remote_review`.
+- Unknown repair class -> `remote_review`.
+- Unverified/insufficient operator capability or tools -> `dispatch_field_technician`.
+- Required parts unavailable in Core inventory -> `dispatch_field_technician`.
+- Otherwise -> `field_repair`, subject to customer authorization where required.
+
+## Transport integration
+
+Transport remains an execution pathway, not repair authority.
+
+- New dispatches inherit the canonical case pickup location from `case_spatial_context` or intake GPS.
+- A declined assignment is released back to `requested`, provider ownership is cleared, and it can be reassigned.
+- The declining provider no longer owns the released dispatch in their personal active queue.
+- Tow/Valet can contribute assessment evidence while physically present, but Core controls the resulting action.
+
+## Tow / Field Operations UX contract
+
+The Tow surface is a driver workspace, not a dashboard wall.
+
+The default **Drive** view contains only:
+
+- active assignment summary;
+- one primary operational action plus one secondary action when needed;
+- compact Core field-service decision when one exists;
+- live route map.
+
+The map carries only the route instruction, ETA/distance/speed, location control and map mode. Duplicate ROVIQ branding, duplicate warning cards and always-visible four-cell spatial summaries are removed. Pickup/destination/tow coordinates are available under collapsed **Trip details**.
+
+**Queue** is a separate view for active assignments. **History** is a separate view for previous `delivered`, `declined`, `cancelled` and `failed` jobs so previous work remains accessible without cluttering the driving workflow.
 
 ## Customer experience
 
-The customer should see one understandable case status:
+Customer-facing statuses remain simple: assessment, approval required, authorized, repaired on site, stabilized, specialist being dispatched, tow required or further review required. Customers are not asked to interpret diagnostic codes.
 
-- assessment in progress;
-- on-site repair available — approval required;
-- on-site work authorized;
-- repaired on site;
-- stabilized — next step required;
-- specialist being dispatched;
-- tow required;
-- further review required.
+## Audit and release verification
 
-The customer should never be asked to interpret diagnostic codes to make the routing decision.
+Every assessment, authorization, inventory reservation, start, completion and escalation must remain traceable to the case.
 
-## Tow / Field Operations UI contract
-
-The Tow/Valet surface should evolve into a Field Operations surface without merging role permissions.
-
-For the active case it should show:
-
-- live pickup/destination and vehicle/tow GPS;
-- latest diagnostic summary and confidence;
-- latest Core field-service action;
-- a compact **Assess on site** entry point when eligible;
-- **Request customer approval** / authorization state;
-- **Start approved repair** only when Core permits it;
-- **Complete / stabilized / failed — escalate** controls;
-- transport controls when the Core action is tow/valet.
-
-The driver must not see a generic “fix vehicle” button before a Core decision exists.
-
-## Audit and safety requirements
-
-Every assessment, authorization, start, completion and escalation produces an immutable case event or audit record. Safety-critical policy remains deterministic. AI or diagnostic automation may propose evidence or classification but cannot bypass safety flags, capability checks or required customer authorization.
-
-## Release verification required
-
-Before field repair is production-enabled, add automated and supervised tests for:
-
-1. unsafe case always routes to tow;
-2. low-confidence diagnosis always routes to review;
-3. unqualified operator cannot start repair;
-4. missing tool/part prevents field repair;
-5. customer authorization blocks start when required;
-6. authorized repair can start and complete;
-7. failed repair escalates without orphaning the case;
-8. tow decline releases the dispatch and permits reassignment;
-9. dispatch inherits customer intake GPS;
-10. role isolation prevents unrelated operators from reading or mutating field-service decisions.
+Before production field repair is enabled, verify unsafe routing, low-confidence review, capability blocking, parts lookup/reservation contention, customer authorization, successful completion, failed-repair escalation, tow reassignment, inherited GPS, role isolation, active queue/history separation and mobile driver usability.
