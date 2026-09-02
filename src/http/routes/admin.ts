@@ -3,8 +3,34 @@ import { z } from 'zod';
 import { pool } from '../../db/pool.js';
 import { audit } from '../../services/audit.js';
 import { requireRole } from '../middleware/principal.js';
+import { transitionCase } from '../../services/orchestration.js';
 
 export async function adminRoutes(app: FastifyInstance) {
+  // Temporary diagnostic: replay the exact offer-accept transition against a case still
+  // stuck from a failed production smoke run, using its actual current owner as principal,
+  // to surface the raw error transitionCase throws (silently swallowed in partners.ts's
+  // respond handler). Read/replay only against already-existing data; admin-gated. Remove
+  // once root-caused.
+  app.post('/api/admin/debug/replay-transition', { preHandler: requireRole('admin') }, async (req, reply) => {
+    const body = z.object({ caseId: z.string().uuid(), toState: z.string() }).parse(req.body);
+    const c = await pool.query('select current_owner_role,current_owner_actor_id,state from service_cases where id=$1', [body.caseId]);
+    if (!c.rowCount) return reply.code(404).send({ error: 'case_not_found' });
+    const row = c.rows[0];
+    const principal = { role: row.current_owner_role, actorId: row.current_owner_actor_id } as any;
+    try {
+      const result = await transitionCase(principal, body.caseId, body.toState as any);
+      return reply.send({ ok: true, principalUsed: principal, caseStateBefore: row.state, result });
+    } catch (error) {
+      return reply.send({
+        ok: false,
+        principalUsed: principal,
+        caseStateBefore: row.state,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined
+      });
+    }
+  });
+
   app.post('/api/admin/actors', { preHandler: requireRole('admin') }, async (req, reply) => {
     const body = z.object({ actorType: z.string().min(1), legalEntityId: z.string().optional(), domain: z.string().optional(), attributes: z.record(z.unknown()).default({}) }).parse(req.body);
     let domainId = null;
