@@ -238,6 +238,8 @@ async function productionLifecycle(browser) {
   }
   const towContext = await browser.newContext({ viewport: { width: 430, height: 900 } });
   const tow = await towContext.newPage();
+  tow.on('pageerror', err => log(`DEBUG tow page error: ${err instanceof Error ? err.stack ?? err.message : err}`));
+  tow.on('console', msg => { if (msg.type() === 'error') log(`DEBUG tow console error: ${msg.text()}`); });
   await setPortalSession(tow, PORTALS.tow, 'roviq_tow_token', 'roviq_tow_principal', towSession);
   // The Drive tab auto-selects the sole active dispatch and shows its actions directly -- a later
   // tow UI redesign ("declutter live map and collapse trip details") replaced the separate
