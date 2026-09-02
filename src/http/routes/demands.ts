@@ -8,7 +8,7 @@ import { requireRole } from '../middleware/principal.js';
 const createDemand = z.object({
   domain: z.string().default('maintenance'),
   demandType: z.string().min(1),
-  location: z.object({ lat: z.number(), lng: z.number() }).optional(),
+  location: z.object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) }).optional(),
   urgency: z.enum(['normal','urgent','emergency']).default('normal'),
   attributes: z.record(z.unknown()).default({})
 });
@@ -35,6 +35,26 @@ export async function demandRoutes(app: FastifyInstance) {
         priority,
         attributes:{ demandType:body.demandType, intakeLocation:body.location ?? null, ...body.attributes }
       });
+
+      if (body.location) {
+        const vehiclePoint = {
+          lat:body.location.lat,
+          lng:body.location.lng,
+          label:'Customer vehicle location',
+          source:'customer_intake'
+        };
+        await pool.query(
+          `insert into case_spatial_context(case_id,origin,current_vehicle,route_context,source,updated_at)
+           values($1,$2::jsonb,$2::jsonb,'{}'::jsonb,'customer_intake',now())
+           on conflict(case_id) do update set
+             origin=excluded.origin,
+             current_vehicle=excluded.current_vehicle,
+             source='customer_intake',
+             updated_at=now()`,
+          [serviceCase.id,JSON.stringify(vehiclePoint)]
+        );
+      }
+
       const triageCase = await transitionCase(req.principal,serviceCase.id,'triage',{ source:'customer_intake' });
       return reply.code(201).send({ demand, case:triageCase });
     }
