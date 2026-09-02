@@ -5,6 +5,39 @@ import { audit } from '../../services/audit.js';
 import { requireRole } from '../middleware/principal.js';
 
 export async function adminRoutes(app: FastifyInstance) {
+  // Temporary diagnostic for the tow->repair-shop handoff 500 seen in the production smoke
+  // test. Read-only, admin-gated, additive-only. Remove once root-caused.
+  app.get('/api/admin/debug/case-diagnostic/:id', { preHandler: requireRole('admin') }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const out: Record<string, unknown> = {};
+    try {
+      const c = await pool.query('select id,state from service_cases where id=$1', [id]);
+      out.case = c.rows[0] ?? null;
+      const fromState = c.rows[0]?.state ?? null;
+      if (fromState) {
+        const rules = await pool.query('select * from case_transition_rules where from_state=$1', [fromState]);
+        out.transitionRules = rules.rows;
+      }
+    } catch (error) {
+      out.caseQueryError = error instanceof Error ? error.message : String(error);
+    }
+    try {
+      const r = await pool.query(
+        `select c.*,
+           exists(select 1 from matches_offers mo where mo.case_id=c.id and mo.actor_id=$2) as has_provider_relation,
+           exists(select 1 from transport_dispatches td where td.case_id=c.id and td.provider_actor_id=$2) as has_transport_relation,
+           exists(select 1 from parts_orders po where po.case_id=c.id and po.supplier_actor_id=$2) as has_parts_relation,
+           exists(select 1 from mobility_allocations ma where ma.case_id=c.id and ma.provider_actor_id=$2) as has_mobility_relation
+         from service_cases c where c.id=$1`,
+        [id, null]
+      );
+      out.loadCaseForPrincipalEquivalent = r.rows[0] ?? null;
+    } catch (error) {
+      out.loadCaseForPrincipalError = error instanceof Error ? error.message : String(error);
+    }
+    return reply.send(out);
+  });
+
   app.post('/api/admin/actors', { preHandler: requireRole('admin') }, async (req, reply) => {
     const body = z.object({ actorType: z.string().min(1), legalEntityId: z.string().optional(), domain: z.string().optional(), attributes: z.record(z.unknown()).default({}) }).parse(req.body);
     let domainId = null;
