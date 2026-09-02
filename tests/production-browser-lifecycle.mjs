@@ -233,7 +233,14 @@ async function productionLifecycle(browser) {
   // The Drive tab auto-selects the sole active dispatch and shows its actions directly -- a later
   // tow UI redesign ("declutter live map and collapse trip details") replaced the separate
   // dispatch-card selection step this test used to rely on, so there is no card to click here.
-  await tow.getByText(`Case ${casePrefix}`).waitFor({ timeout: 20_000 });
+  try {
+    await tow.getByText(`Case ${casePrefix}`).waitFor({ timeout: 20_000 });
+  } catch (error) {
+    const bodyText = await tow.locator('body').innerText().catch(() => '(body text unavailable)');
+    log(`DEBUG tow drive view did not show "Case ${casePrefix}". Rendered body text: ${JSON.stringify(bodyText.slice(0, 1500))}`);
+    await screenshot(tow, 'lifecycle-04-tow-debug-failure');
+    throw error;
+  }
   const acceptTow = tow.getByRole('button', { name: 'Accept', exact: true });
   if (await acceptTow.isVisible().catch(() => false)) await acceptTow.click();
   for (const label of ['en route', 'arrived', 'vehicle loaded', 'in transit', 'delivered']) {
