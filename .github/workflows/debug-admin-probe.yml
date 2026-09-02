@@ -3,13 +3,9 @@ name: Debug ROVIQ Admin Probe
 on:
   workflow_dispatch:
     inputs:
-      case_id:
-        description: 'Case id to replay the transition against'
+      offer_id:
+        description: 'Offer id to replay respond(accepted) against'
         required: true
-      to_state:
-        description: 'Target state to attempt'
-        required: false
-        default: 'repair_in_progress'
 
 permissions:
   contents: read
@@ -22,8 +18,7 @@ jobs:
       EDGE_URL: https://roviq-core.admytruk79.workers.dev
       ADMIN_EMAIL: ${{ secrets.BOOTSTRAP_ADMIN_EMAIL }}
       ADMIN_PASSWORD: ${{ secrets.BOOTSTRAP_ADMIN_PASSWORD }}
-      DEBUG_CASE_ID: ${{ github.event.inputs.case_id }}
-      DEBUG_TO_STATE: ${{ github.event.inputs.to_state }}
+      DEBUG_OFFER_ID: ${{ github.event.inputs.offer_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

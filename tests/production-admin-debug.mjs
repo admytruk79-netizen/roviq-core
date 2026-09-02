@@ -3,11 +3,10 @@ import assert from 'node:assert/strict';
 const EDGE_URL = process.env.EDGE_URL ?? 'https://roviq-core.admytruk79.workers.dev';
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL?.trim() ?? '';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? '';
-const CASE_ID = process.env.DEBUG_CASE_ID?.trim() ?? '';
-const TO_STATE = process.env.DEBUG_TO_STATE?.trim() ?? 'repair_in_progress';
+const OFFER_ID = process.env.DEBUG_OFFER_ID?.trim() ?? '';
 
 assert.ok(ADMIN_EMAIL && ADMIN_PASSWORD, 'ADMIN_EMAIL / ADMIN_PASSWORD are required');
-assert.ok(CASE_ID, 'DEBUG_CASE_ID is required');
+assert.ok(OFFER_ID, 'DEBUG_OFFER_ID is required');
 
 const login = await fetch(`${EDGE_URL}/api/auth/login`, {
   method: 'POST',
@@ -17,11 +16,20 @@ const login = await fetch(`${EDGE_URL}/api/auth/login`, {
 const loginBody = await login.json();
 assert.equal(login.status, 200, `admin login failed: ${JSON.stringify(loginBody)}`);
 
-const debugRes = await fetch(`${EDGE_URL}/api/admin/debug/replay-transition`, {
+const partnerSessionRes = await fetch(`${EDGE_URL}/api/admin/testing/partner-session`, {
   method: 'POST',
   headers: { 'content-type': 'application/json', authorization: `Bearer ${loginBody.accessToken}` },
-  body: JSON.stringify({ caseId: CASE_ID, toState: TO_STATE })
+  body: '{}'
 });
-const debugBody = await debugRes.text();
-console.log(`[admin-debug] POST /api/admin/debug/replay-transition -> ${debugRes.status}`);
-console.log(debugBody);
+const partnerSession = await partnerSessionRes.json();
+assert.equal(partnerSessionRes.status, 200, `partner-session failed: ${JSON.stringify(partnerSession)}`);
+console.log(`[admin-debug] partner-session -> ${partnerSessionRes.status} actorId=${partnerSession.principal.actorId}`);
+
+const respondRes = await fetch(`${EDGE_URL}/api/offers/${OFFER_ID}/respond`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', authorization: `Bearer ${partnerSession.accessToken}` },
+  body: JSON.stringify({ outcome: 'accepted' })
+});
+const respondBody = await respondRes.text();
+console.log(`[admin-debug] POST /api/offers/${OFFER_ID}/respond -> ${respondRes.status}`);
+console.log(respondBody);
