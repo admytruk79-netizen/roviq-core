@@ -156,7 +156,11 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
       const c = await client.query('select state from service_cases where id=$1',[current.case_id]);
       caseStateForTransition = c.rows[0]?.state ?? null;
     } else if (status === 'declined') {
-      await client.query(`update service_cases set current_owner_role=null,current_owner_actor_id=null,updated_at=now() where id=$1`,[current.case_id]);
+      // Guard on current_owner_actor_id still matching this dispatch's provider: a case can have
+      // more than one transport_dispatches row (e.g. a second dispatch assigned after this one was
+      // superseded), and unconditionally clearing ownership here would strip a later, still-active
+      // provider's claim on the case just because an older, already-superseded dispatch declined.
+      await client.query(`update service_cases set current_owner_role=null,current_owner_actor_id=null,updated_at=now() where id=$1 and current_owner_actor_id=$2`,[current.case_id,current.provider_actor_id]);
       // Leave status='declined' (already set by the update above) rather than overwriting it back
       // to 'requested' here: assignTransportDispatch already treats 'declined' as assignable, so the
       // dispatch is reassignable either way, but callers should see the decline they just recorded.
@@ -176,7 +180,8 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
         [current.case_id,principal.actorId??null,JSON.stringify({dispatchId,declinedProviderActorId:current.provider_actor_id})]
       );
     } else if (status === 'failed') {
-      await client.query(`update service_cases set current_owner_role=null,current_owner_actor_id=null,updated_at=now() where id=$1`,[current.case_id]);
+      // Same guard as the declined branch above.
+      await client.query(`update service_cases set current_owner_role=null,current_owner_actor_id=null,updated_at=now() where id=$1 and current_owner_actor_id=$2`,[current.case_id,current.provider_actor_id]);
     } else if (status === 'delivered') {
       await client.query(`update workflow_deadlines set state='resolved',resolved_at=now() where case_id=$1 and deadline_type like 'transport_%' and state='open'`,[current.case_id]);
     }
