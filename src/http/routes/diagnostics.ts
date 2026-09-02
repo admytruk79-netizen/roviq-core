@@ -9,7 +9,7 @@ const findingBody = z.object({
   findingCode: z.string().optional(),
   summary: z.string().min(3),
   drivability: z.enum(['drivable','limited','non_drivable','unknown']),
-  disposition: z.enum(['diagnose_only','diagnose_and_fix','route_to_shop','route_to_tow']),
+  disposition: z.enum(['diagnose_only','diagnose_and_fix','field_service_assessment','route_to_shop','route_to_tow']),
   confidence: z.number().min(0).max(1).optional(),
   details: z.record(z.unknown()).default({})
 });
@@ -35,10 +35,6 @@ export async function diagnosticRoutes(app: FastifyInstance) {
     if (!owned.rowCount) return reply.code(403).send({ error:'diagnostic_demand_not_assigned' });
     const caseId = owned.rows[0].case_id ?? (await pool.query('select id from service_cases where demand_id=$1 order by created_at desc limit 1',[id])).rows[0]?.id ?? null;
 
-    // Recording a real finding means diagnostic work has started. Accept a finding while the
-    // assigned case is still pending by advancing it through the explicit in-progress state
-    // before applying the finding's disposition. This preserves the state machine instead of
-    // attempting an invalid diagnostic_pending -> provider/tow/repair jump.
     if (caseId) {
       const current = await pool.query('select state from service_cases where id=$1',[caseId]);
       if (current.rows[0]?.state === 'diagnostic_pending') {
@@ -52,23 +48,27 @@ export async function diagnosticRoutes(app: FastifyInstance) {
       [id,caseId,req.principal.actorId,b.findingCode ?? null,b.summary,b.drivability,b.disposition,b.confidence ?? null,JSON.stringify(b.details)]
     );
 
-    const nextDemandState = b.disposition === 'diagnose_and_fix' ? 'in_progress' : b.disposition === 'diagnose_only' ? 'diagnosed' : 'routing_required';
+    const nextDemandState = ['diagnose_and_fix','field_service_assessment'].includes(b.disposition) ? 'in_progress' : b.disposition === 'diagnose_only' ? 'diagnosed' : 'routing_required';
     await pool.query('update demand_requests set state=$1, updated_at=now() where id=$2', [nextDemandState,id]);
 
     let serviceCase = null;
     if (caseId) {
       await pool.query('update service_cases set drivability=$1,updated_at=now() where id=$2',[b.drivability,caseId]);
-      const target = b.disposition === 'diagnose_and_fix' ? 'repair_in_progress' : b.disposition === 'route_to_tow' || b.drivability === 'non_drivable' ? 'tow_pending' : 'provider_selection';
-      serviceCase = await transitionCase(req.principal,caseId,target,{ findingId:r.rows[0].id, disposition:b.disposition, drivability:b.drivability });
+      if (b.disposition !== 'field_service_assessment') {
+        const target = b.disposition === 'diagnose_and_fix' ? 'repair_in_progress' : b.disposition === 'route_to_tow' || b.drivability === 'non_drivable' ? 'tow_pending' : 'provider_selection';
+        serviceCase = await transitionCase(req.principal,caseId,target,{ findingId:r.rows[0].id, disposition:b.disposition, drivability:b.drivability });
+      } else {
+        serviceCase = (await pool.query('select * from service_cases where id=$1',[caseId])).rows[0] ?? null;
+      }
     }
 
     await pool.query(
       `insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload)
        values('demand_request',$1,'diagnostic_finding_recorded',$2,$3)`,
-      [id,req.principal.actorId,JSON.stringify({ findingId:r.rows[0].id, caseId, drivability:b.drivability, disposition:b.disposition })]
+      [id,req.principal.actorId,JSON.stringify({ findingId:r.rows[0].id, caseId, drivability:b.drivability, disposition:b.disposition, fieldServiceRequired:b.disposition==='field_service_assessment' })]
     );
     await audit(req.principal,'record_diagnostic_finding','demand_request',id,'assigned_diagnostic_only',{ caseId, disposition:b.disposition });
-    return reply.code(201).send({ finding:r.rows[0], demandState:nextDemandState, case:serviceCase });
+    return reply.code(201).send({ finding:r.rows[0], demandState:nextDemandState, case:serviceCase, fieldServiceRequired:b.disposition==='field_service_assessment' });
   });
 
   app.get('/api/demands/:id/diagnostic-findings', { preHandler: requireRole('admin','customer','diagnostic','partner','tow') }, async (req, reply) => {
