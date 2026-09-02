@@ -111,7 +111,7 @@ export async function fieldServiceRoutes(app:FastifyInstance){
     const profileResult=operatorActorId?await pool.query('select * from field_service_actor_capabilities where actor_id=$1',[operatorActorId]):{rows:[]};
     const profile=(profileResult.rows[0]??null) as CapabilityProfile|null;
     const action=decide(b,profile);
-    const authorizationRequired=b.customerAuthorizationRequired&&(action==='field_repair'||action==='temporary_stabilization');
+    const authorizationRequired=b.customerAuthorizationRequired&&action==='field_repair';
     const status=authorizationRequired?'authorization_required':'proposed';
     const r=await pool.query(
       `insert into field_service_decisions(case_id,demand_id,diagnostic_finding_id,created_by_actor_id,action,status,repair_class,drivability,confidence,summary,safety_flags,required_capabilities,required_tools,required_parts,operator_context,evidence,estimated_minutes,estimated_cost,customer_authorization_required,metadata)
