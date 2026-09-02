@@ -341,6 +341,12 @@ async function productionLifecycle(browser) {
   await partner.getByRole('button', { name: 'Refresh case' }).click();
   const paymentRequest = partner.getByRole('button', { name: 'Request approval & payment' });
   await paymentRequest.waitFor({ state: 'visible', timeout: 20_000 });
+  if (!(await paymentRequest.isEnabled())) {
+    const livePlan = await requestJson(`/api/maintenance/cases/${caseId}/service-plan`, { token: adminToken }).catch(e => ({ error: String(e) }));
+    const liveCase = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken }).catch(e => ({ error: String(e) }));
+    log(`DIAGNOSTIC 8/10 payment request disabled. live case state=${liveCase?.case?.state ?? JSON.stringify(liveCase)}`);
+    log(`DIAGNOSTIC 8/10 live plan approvals: ${JSON.stringify(livePlan?.approvals ?? livePlan)}`);
+  }
   assert.equal(await paymentRequest.isEnabled(), true, 'Partner payment request should be enabled after parts delivery');
   await paymentRequest.click();
   await waitForCaseState(caseId, adminToken, 'payment_pending');
