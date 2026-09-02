@@ -34,6 +34,36 @@ export async function transportRoutes(app: FastifyInstance) {
     const r = await pool.query(`select * from transport_dispatches where provider_actor_id=$1 order by created_at desc limit 200`, [req.principal.actorId]);
     return { dispatches:r.rows };
   });
+  app.get('/api/transport/me/history', { preHandler: requireRole('tow','partner') }, async (req) => {
+    const r = await pool.query(
+      `select distinct on (td.id)
+         td.*,
+         case
+           when td.provider_actor_id=$1 and td.status in ('delivered','cancelled','failed') then td.status
+           when decline.occurred_at is not null then 'declined'
+           else td.status
+         end as status,
+         coalesce(decline.occurred_at,td.completed_at,td.updated_at) as history_at
+       from transport_dispatches td
+       left join lateral (
+         select a.occurred_at
+         from audit_log a
+         where a.object_type='transport_dispatch'
+           and a.object_id=td.id::text
+           and a.principal_actor_id=$1
+           and a.action='update_transport_status'
+           and a.rule_basis like '%declined%'
+         order by a.occurred_at desc
+         limit 1
+       ) decline on true
+       where (td.provider_actor_id=$1 and td.status in ('delivered','cancelled','failed'))
+          or decline.occurred_at is not null
+       order by td.id, coalesce(decline.occurred_at,td.completed_at,td.updated_at) desc`,
+      [req.principal.actorId]
+    );
+    const history = [...r.rows].sort((a,b)=>new Date(b.history_at ?? b.updated_at ?? 0).getTime()-new Date(a.history_at ?? a.updated_at ?? 0).getTime()).slice(0,200);
+    return { dispatches:history };
+  });
   app.get('/api/transport/:id', async (req, reply) => {
     const { id } = req.params as { id:string }; const d = await getTransportDispatch(id); if (!d) return reply.code(404).send({ error:'dispatch_not_found' }); if (req.principal.role !== 'admin' && d.provider_actor_id && d.provider_actor_id !== req.principal.actorId) return reply.code(403).send({ error:'forbidden' }); return { dispatch:d };
   });
