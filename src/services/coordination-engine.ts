@@ -120,8 +120,10 @@ function relationshipSignals(candidate: CoordinationCandidate, all: Coordination
   if (capacities.length > 1 && finite(s.capacity)) {
     const mean = capacities.reduce((sum, x) => sum + x, 0) / capacities.length;
     if (Number(s.capacity) >= mean) out.add('balance');
-    const minimum = Math.min(...capacities);
-    if (Number(s.capacity) > minimum) out.add('counterweight');
+    // Fairness nudge for under-resourced candidates, complementary to 'balance': it must target
+    // capacity below the mean, not "above the single weakest candidate" (which matched almost
+    // everyone, compounding the boost toward the already-strongest actor instead of the weakest).
+    else out.add('counterweight');
   }
 
   return [...out];

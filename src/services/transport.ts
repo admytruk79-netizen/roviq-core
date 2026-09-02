@@ -154,15 +154,18 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
     await setCustomerSnapshot(current.case_id,'transport_delivered','Your vehicle has reached its destination.','Service journey continues');
   } else if (status === 'declined') {
     await pool.query(`update service_cases set current_owner_role=null,current_owner_actor_id=null,updated_at=now() where id=$1`,[current.case_id]);
+    // Leave status='declined' (already set by the update above) rather than overwriting it back
+    // to 'requested' here: assignTransportDispatch already treats 'declined' as assignable, so the
+    // dispatch is reassignable either way, but callers should see the decline they just recorded.
     const released = await pool.query(
       `update transport_dispatches
-       set provider_actor_id=null,status='requested',assigned_at=null,accepted_at=null,updated_at=now(),metadata=metadata || $2::jsonb
+       set provider_actor_id=null,assigned_at=null,accepted_at=null,updated_at=now(),metadata=metadata || $2::jsonb
        where id=$1 returning *`,
       [dispatchId,JSON.stringify({lastDeclinedBy:principal.actorId??null,lastDeclinedAt:new Date().toISOString()})]
     );
     await appendCaseEvent(current.case_id,'TRANSPORT_RELEASED_FOR_REASSIGNMENT',principal,{dispatchId,declinedProviderActorId:current.provider_actor_id});
     await setCustomerSnapshot(current.case_id,'transport_reassignment','A new transport provider is being arranged.','Reassigning transport');
-    await audit(principal,'update_transport_status','transport_dispatch',dispatchId,`${current.status}->declined->requested`,metadata);
+    await audit(principal,'update_transport_status','transport_dispatch',dispatchId,`${current.status}->declined`,metadata);
     return released.rows[0];
   } else if (status === 'failed') {
     await pool.query(`update service_cases set current_owner_role=null,current_owner_actor_id=null,updated_at=now() where id=$1`,[current.case_id]);

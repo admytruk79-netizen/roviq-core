@@ -218,7 +218,9 @@ export default function App() {
         setMessage(`Order marked ${kind}.`);
       }
       await load();
-      await loadDetail(id);
+      // Only refresh the detail panel if this action was on the order it's currently showing —
+      // otherwise a status click on a different card overwrote the selected order's displayed items.
+      if (id === selected) await loadDetail(id);
     } catch (err) {
       const raw = err instanceof Error ? err.message : 'Update failed';
       setError(raw.startsWith('inventory_unavailable:')

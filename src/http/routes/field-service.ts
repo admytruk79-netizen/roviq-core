@@ -40,6 +40,10 @@ const assessmentSchema = z.object({
 
 type Assessment = z.infer<typeof assessmentSchema>;
 type CapabilityProfile={actor_id:string;active:boolean;repair_classes:unknown;capabilities:unknown;tools:unknown;max_estimated_minutes:number|null;max_estimated_cost:string|number|null;verified_at:string|null};
+// Mirrors the full action set in migrations/020_field_service_decisions.sql's check constraint.
+// decide() below only ever returns 4 of these 6 today; 'temporary_stabilization' and 'route_to_shop'
+// are reserved outcomes with no decision criteria defined yet (see docs/FIELD_SERVICE_ONSITE_REPAIR_ARCHITECTURE.md).
+type FieldServiceAction='field_repair'|'temporary_stabilization'|'dispatch_field_technician'|'route_to_shop'|'tow_required'|'remote_review';
 
 function stringArray(value:unknown):string[]{return Array.isArray(value)?value.filter((v):v is string=>typeof v==='string'):[]}
 function includesAll(have:string[],need:string[]){const set=new Set(have);return need.every(v=>set.has(v))}
@@ -52,7 +56,7 @@ function operatorEligible(a:Assessment,p:CapabilityProfile|null){
   if(a.estimatedCost!=null&&p.max_estimated_cost!=null&&a.estimatedCost>Number(p.max_estimated_cost))return false;
   return true;
 }
-function decide(a:Assessment,p:CapabilityProfile|null){
+function decide(a:Assessment,p:CapabilityProfile|null):FieldServiceAction{
   const unsafe=Object.values(a.safety).some(Boolean);
   if(unsafe||a.drivability==='non_drivable')return'tow_required' as const;
   if(a.confidence<0.75)return'remote_review' as const;
