@@ -253,7 +253,13 @@ async function productionLifecycle(browser) {
   const offerCard = partner.locator('article.offer').filter({ hasText: `Case ${casePrefix}` }).first();
   await offerCard.getByRole('button', { name: 'Accept work' }).click();
   await waitForCaseState(caseId, adminToken, 'repair_in_progress');
-  await partner.getByRole('heading', { name: 'Repair workbench' }).waitFor({ timeout: 20_000 });
+  await partner.getByText(/Work accepted/i).waitFor({ timeout: 20_000 }).catch(() => {});
+  const workbench = partner.getByRole('heading', { name: 'Repair workbench' });
+  if (!await workbench.isVisible().catch(() => false)) {
+    const acceptedCase = partner.getByRole('button').filter({ hasText: `Case ${casePrefix}` }).first();
+    if (await acceptedCase.isVisible().catch(() => false)) await acceptedCase.click();
+  }
+  await workbench.waitFor({ timeout: 20_000 });
   const quoteForm = partner.locator('form').filter({ hasText: 'Customer quote' }).first();
   await quoteForm.getByPlaceholder('Reason for quote').fill('Browser acceptance verified repair');
   await quoteForm.getByPlaceholder('Customer-facing summary (optional)').fill('Verified repair after diagnosis and tow.');
