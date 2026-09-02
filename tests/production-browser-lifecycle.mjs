@@ -230,9 +230,11 @@ async function productionLifecycle(browser) {
   const towContext = await browser.newContext({ viewport: { width: 430, height: 900 } });
   const tow = await towContext.newPage();
   await setPortalSession(tow, PORTALS.tow, 'roviq_tow_token', 'roviq_tow_principal', towSession);
-  const activeDispatch = tow.locator('section.active-dispatch').filter({ hasText: `Case ${casePrefix}` }).first();
-  await activeDispatch.waitFor({ state: 'visible', timeout: 20_000 });
-  const acceptTow = activeDispatch.getByRole('button', { name: 'Accept' });
+  // The Drive tab auto-selects the sole active dispatch and shows its actions directly -- a later
+  // tow UI redesign ("declutter live map and collapse trip details") replaced the separate
+  // dispatch-card selection step this test used to rely on, so there is no card to click here.
+  await tow.getByText(`Case ${casePrefix}`).waitFor({ timeout: 20_000 });
+  const acceptTow = tow.getByRole('button', { name: 'Accept', exact: true });
   if (await acceptTow.isVisible().catch(() => false)) await acceptTow.click();
   for (const label of ['en route', 'arrived', 'vehicle loaded', 'in transit', 'delivered']) {
     const button = tow.getByRole('button', { name: new RegExp(`Mark ${label}`, 'i') });
