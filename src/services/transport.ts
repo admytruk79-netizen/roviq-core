@@ -23,6 +23,21 @@ export async function createTransportDispatch(principal: Principal, input:{
     [input.caseId,input.transportType,JSON.stringify(input.pickupLocation ?? {}),JSON.stringify(input.dropoffLocation ?? {}),JSON.stringify(input.vehicleContext ?? {}),input.etaAt ?? null,JSON.stringify(input.metadata ?? {})]
   );
   const dispatch = r.rows[0];
+
+  if (input.pickupLocation || input.dropoffLocation) {
+    await pool.query(
+      `insert into case_spatial_context(case_id,origin,current_vehicle,destination,route_context,source,updated_at)
+       values($1,$2::jsonb,$2::jsonb,$3::jsonb,'{}'::jsonb,'transport_dispatch',now())
+       on conflict(case_id) do update set
+         origin=coalesce(excluded.origin,case_spatial_context.origin),
+         current_vehicle=coalesce(excluded.current_vehicle,case_spatial_context.current_vehicle),
+         destination=coalesce(excluded.destination,case_spatial_context.destination),
+         source='transport_dispatch',
+         updated_at=now()`,
+      [input.caseId,input.pickupLocation ? JSON.stringify(input.pickupLocation) : null,input.dropoffLocation ? JSON.stringify(input.dropoffLocation) : null]
+    );
+  }
+
   if (c.rows[0].state !== 'tow_pending' && c.rows[0].state !== 'tow_in_progress') {
     await transitionCase(principal,input.caseId,'tow_pending',{ transportDispatchId:dispatch.id, transportType:input.transportType });
   }
