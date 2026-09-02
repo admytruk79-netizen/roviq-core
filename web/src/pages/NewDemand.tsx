@@ -15,15 +15,20 @@ const ISSUE_TYPES: { value: string; label: string }[] = [
   { value: 'other', label: 'Something else' }
 ];
 
-type IntakeLocation = { lat: number; lng: number };
+type IntakeLocation = { lat: number; lng: number; accuracy?: number; capturedAt: string };
 
 function currentLocation(): Promise<IntakeLocation | null> {
   if (!navigator.geolocation) return Promise.resolve(null);
   return new Promise((resolve) => {
     navigator.geolocation.getCurrentPosition(
-      (position) => resolve({ lat: position.coords.latitude, lng: position.coords.longitude }),
+      (position) => resolve({
+        lat: position.coords.latitude,
+        lng: position.coords.longitude,
+        accuracy: Number.isFinite(position.coords.accuracy) ? position.coords.accuracy : undefined,
+        capturedAt: new Date(position.timestamp || Date.now()).toISOString()
+      }),
       () => resolve(null),
-      { enableHighAccuracy: true, maximumAge: 30_000, timeout: 3500 }
+      { enableHighAccuracy: true, maximumAge: 5_000, timeout: 12_000 }
     );
   });
 }
@@ -46,9 +51,11 @@ export function NewDemand() {
     const next = await currentLocation();
     if (next) {
       setLocation(next);
-      setLocationMessage('Vehicle location captured for dispatch and tow routing.');
+      const accuracy = typeof next.accuracy === 'number' ? ` · ±${Math.round(next.accuracy)} m` : '';
+      setLocationMessage(`Vehicle GPS captured${accuracy}.`);
     } else {
-      setLocationMessage('Location is unavailable. You can still submit, but tow routing will need a location before dispatch.');
+      setLocation(null);
+      setLocationMessage('Location permission or GPS is unavailable. Enable precise location to create a dispatch-ready case.');
     }
     setLocating(false);
     return next;
@@ -61,10 +68,15 @@ export function NewDemand() {
     try {
       const demandType = issueType === 'other' ? otherIssue.trim().toLowerCase().replace(/\s+/g, '_') : issueType;
       const intakeLocation = location ?? await captureLocation();
+      if (!intakeLocation) {
+        setError('Vehicle GPS is required so diagnostics and Tow / Valet can find the case location. Enable location permission and try again.');
+        setSubmitting(false);
+        return;
+      }
       const res = await api.post<{ case: ServiceCase }>('/api/demands', {
         domain: 'maintenance',
         demandType,
-        location: intakeLocation ?? undefined,
+        location: intakeLocation,
         urgency,
         attributes: description.trim() ? { description: description.trim() } : {}
       });
@@ -125,8 +137,8 @@ export function NewDemand() {
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <p className="text-sm font-medium text-slate-700">Vehicle location</p>
-              <p className="mt-0.5 text-xs text-slate-500">Used for diagnostic dispatch and tow navigation.</p>
+              <p className="text-sm font-medium text-slate-700">Vehicle GPS</p>
+              <p className="mt-0.5 text-xs text-slate-500">Required for diagnostic dispatch and Tow / Valet routing.</p>
             </div>
             <button
               type="button"
@@ -134,10 +146,10 @@ export function NewDemand() {
               disabled={locating}
               className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
             >
-              {locating ? 'Locating…' : location ? 'Update location' : 'Use my location'}
+              {locating ? 'Locating…' : location ? 'Update GPS' : 'Capture GPS'}
             </button>
           </div>
-          {location && <p className="mt-2 text-xs text-emerald-700">Location ready for dispatch.</p>}
+          {location && <p className="mt-2 text-xs text-emerald-700">GPS ready for dispatch.</p>}
           {locationMessage && <p className="mt-2 text-xs text-slate-500">{locationMessage}</p>}
         </div>
         <div>
@@ -156,7 +168,7 @@ export function NewDemand() {
         {error && <p className="text-sm text-red-600">{error}</p>}
         <button
           type="submit"
-          disabled={submitting}
+          disabled={submitting || locating}
           className="w-full rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
         >
           {submitting ? 'Submitting…' : 'Submit'}
