@@ -82,6 +82,11 @@ export default function App() {
   const [detail, setDetail] = useState<OrderDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const detailRequest = useRef(0);
+  // Mirrors `selected` for reads inside async closures (e.g. action() below): a closure captures
+  // `selected` as of the render that started it, so a selection change made while that action's
+  // request is still in flight would go unnoticed by an `=== selected` check on the stale value.
+  const selectedRef = useRef<string | null>(null);
+  useEffect(() => { selectedRef.current = selected; }, [selected]);
   const [sku, setSku] = useState('');
   const [description, setDescription] = useState('');
   const [quantityOnHand, setQuantityOnHand] = useState('');
@@ -218,7 +223,10 @@ export default function App() {
         setMessage(`Order marked ${kind}.`);
       }
       await load();
-      await loadDetail(id);
+      // Only refresh the detail panel if this action was on the order still currently selected --
+      // read the live ref, not the `selected` state closed over when this action() call started,
+      // since the user may have switched selection while the request was in flight.
+      if (id === selectedRef.current) await loadDetail(id);
     } catch (err) {
       const raw = err instanceof Error ? err.message : 'Update failed';
       setError(raw.startsWith('inventory_unavailable:')

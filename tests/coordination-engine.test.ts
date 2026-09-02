@@ -33,7 +33,29 @@ describe('ROVIQ coordination engine', () => {
       { actorId:'a', signals:{ capacity:4, rating:4.8, onTime:0.97, distanceMiles:4, continuity:1 } },
       { actorId:'b', signals:{ capacity:1, rating:3.7, onTime:0.7 } }
     ], policy, 'case-3');
-    expect(ranked[0].relationships).toEqual(expect.arrayContaining(['fit','proximity','continuity','reliability','balance','counterweight']));
+    const byActor = Object.fromEntries(ranked.map((r) => [r.actorId, r.relationships]));
+    // 'a' is above the capacity mean (2.5): gets the fairness-neutral 'balance' tag, not 'counterweight'.
+    expect(byActor.a).toEqual(expect.arrayContaining(['fit','proximity','continuity','reliability','balance']));
+    expect(byActor.a).not.toContain('counterweight');
+    // 'b' is below the mean: it's the under-resourced candidate the fairness nudge should favor.
+    expect(byActor.b).toContain('counterweight');
+    expect(byActor.b).not.toContain('balance');
+  });
+
+  it('gives the counterweight boost only to the below-mean candidate, not to balance', () => {
+    // Isolate the balance/counterweight signal from every other boost so the adjustment
+    // difference can only come from that one mechanism.
+    const isolatedPolicy = {
+      weights: { capacity: 1 },
+      coordination: { enabled: true, maxAdjustment: 0.1, balanceBoost: 0.05, continuityBoost: 0, spatialBoost: 0, reliabilityBoost: 0 }
+    };
+    const ranked = rankCoordinationCandidates([
+      { actorId: 'strong', signals: { capacity: 4 } },
+      { actorId: 'weak', signals: { capacity: 1 } }
+    ], isolatedPolicy, 'case-5');
+    const byActor = Object.fromEntries(ranked.map((r) => [r.actorId, r]));
+    expect(byActor.weak.adjustment).toBeCloseTo(0.05);
+    expect(byActor.strong.adjustment).toBe(0);
   });
 
   it('can be disabled to preserve policy-only scoring', () => {

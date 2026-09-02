@@ -120,8 +120,10 @@ function relationshipSignals(candidate: CoordinationCandidate, all: Coordination
   if (capacities.length > 1 && finite(s.capacity)) {
     const mean = capacities.reduce((sum, x) => sum + x, 0) / capacities.length;
     if (Number(s.capacity) >= mean) out.add('balance');
-    const minimum = Math.min(...capacities);
-    if (Number(s.capacity) > minimum) out.add('counterweight');
+    // Fairness nudge for under-resourced candidates, complementary to 'balance': it must target
+    // capacity below the mean, not "above the single weakest candidate" (which matched almost
+    // everyone, compounding the boost toward the already-strongest actor instead of the weakest).
+    else out.add('counterweight');
   }
 
   return [...out];
@@ -139,7 +141,10 @@ function boundedAdjustment(
   if (relationships.includes('continuity')) {
     adjustment += clamp(cfg.continuityBoost ?? 0.035, 0, 0.08);
   }
-  if (relationships.includes('balance') || relationships.includes('counterweight')) {
+  // Only 'counterweight' (below-mean) gets this boost. 'balance' is now purely a diagnostic label
+  // for above-mean candidates -- granting the same boost to both made the fairness nudge a no-op,
+  // since it added the identical amount to every candidate regardless of relative capacity.
+  if (relationships.includes('counterweight')) {
     adjustment += clamp(cfg.balanceBoost ?? 0.025, 0, 0.06);
   }
   if (relationships.includes('reliability')) {

@@ -61,7 +61,14 @@ describe('spatial authorization and role projection', () => {
         diagnosticLocation: { lat: 45.51, lng: -122.68, internal: 'diagnostic-only' },
         providerLocation: { lat: 45.54, lng: -122.64, internal: 'provider-only' },
         partsOrigin: { lat: 45.58, lng: -122.60, internal: 'parts-only' },
-        routeContext: { distanceMiles: 4.8, etaMinutes: 13 },
+        routeContext: {
+          distanceMiles: 4.8,
+          etaMinutes: 13,
+          candidates: {
+            [towActorId]: { distanceMiles: 4.8, etaMinutes: 13 },
+            [strangerTowActorId]: { distanceMiles: 22.1, etaMinutes: 47 }
+          }
+        },
         source: 'e2e_spatial_authorization'
       }
     });
@@ -122,6 +129,8 @@ describe('spatial authorization and role projection', () => {
     expect(towSpatial).not.toHaveProperty('diagnostic_location');
     expect(towSpatial).not.toHaveProperty('provider_location');
     expect(towSpatial).not.toHaveProperty('parts_origin');
+    // A provider must never see every competing provider's own distance/ETA for this case.
+    expect(towSpatial.route_context).not.toHaveProperty('candidates');
 
     const strangerSpatialRes = await app.inject({
       method: 'GET',
@@ -142,5 +151,15 @@ describe('spatial authorization and role projection', () => {
     expect(customerSpatial.transport_location.dispatchId).toBe(dispatchId);
     expect(customerSpatial).not.toHaveProperty('diagnostic_location');
     expect(customerSpatial).not.toHaveProperty('parts_origin');
+    expect(customerSpatial.route_context).not.toHaveProperty('candidates');
+
+    const adminSpatialRes = await app.inject({
+      method: 'GET',
+      url: `/api/maintenance/cases/${caseId}/spatial`,
+      headers: adminHeaders()
+    });
+    expect(adminSpatialRes.statusCode).toBe(200);
+    const adminSpatial = JSON.parse(adminSpatialRes.body).spatial;
+    expect(adminSpatial.route_context.candidates[towActorId].etaMinutes).toBe(13);
   });
 });

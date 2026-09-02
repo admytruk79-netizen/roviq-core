@@ -155,4 +155,36 @@ describe('transport dispatch end-to-end lifecycle', () => {
     const strangerCase = await app.inject({ method: 'GET', url: `/api/maintenance/cases/${caseId}`, headers: actorHeaders('customer', strangerId) });
     expect(strangerCase.statusCode).toBe(403);
   });
+
+  it('completes a decline with only one pool connection available (pool-exhaustion regression)', async () => {
+    const demandRes = await app.inject({
+      method: 'POST', url: '/api/demands', headers: actorHeaders('customer', customerActorId),
+      payload: { domain: 'maintenance', demandType: 'wont_start', urgency: 'urgent' }
+    });
+    const caseId = JSON.parse(demandRes.body).case.id as string;
+    await app.inject({ method: 'POST', url: `/api/maintenance/cases/${caseId}/transition`, headers: adminHeaders(), payload: { toState: 'tow_pending' } });
+    const dispatchRes = await app.inject({
+      method: 'POST', url: '/api/admin/transport', headers: adminHeaders(),
+      payload: { caseId, transportType: 'tow', pickupLocation: { lat: 1, lng: 1 }, dropoffLocation: { lat: 2, lng: 2 } }
+    });
+    const dispatchId = JSON.parse(dispatchRes.body).dispatch.id as string;
+    await app.inject({ method: 'POST', url: `/api/admin/transport/${dispatchId}/assign`, headers: adminHeaders(), payload: { providerActorId: towActorId } });
+
+    // Pool max is 10 (src/db/pool.ts). Hold 9 raw connections so the decline's own transaction
+    // takes the last one. Before the fix, updateTransportStatus's declined branch called
+    // appendCaseEvent -- a second pool.query -- while still holding that transaction's connection;
+    // with zero spare connections left, the second acquisition would block until
+    // connectionTimeoutMillis and the whole decline would time out and roll back.
+    const heldClients = await Promise.all(Array.from({ length: 9 }, () => pool.connect()));
+    try {
+      const declineRes = await app.inject({
+        method: 'POST', url: `/api/transport/${dispatchId}/status`, headers: actorHeaders('tow', towActorId),
+        payload: { status: 'declined' }
+      });
+      expect(declineRes.statusCode).toBe(200);
+      expect(JSON.parse(declineRes.body).dispatch.status).toBe('declined');
+    } finally {
+      heldClients.forEach((c) => c.release());
+    }
+  }, 15000);
 });
