@@ -4,6 +4,23 @@ import { api, ApiError } from '../lib/api';
 import { formatAmount, formatMinorAmount, humanizeToken } from '../lib/format';
 import type { PaymentIntent, ServiceCase, ServicePlanResponse } from '../lib/types';
 
+const TRANSIENT_STATUSES = new Set([500, 502, 503, 504]);
+
+async function getWithRecovery<T>(path: string, attempts = 4): Promise<T> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await api.get<T>(path);
+    } catch (err) {
+      lastError = err;
+      const transient = err instanceof ApiError && TRANSIENT_STATUSES.has(err.status);
+      if (!transient || attempt === attempts - 1) throw err;
+      await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+    }
+  }
+  throw lastError ?? new Error('payment_handoff_read_failed');
+}
+
 export function PaymentHandoff() {
   const { id } = useParams<{ id: string }>();
   const [caseData, setCaseData] = useState<ServiceCase | null>(null);
@@ -13,6 +30,7 @@ export function PaymentHandoff() {
   const [description, setDescription] = useState('Vehicle service');
   const [creating, setCreating] = useState(false);
   const [capturing, setCapturing] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -21,9 +39,9 @@ export function PaymentHandoff() {
     setError(null);
     try {
       const [caseRes, planRes, paymentRes] = await Promise.all([
-        api.get<{ case: ServiceCase }>(`/api/maintenance/cases/${id}`),
-        api.get<ServicePlanResponse>(`/api/maintenance/cases/${id}/service-plan`).catch(() => null),
-        api.get<{ payments: PaymentIntent[] }>(`/api/maintenance/cases/${id}/payments`)
+        getWithRecovery<{ case: ServiceCase }>(`/api/maintenance/cases/${id}`),
+        getWithRecovery<ServicePlanResponse>(`/api/maintenance/cases/${id}/service-plan`).catch(() => null),
+        getWithRecovery<{ payments: PaymentIntent[] }>(`/api/maintenance/cases/${id}/payments`)
       ]);
       setCaseData(caseRes.case);
       setPlan(planRes);
@@ -33,17 +51,32 @@ export function PaymentHandoff() {
         setAmount(current => current || suggested);
       }
     } catch (err) {
-      setError(err instanceof ApiError && err.status === 403 ? 'You do not have access to this payment handoff.' : 'Could not load payment handoff state.');
+      setError(err instanceof ApiError && err.status === 403 ? 'You do not have access to this payment handoff.' : 'Could not load payment handoff state. Retrying is safe.');
     }
   }, [id]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    let cancelled = false;
+    void load();
+    const recovery = window.setTimeout(() => {
+      if (!cancelled) void load();
+    }, 2500);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(recovery);
+    };
+  }, [load]);
 
   const latestPayment = payments[0] ?? null;
   const latestQuoteApproval = useMemo(
     () => plan?.approvals.find(approval => approval.approval_type === 'quote') ?? null,
     [plan]
   );
+
+  async function refresh() {
+    setRefreshing(true);
+    try { await load(); } finally { setRefreshing(false); }
+  }
 
   async function createPayment(event: FormEvent) {
     event.preventDefault();
@@ -96,7 +129,15 @@ export function PaymentHandoff() {
     }
   }
 
-  if (!caseData) return null;
+  if (!caseData) {
+    return error ? (
+      <section className="rounded-lg border border-slate-200 bg-white p-4">
+        <h2 className="text-sm font-semibold text-slate-700">Customer payment handoff</h2>
+        <p className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+        <button type="button" onClick={() => void refresh()} disabled={refreshing} className="mt-3 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">{refreshing ? 'Refreshing…' : 'Retry'}</button>
+      </section>
+    ) : null;
+  }
   if (caseData.state !== 'payment_pending' && payments.length === 0 && caseData.state !== 'completed') return null;
 
   return (
@@ -106,7 +147,7 @@ export function PaymentHandoff() {
           <h2 className="text-sm font-semibold text-slate-700">Customer payment handoff</h2>
           <p className="mt-1 text-sm text-slate-500">Complete the approved service transaction from the same case control surface.</p>
         </div>
-        <button type="button" onClick={()=>void load()} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50">Refresh</button>
+        <button type="button" onClick={() => void refresh()} disabled={refreshing} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">{refreshing ? 'Refreshing…' : 'Refresh'}</button>
       </div>
 
       {message && <p className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{message}</p>}
@@ -124,8 +165,8 @@ export function PaymentHandoff() {
 
       {!latestPayment && caseData.state === 'payment_pending' && latestQuoteApproval?.state === 'approved' && (
         <form onSubmit={createPayment} className="mt-4 grid gap-3 rounded-md border border-slate-200 p-3 sm:grid-cols-[140px_1fr_auto] sm:items-end">
-          <label className="text-sm font-medium text-slate-700">Amount USD<input type="number" min="0" step="0.01" required value={amount} onChange={event=>setAmount(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" /></label>
-          <label className="text-sm font-medium text-slate-700">Description<input value={description} onChange={event=>setDescription(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" /></label>
+          <label className="text-sm font-medium text-slate-700">Amount USD<input type="number" min="0" step="0.01" required value={amount} onChange={event => setAmount(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" /></label>
+          <label className="text-sm font-medium text-slate-700">Description<input value={description} onChange={event => setDescription(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" /></label>
           <button disabled={creating} className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50">{creating ? 'Creating…' : 'Create payment'}</button>
         </form>
       )}
@@ -133,7 +174,7 @@ export function PaymentHandoff() {
       {latestPayment && (
         <div className="mt-4 flex flex-col justify-between gap-3 rounded-md border border-slate-200 p-3 sm:flex-row sm:items-center">
           <div><p className="text-sm font-semibold">Payment {latestPayment.id.slice(0, 8)}</p><p className="mt-1 text-sm text-slate-500">{formatAmount(latestPayment.amount, latestPayment.currency)} · {humanizeToken(latestPayment.state)}</p></div>
-          {!['captured','cancelled','failed','refunded','partially_refunded'].includes(latestPayment.state) && <button type="button" disabled={capturing} onClick={()=>void capturePayment()} className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50">{capturing ? 'Capturing…' : 'Capture & complete case'}</button>}
+          {!['captured', 'cancelled', 'failed', 'refunded', 'partially_refunded'].includes(latestPayment.state) && <button type="button" disabled={capturing} onClick={() => void capturePayment()} className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50">{capturing ? 'Capturing…' : 'Capture & complete case'}</button>}
           {latestPayment.state === 'captured' && <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700">Captured</span>}
         </div>
       )}
