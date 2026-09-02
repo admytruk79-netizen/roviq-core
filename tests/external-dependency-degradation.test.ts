@@ -80,6 +80,21 @@ describe('external dependency degradation', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it('allows the cache-control request header in CORS preflight, matching what portal clients send', async () => {
+    // tow/src/App.tsx's req() sends cache-control:no-cache on every request. A browser enforcing
+    // CORS preflight blocks the whole request if a header it sends isn't in
+    // access-control-allow-headers -- this was silently breaking every dispatches/history fetch in
+    // a real browser (Node's fetch and curl don't enforce CORS, so it never surfaced in non-browser
+    // testing) and is a real, live production bug independent of the migration-checksum outage.
+    const preflight = await worker.fetch(new Request('https://core.test/api/transport/me/dispatches', {
+      method: 'OPTIONS',
+      headers: { origin: 'https://roviq-tow-net.pages.dev', 'access-control-request-headers': 'content-type,cache-control,authorization' }
+    }), {});
+    expect(preflight.status).toBe(204);
+    const allowedHeaders = preflight.headers.get('access-control-allow-headers')?.split(',') ?? [];
+    expect(allowedHeaders).toContain('cache-control');
+  });
+
   it('keeps shadow and advisory AI assessments non-authoritative even when otherwise usable', () => {
     expect(evaluateAssessmentAuthority({
       deploymentMode: 'shadow', status: 'proposed', requiresHumanReview: false

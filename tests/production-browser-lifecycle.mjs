@@ -227,31 +227,13 @@ async function productionLifecycle(browser) {
     item => item.case_id === caseId,
     `Tow queue does not contain case ${caseId}`
   );
-  for (const probePath of ['/api/transport/me/dispatches', '/api/transport/me/history']) {
-    const startedAt = Date.now();
-    try {
-      await requestJson(`${probePath}?ts=${Date.now()}`, { token: towSession.accessToken });
-      log(`DEBUG ${probePath} responded in ${Date.now() - startedAt}ms`);
-    } catch (error) {
-      log(`DEBUG ${probePath} failed after ${Date.now() - startedAt}ms: ${error instanceof Error ? error.message : error}`);
-    }
-  }
   const towContext = await browser.newContext({ viewport: { width: 430, height: 900 } });
   const tow = await towContext.newPage();
-  tow.on('pageerror', err => log(`DEBUG tow page error: ${err instanceof Error ? err.stack ?? err.message : err}`));
-  tow.on('console', msg => { if (msg.type() === 'error') log(`DEBUG tow console error: ${msg.text()}`); });
   await setPortalSession(tow, PORTALS.tow, 'roviq_tow_token', 'roviq_tow_principal', towSession);
   // The Drive tab auto-selects the sole active dispatch and shows its actions directly -- a later
   // tow UI redesign ("declutter live map and collapse trip details") replaced the separate
   // dispatch-card selection step this test used to rely on, so there is no card to click here.
-  try {
-    await tow.getByText(`Case ${casePrefix}`).waitFor({ timeout: 20_000 });
-  } catch (error) {
-    const bodyText = await tow.locator('body').innerText().catch(() => '(body text unavailable)');
-    log(`DEBUG tow drive view did not show "Case ${casePrefix}". Rendered body text: ${JSON.stringify(bodyText.slice(0, 1500))}`);
-    await screenshot(tow, 'lifecycle-04-tow-debug-failure');
-    throw error;
-  }
+  await tow.getByText(`Case ${casePrefix}`).waitFor({ timeout: 20_000 });
   const acceptTow = tow.getByRole('button', { name: 'Accept', exact: true });
   if (await acceptTow.isVisible().catch(() => false)) await acceptTow.click();
   for (const label of ['en route', 'arrived', 'vehicle loaded', 'in transit', 'delivered']) {
