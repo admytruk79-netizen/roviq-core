@@ -13,18 +13,21 @@ export async function adminRoutes(app: FastifyInstance) {
   // once root-caused.
   app.post('/api/admin/debug/replay-transition', { preHandler: requireRole('admin') }, async (req, reply) => {
     const body = z.object({ caseId: z.string().uuid(), toState: z.string() }).parse(req.body);
-    const c = await pool.query('select current_owner_role,current_owner_actor_id,state from service_cases where id=$1', [body.caseId]);
+    const c = await pool.query('select current_owner_role,current_owner_actor_id,state,demand_id from service_cases where id=$1', [body.caseId]);
     if (!c.rowCount) return reply.code(404).send({ error: 'case_not_found' });
     const row = c.rows[0];
+    const offers = await pool.query('select id,demand_id,case_id,actor_id,outcome,offered_at,responded_at from matches_offers where case_id=$1 order by offered_at desc', [body.caseId]);
     const principal = { role: row.current_owner_role, actorId: row.current_owner_actor_id } as any;
     try {
       const result = await transitionCase(principal, body.caseId, body.toState as any);
-      return reply.send({ ok: true, principalUsed: principal, caseStateBefore: row.state, result });
+      return reply.send({ ok: true, principalUsed: principal, caseStateBefore: row.state, demandId: row.demand_id, offers: offers.rows, result });
     } catch (error) {
       return reply.send({
         ok: false,
         principalUsed: principal,
         caseStateBefore: row.state,
+        demandId: row.demand_id,
+        offers: offers.rows,
         error: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined
       });
