@@ -73,7 +73,16 @@ export function CaseWork({ caseId }: { caseId: string }) {
     }
   }, [caseId]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+    const interval = window.setInterval(() => void load(), 5000);
+    const onFocus = () => void load();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [load]);
 
   const pendingApproval = useMemo(
     () => plan?.approvals.find(approval => approval.approval_type === 'quote' && approval.state === 'pending') ?? null,
