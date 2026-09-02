@@ -355,8 +355,15 @@ async function productionLifecycle(browser) {
   if (await customerRefresh.isVisible().catch(() => false)) await customerRefresh.click();
   const approvalPanel = customer.locator('div').filter({ hasText: 'Approval needed:' }).first();
   await approvalPanel.getByRole('button', { name: 'Approve' }).click();
-  const servicePlan = await requestJson(`/api/maintenance/cases/${caseId}/service-plan`, { token: customerToken });
-  assert.ok(servicePlan.approvals.some(item => item.approval_type === 'quote' && item.state === 'approved'), 'Customer quote approval was not persisted');
+  // The click dispatches the decision POST but returns immediately -- it does not wait for the
+  // request to resolve, so an unqualified fetch right after this can race the write. Poll instead.
+  await waitForCollectionItem(
+    `/api/maintenance/cases/${caseId}/service-plan`,
+    customerToken,
+    'approvals',
+    item => item.approval_type === 'quote' && item.state === 'approved',
+    'Customer quote approval was not persisted'
+  );
   await screenshot(customer, 'lifecycle-07-customer-approved');
 
   log('9/10 Ops: create payment and capture it through the production payment handoff UI.');
