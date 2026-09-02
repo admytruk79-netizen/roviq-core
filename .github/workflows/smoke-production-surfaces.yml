@@ -28,7 +28,7 @@ jobs:
       matrix:
         include:
           - name: customer
-            url: https://roviq-web.pages.dev
+            url: https://roviq-core-customer.pages.dev
           - name: diagnostic
             url: https://roviq-diagnostic-net.pages.dev
           - name: partner
