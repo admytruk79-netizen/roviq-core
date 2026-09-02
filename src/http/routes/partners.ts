@@ -113,10 +113,7 @@ export async function partnerRoutes(app: FastifyInstance) {
       }
     }
 
-    try { await audit(req.principal,'respond_offer','match_offer',id,'actor_scoped_offer',{ outcome: body.outcome, caseId:offer.case_id ?? null }); }
-    catch (error) {
-      console.error('offer_respond_audit_failed', { offerId: id, message: error instanceof Error ? error.message : String(error) });
-    }
+    await audit(req.principal,'respond_offer','match_offer',id,'actor_scoped_offer',{ outcome: body.outcome, caseId:offer.case_id ?? null });
     return { offer, case:serviceCase };
   });
 }
