@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import { formatAmount, formatDateTime, formatMinorAmount, humanizeToken } from '../lib/format';
 import { StatusBadge } from '../components/StatusBadge';
@@ -19,8 +19,8 @@ function locationLabel(value: unknown) {
   if (!value) return 'Not available yet';
   if (typeof value === 'string') return value;
   if (typeof value === 'object') {
-    const v=value as Record<string,unknown>;
-    const text=[v.name,v.label,v.address,v.formatted_address,v.description].find(x=>typeof x==='string');
+    const v = value as Record<string, unknown>;
+    const text = [v.name, v.label, v.address, v.formatted_address, v.description].find(x => typeof x === 'string');
     if (typeof text === 'string') return text;
   }
   return 'Location available';
@@ -85,41 +85,129 @@ export function CaseDetail() {
     }
   }
 
-  if (error) return <p className="text-sm text-red-600">{error}</p>;
-  if (!caseData) return <p className="text-sm text-slate-500">Loading…</p>;
+  if (error) {
+    return (
+      <section className="rounded-xl border border-red-200 bg-red-50 p-5">
+        <p className="text-sm font-semibold text-red-800">We could not open this case.</p>
+        <p className="mt-1 text-sm text-red-700">{error}</p>
+        <Link to="/cases" className="mt-4 inline-flex text-sm font-medium text-slate-700 underline underline-offset-4">Back to my cases</Link>
+      </section>
+    );
+  }
+
+  if (!caseData) {
+    return (
+      <div className="space-y-4" aria-live="polite" aria-busy="true">
+        <div className="h-4 w-24 animate-pulse rounded bg-slate-200" />
+        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="h-3 w-28 animate-pulse rounded bg-slate-200" />
+          <div className="mt-3 h-7 w-48 animate-pulse rounded bg-slate-200" />
+          <div className="mt-3 h-4 w-64 max-w-full animate-pulse rounded bg-slate-100" />
+        </section>
+        <section className="grid gap-3 sm:grid-cols-3">
+          {[0, 1, 2].map((item) => <div key={item} className="h-24 animate-pulse rounded-xl border border-slate-200 bg-white" />)}
+        </section>
+        <p className="text-sm text-slate-500">Loading your service update…</p>
+      </div>
+    );
+  }
 
   const pendingApproval = plan?.approvals.find((a) => a.state === 'pending' && a.approval_type === 'quote');
-  const route=spatial?.route_context ?? {};
-  const eta=route.etaMinutes;
+  const route = spatial?.route_context ?? {};
+  const eta = route.etaMinutes;
+  const normalizedState = String(caseData.state).toLowerCase();
+  const isComplete = ['completed', 'closed'].includes(normalizedState);
+  const statusMessage = snapshot?.customer_message ?? humanizeToken(snapshot?.customer_status ?? caseData.state);
+  const nextAction = snapshot?.next_action ?? (isComplete ? 'Your service is complete. No action is required.' : 'We are coordinating the next step.');
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between gap-3">
-        <div><h1 className="text-lg font-semibold capitalize">{caseData.case_type} case</h1><p className="text-xs text-slate-500">Opened {formatDateTime(caseData.created_at)}</p></div>
-        <div className="flex items-center gap-2"><button type="button" onClick={()=>void refresh()} disabled={refreshing} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">{refreshing ? 'Refreshing…' : 'Refresh'}</button><StatusBadge state={caseData.state} /></div>
-      </div>
+      <Link to="/cases" className="inline-flex items-center text-sm font-medium text-slate-500 hover:text-slate-800">← My cases</Link>
 
-      {caseData.attributes?.description && <p className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-600">{caseData.attributes.description}</p>}
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Current service</p>
+            <h1 className="mt-1 text-xl font-semibold capitalize text-slate-900">{caseData.case_type} case</h1>
+            <p className="mt-1 text-sm text-slate-500">Opened {formatDateTime(caseData.created_at)}</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={() => void refresh()} disabled={refreshing} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">{refreshing ? 'Refreshing…' : 'Refresh'}</button>
+            <StatusBadge state={caseData.state} />
+          </div>
+        </div>
 
-      {snapshot && <div className="rounded-lg border border-slate-200 bg-white p-4"><p className="text-sm font-medium">{snapshot.customer_message ?? humanizeToken(snapshot.customer_status)}</p>{snapshot.next_action && <p className="mt-1 text-sm text-slate-500">Next: {snapshot.next_action}</p>}{snapshot.eta_at && <p className="mt-1 text-xs text-slate-400">ETA {formatDateTime(snapshot.eta_at)}</p>}</div>}
-
-      <section>
-        <h2 className="text-sm font-semibold text-slate-700">Service progress</h2>
-        <p className="mt-1 text-xs text-slate-500">This view shows only the locations and movement relevant to your case.</p>
-        <div className="mt-2 grid gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 sm:grid-cols-2 lg:grid-cols-3">
-          <div className="bg-white p-4"><p className="text-xs font-medium uppercase tracking-wide text-slate-400">Vehicle / origin</p><p className="mt-1 text-sm text-slate-700">{locationLabel(spatial?.current_vehicle ?? spatial?.origin)}</p></div>
-          <div className="bg-white p-4"><p className="text-xs font-medium uppercase tracking-wide text-slate-400">Service destination</p><p className="mt-1 text-sm text-slate-700">{locationLabel(spatial?.destination ?? spatial?.provider_location)}</p></div>
-          <div className="bg-white p-4"><p className="text-xs font-medium uppercase tracking-wide text-slate-400">Transport</p><p className="mt-1 text-sm text-slate-700">{locationLabel(spatial?.transport_location)}</p>{(typeof eta==='number'||typeof eta==='string')&&<p className="mt-1 text-xs text-slate-400">Estimated travel {String(eta)} min</p>}</div>
+        <div className={`border-t px-5 py-5 ${isComplete ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}>
+          <p className={`text-xs font-semibold uppercase tracking-[0.14em] ${isComplete ? 'text-emerald-700' : 'text-slate-500'}`}>{isComplete ? 'Service complete' : 'What is happening now'}</p>
+          <p className={`mt-1 text-base font-semibold ${isComplete ? 'text-emerald-950' : 'text-slate-900'}`}>{statusMessage}</p>
+          <div className="mt-3 rounded-lg border border-white/80 bg-white/80 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">What happens next</p>
+            <p className="mt-1 text-sm text-slate-700">{nextAction}</p>
+            {snapshot?.eta_at && <p className="mt-1 text-xs text-slate-500">Estimated update {formatDateTime(snapshot.eta_at)}</p>}
+          </div>
         </div>
       </section>
 
-      {pendingApproval && <div className="rounded-lg border border-amber-300 bg-amber-50 p-4"><p className="text-sm font-medium text-amber-900">Approval needed: {formatMinorAmount(pendingApproval.amount_minor, pendingApproval.currency)}</p><p className="mt-1 text-xs text-amber-800">Review the service plan below before approving.</p><div className="mt-3 flex gap-2"><button onClick={() => void decide(pendingApproval.id, 'approved')} disabled={decidingId === pendingApproval.id} className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50">{decidingId === pendingApproval.id ? 'Saving…' : 'Approve'}</button><button onClick={() => void decide(pendingApproval.id, 'rejected')} disabled={decidingId === pendingApproval.id} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">Decline</button></div>{approvalError && <p className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{approvalError}</p>}</div>}
+      {caseData.attributes?.description && (
+        <section className="rounded-xl border border-slate-200 bg-white p-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Reported issue</p>
+          <p className="mt-1 text-sm text-slate-700">{caseData.attributes.description}</p>
+        </section>
+      )}
 
-      {plan && <section><h2 className="text-sm font-semibold text-slate-700">Service plan</h2>{plan.plan.customer_summary && <p className="mt-1 text-sm text-slate-600">{plan.plan.customer_summary}</p>}<ul className="mt-2 divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">{plan.tasks.length === 0 && <li className="px-4 py-3 text-sm text-slate-400">No tasks yet.</li>}{plan.tasks.map((task) => <li key={task.id} className="flex items-center justify-between px-4 py-3"><span className="text-sm">{task.title}</span><span className="text-sm text-slate-500">{formatMinorAmount(task.estimated_amount_minor, task.currency)}</span></li>)}</ul></section>}
+      {pendingApproval && (
+        <section className="rounded-xl border border-amber-300 bg-amber-50 p-5 shadow-sm">
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-700">Your action is needed</p>
+          <p className="mt-1 text-base font-semibold text-amber-950">Approval needed: {formatMinorAmount(pendingApproval.amount_minor, pendingApproval.currency)}</p>
+          <p className="mt-1 text-sm text-amber-900">Review the service plan below, then approve or decline this estimate.</p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button onClick={() => void decide(pendingApproval.id, 'approved')} disabled={decidingId === pendingApproval.id} className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50">{decidingId === pendingApproval.id ? 'Saving…' : 'Approve'}</button>
+            <button onClick={() => void decide(pendingApproval.id, 'rejected')} disabled={decidingId === pendingApproval.id} className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">Decline</button>
+          </div>
+          {approvalError && <p className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{approvalError}</p>}
+        </section>
+      )}
 
-      <section><h2 className="text-sm font-semibold text-slate-700">Payments</h2><ul className="mt-2 divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">{payments.length === 0 && <li className="px-4 py-3 text-sm text-slate-400">No payments yet.</li>}{payments.map((p) => <li key={p.id} className="flex items-center justify-between px-4 py-3"><span className="text-sm">{p.description ?? 'Payment'}</span><span className="flex items-center gap-2"><StatusBadge state={p.state} /><span className="text-sm text-slate-500">{formatAmount(p.amount, p.currency)}</span></span></li>)}</ul></section>
+      <section>
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-800">Vehicle journey</h2>
+            <p className="mt-1 text-xs text-slate-500">Where your vehicle is now and where it is headed.</p>
+          </div>
+        </div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="rounded-xl border border-slate-200 bg-white p-4"><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Vehicle / origin</p><p className="mt-1 text-sm text-slate-700">{locationLabel(spatial?.current_vehicle ?? spatial?.origin)}</p></div>
+          <div className="rounded-xl border border-slate-200 bg-white p-4"><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Service destination</p><p className="mt-1 text-sm text-slate-700">{locationLabel(spatial?.destination ?? spatial?.provider_location)}</p></div>
+          <div className="rounded-xl border border-slate-200 bg-white p-4"><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Transport</p><p className="mt-1 text-sm text-slate-700">{locationLabel(spatial?.transport_location)}</p>{(typeof eta === 'number' || typeof eta === 'string') && <p className="mt-1 text-xs text-slate-500">Estimated travel {String(eta)} min</p>}</div>
+        </div>
+      </section>
 
-      <section><h2 className="text-sm font-semibold text-slate-700">Activity</h2><ul className="mt-2 space-y-2">{timeline.map((event) => <li key={event.id} className="flex justify-between text-sm"><span className="capitalize text-slate-700">{humanizeToken(event.event_type)}</span><span className="text-xs text-slate-400">{formatDateTime(event.occurred_at)}</span></li>)}</ul></section>
+      {plan && (
+        <section>
+          <h2 className="text-sm font-semibold text-slate-800">Service plan</h2>
+          {plan.plan.customer_summary && <p className="mt-1 text-sm text-slate-600">{plan.plan.customer_summary}</p>}
+          <ul className="mt-3 divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white">
+            {plan.tasks.length === 0 && <li className="px-4 py-3 text-sm text-slate-400">The service plan is still being prepared.</li>}
+            {plan.tasks.map((task) => <li key={task.id} className="flex items-center justify-between gap-4 px-4 py-3"><span className="text-sm text-slate-800">{task.title}</span><span className="text-sm text-slate-500">{formatMinorAmount(task.estimated_amount_minor, task.currency)}</span></li>)}
+          </ul>
+        </section>
+      )}
+
+      <section>
+        <h2 className="text-sm font-semibold text-slate-800">Payments</h2>
+        <ul className="mt-3 divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white">
+          {payments.length === 0 && <li className="px-4 py-3 text-sm text-slate-400">No payment is due yet.</li>}
+          {payments.map((p) => <li key={p.id} className="flex items-center justify-between gap-4 px-4 py-3"><span className="text-sm text-slate-800">{p.description ?? 'Payment'}</span><span className="flex items-center gap-2"><StatusBadge state={p.state} /><span className="text-sm text-slate-500">{formatAmount(p.amount, p.currency)}</span></span></li>)}
+        </ul>
+      </section>
+
+      <section>
+        <h2 className="text-sm font-semibold text-slate-800">Activity</h2>
+        <ul className="mt-3 overflow-hidden rounded-xl border border-slate-200 bg-white">
+          {timeline.length === 0 && <li className="px-4 py-3 text-sm text-slate-400">No activity has been recorded yet.</li>}
+          {timeline.map((event) => <li key={event.id} className="flex items-center justify-between gap-4 border-b border-slate-100 px-4 py-3 last:border-b-0"><span className="text-sm capitalize text-slate-700">{humanizeToken(event.event_type)}</span><span className="text-xs text-slate-400">{formatDateTime(event.occurred_at)}</span></li>)}
+        </ul>
+      </section>
     </div>
   );
 }
