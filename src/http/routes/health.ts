@@ -15,12 +15,20 @@ export async function healthRoutes(app: FastifyInstance) {
   app.get('/ready', { config: { public: true } }, async (_req, reply) => {
     try {
       const result = await pool.query('select now() as database_time');
+      const migrations = await pool.query(
+        `select filename, applied_at from schema_migrations order by filename desc limit 1`
+      );
+      const rule = await pool.query(
+        `select allowed_roles from case_transition_rules where from_state='tow_in_progress' and to_state='repair_in_progress'`
+      );
       return {
         ok: true,
         service: 'roviq-core',
         revision: deployedRevision(),
         database: 'reachable',
-        databaseTime: result.rows[0]?.database_time ?? null
+        databaseTime: result.rows[0]?.database_time ?? null,
+        latestMigration: migrations.rows[0] ?? null,
+        towRepairHandoffAllowedRoles: rule.rows[0]?.allowed_roles ?? null
       };
     } catch (error) {
       app.log.error(error);

@@ -79,6 +79,13 @@ jobs:
             sleep 10
           done
 
+      - name: Report Render migration state
+        if: ${{ env.ADMIN_EMAIL != '' && env.ADMIN_PASSWORD != '' }}
+        shell: bash
+        run: |
+          curl --silent --show-error --max-time 25 "$RENDER_URL/ready" || true
+          echo
+
       - name: Diagnose credentialed Customer auth path
         if: ${{ env.ADMIN_EMAIL != '' && env.ADMIN_PASSWORD != '' }}
         run: node tests/production-auth-probe.mjs
