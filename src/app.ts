@@ -37,20 +37,32 @@ export async function buildApp() {
     if (err instanceof ZodError) return reply.code(400).send({ error:'validation_error', details:err.issues });
     if (err instanceof Error && err.message === 'idempotency_key_reused') return reply.code(409).send({error:err.message});
     if (err instanceof Error && err.message === 'idempotency_key_too_long') return reply.code(400).send({error:err.message});
+    // A plugin (rate-limit, helmet, etc.) can throw an error that already carries its own
+    // intended HTTP status -- e.g. @fastify/rate-limit's 429 "Rate limit exceeded". Forcing every
+    // caught error to 500 discarded that status, so a client-side rate limit looked identical to a
+    // genuine server fault. Honor a valid 4xx the error already declares; anything else is a real
+    // unexpected failure and stays a 500.
+    const statusCode = (err as { statusCode?: number }).statusCode;
+    if (typeof statusCode === 'number' && statusCode >= 400 && statusCode < 500) {
+      return reply.code(statusCode).send({ error: err instanceof Error ? err.message : 'request_error' });
+    }
     console.error('roviq_core_error', err);
-    // TEMPORARY: the trivial, side-effect-free GET /api/transport/me/dispatches select has 500'd
-    // intermittently in production despite a retry-once wrapper on pool.query for known
-    // connection-layer errors -- meaning this specific failure's error code/message isn't one of
-    // the ones that wrapper matches. Surface it (message + Postgres error code only, no query
-    // text or bound params) so the actual cause can be read directly instead of guessed at again.
-    // Remove once root-caused.
-    const code = (err as NodeJS.ErrnoException).code;
-    return reply.code(500).send({ error:'internal_error', debugMessage: err instanceof Error ? err.message : String(err), debugCode: code ?? null });
+    return reply.code(500).send({ error:'internal_error' });
   });
 
   await app.register(cors, { origin: false });
   await app.register(helmet);
-  await app.register(rateLimit, { max: 120, timeWindow: '1 minute' });
+  // Keyed by the caller's bearer token (falling back to IP for unauthenticated requests) rather
+  // than request.ip alone: Core sits behind the Cloudflare Worker, which proxies every client's
+  // request via its own outbound fetch, so request.ip is the Worker's egress address for
+  // everyone -- a plain IP-keyed limit collapses all real, distinct callers into one shared
+  // budget. That was silently rate-limiting unrelated traffic once aggregate usage crossed the
+  // threshold, which the error handler above then misreported as a generic 500.
+  await app.register(rateLimit, {
+    max: 120,
+    timeWindow: '1 minute',
+    keyGenerator: (req) => (req.headers.authorization as string | undefined) ?? req.ip
+  });
 
   await app.register(healthRoutes);
   app.addHook('preHandler', async (req, reply) => {
