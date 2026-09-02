@@ -13,7 +13,6 @@ import { adminRoutes } from './http/routes/admin.js';
 import { routingRoutes } from './http/routes/routing.js';
 import { diagnosticRoutes } from './http/routes/diagnostics.js';
 import { caseRoutes } from './http/routes/cases.js';
-import { spatialRoutes } from './http/routes/spatial.js';
 import { transportRoutes } from './http/routes/transport.js';
 import { fieldServiceRoutes } from './http/routes/field-service.js';
 import { mobilityRoutes } from './http/routes/mobility.js';
@@ -56,7 +55,6 @@ export async function buildApp() {
   await app.register(coreRoutes);
   await app.register(demandRoutes);
   await app.register(caseRoutes);
-  await app.register(spatialRoutes);
   await app.register(coherenceRoutes);
   await app.register(servicePlanRoutes);
   await app.register(partnerRoutes);
