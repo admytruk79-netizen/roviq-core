@@ -4,6 +4,8 @@ import { api, ApiError } from '../lib/api';
 import type { ActorSummary, PartsOrder, ServiceCase } from '../lib/types';
 import { humanizeToken } from '../lib/format';
 
+const TRANSIENT_STATUSES = new Set([500, 502, 503, 504]);
+
 function actorLabel(actor: ActorSummary) {
   const attributes = actor.attributes ?? {};
   const displayName = [attributes.displayName, attributes.name, attributes.businessName]
@@ -11,6 +13,21 @@ function actorLabel(actor: ActorSummary) {
   return typeof displayName === 'string' && displayName.trim()
     ? displayName
     : `Parts provider ${actor.id.slice(0, 8)}`;
+}
+
+async function getWithRecovery<T>(path: string, attempts = 4): Promise<T> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await api.get<T>(path);
+    } catch (err) {
+      lastError = err;
+      const transient = err instanceof ApiError && TRANSIENT_STATUSES.has(err.status);
+      if (!transient || attempt === attempts - 1) throw err;
+      await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+    }
+  }
+  throw lastError ?? new Error('parts_handoff_read_failed');
 }
 
 export function PartsHandoff() {
@@ -30,7 +47,7 @@ export function PartsHandoff() {
     setLoading(true);
     setError(null);
     try {
-      const caseRes = await api.get<{ case: ServiceCase }>(`/api/maintenance/cases/${id}`);
+      const caseRes = await getWithRecovery<{ case: ServiceCase }>(`/api/maintenance/cases/${id}`);
       setCaseData(caseRes.case);
 
       if (caseRes.case.state !== 'parts_pending') {
@@ -41,20 +58,30 @@ export function PartsHandoff() {
       }
 
       const [orderRes, providerRes] = await Promise.all([
-        api.get<{ orders: PartsOrder[] }>(`/api/admin/maintenance/cases/${id}/parts-orders`),
-        api.get<{ actors: ActorSummary[] }>('/api/admin/actors?actorType=parts&status=active')
+        getWithRecovery<{ orders: PartsOrder[] }>(`/api/admin/maintenance/cases/${id}/parts-orders`),
+        getWithRecovery<{ actors: ActorSummary[] }>('/api/admin/actors?actorType=parts&status=active')
       ]);
       setOrders(orderRes.orders);
       setProviders(providerRes.actors);
       setProviderId(current => current && providerRes.actors.some(actor => actor.id === current) ? current : '');
     } catch (err) {
-      setError(err instanceof ApiError && err.status === 403 ? 'You do not have access to this parts handoff.' : 'Could not load parts handoff state.');
+      setError(err instanceof ApiError && err.status === 403 ? 'You do not have access to this parts handoff.' : 'Could not load parts handoff state. Retrying is safe.');
     } finally {
       setLoading(false);
     }
   }, [id]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    let cancelled = false;
+    void load();
+    const recovery = window.setTimeout(() => {
+      if (!cancelled) void load();
+    }, 2500);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(recovery);
+    };
+  }, [load]);
 
   const currentOrder = useMemo(
     () => orders.find(order => !['delivered', 'cancelled', 'failed'].includes(order.status)) ?? orders[0] ?? null,
