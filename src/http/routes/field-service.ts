@@ -108,7 +108,9 @@ export async function fieldServiceRoutes(app:FastifyInstance){
   app.post('/api/maintenance/cases/:id/field-service/assess',{preHandler:requireRole('diagnostic','tow','partner','admin')},async(req,reply)=>{
     const{id}=req.params as{id:string};
     const b=assessmentSchema.parse(req.body);
-    const c=await loadCaseForPrincipal(req.principal,id);
+    let c;
+    try{c=await loadCaseForPrincipal(req.principal,id);}
+    catch(e){if(e instanceof Error&&e.message==='forbidden')return reply.code(403).send({error:'forbidden'});throw e;}
     if(!c)return reply.code(404).send({error:'case_not_found'});
     const operatorActorId=b.operatorActorId??req.principal.actorId??null;
     if(req.principal.role!=='admin'&&operatorActorId!==req.principal.actorId)return reply.code(403).send({error:'operator_override_forbidden'});
@@ -130,7 +132,10 @@ export async function fieldServiceRoutes(app:FastifyInstance){
 
   app.post('/api/maintenance/cases/:id/field-service/:decisionId/authorize',{preHandler:requireRole('customer','admin')},async(req,reply)=>{
     const{id,decisionId}=req.params as{id:string;decisionId:string};const b=z.object({approved:z.boolean()}).parse(req.body);
-    const c=await loadCaseForPrincipal(req.principal,id);if(!c)return reply.code(404).send({error:'case_not_found'});
+    let c;
+    try{c=await loadCaseForPrincipal(req.principal,id);}
+    catch(e){if(e instanceof Error&&e.message==='forbidden')return reply.code(403).send({error:'forbidden'});throw e;}
+    if(!c)return reply.code(404).send({error:'case_not_found'});
     const existing=await pool.query('select * from field_service_decisions where id=$1 and case_id=$2',[decisionId,id]);if(!existing.rowCount)return reply.code(404).send({error:'field_service_decision_not_found'});
     const status=b.approved?'authorized':'declined';
     const r=await pool.query(`update field_service_decisions set status=$1,authorized_by_actor_id=$2,customer_authorized_at=case when $3 then now() else customer_authorized_at end,updated_at=now() where id=$4 returning *`,[status,req.principal.actorId??null,b.approved,decisionId]);
@@ -155,6 +160,10 @@ export async function fieldServiceRoutes(app:FastifyInstance){
   app.post('/api/maintenance/cases/:id/field-service/:decisionId/complete',{preHandler:requireRole('diagnostic','tow','partner','admin')},async(req,reply)=>{
     const{id,decisionId}=req.params as{id:string;decisionId:string};
     const b=z.object({outcome:z.enum(['fixed','stabilized','failed','escalated']),notes:z.string().optional(),evidence:z.record(z.unknown()).optional()}).parse(req.body);
+    const d=await pool.query('select * from field_service_decisions where id=$1 and case_id=$2',[decisionId,id]);
+    if(!d.rowCount)return reply.code(404).send({error:'field_service_decision_not_found'});
+    const operatorActorId=d.rows[0].operator_context?.operatorActorId??null;
+    if(req.principal.role!=='admin'&&operatorActorId!==req.principal.actorId)return reply.code(403).send({error:'field_service_operator_mismatch'});
     const status=b.outcome==='failed'||b.outcome==='escalated'?'escalated':'completed';
     const r=await pool.query(`update field_service_decisions set status=$1,outcome=$2,completed_at=now(),evidence=evidence || $3::jsonb,metadata=metadata || $4::jsonb,updated_at=now() where id=$5 and case_id=$6 and status='in_progress' returning *`,[status,b.outcome,JSON.stringify(b.evidence??{}),JSON.stringify(b.notes?{completionNotes:b.notes}:{}),decisionId,id]);
     if(!r.rowCount)return reply.code(409).send({error:'field_service_not_in_progress'});
