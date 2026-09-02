@@ -90,6 +90,25 @@ jobs:
         if: ${{ env.ADMIN_EMAIL != '' && env.ADMIN_PASSWORD != '' }}
         run: node tests/production-auth-probe.mjs
 
+      - name: Diagnose actors payload backing the Ops Tow handoff select
+        if: ${{ env.ADMIN_EMAIL != '' && env.ADMIN_PASSWORD != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          login="$(curl --silent --show-error --max-time 25 -X POST "$EDGE_URL/api/auth/login" \
+            -H 'content-type: application/json' \
+            -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASSWORD\"}")"
+          token="$(echo "$login" | jq -r '.accessToken')"
+          for i in 1 2 3; do
+            start=$(date +%s%3N)
+            actors="$(curl --silent --show-error --max-time 25 --write-out '\n%{http_code}' "$EDGE_URL/api/admin/actors?status=active" -H "authorization: Bearer $token")"
+            end=$(date +%s%3N)
+            code="$(echo "$actors" | tail -n1)"
+            body="$(echo "$actors" | sed '$d')"
+            echo "attempt=$i status=$code took=$((end-start))ms total=$(echo "$body" | jq '.actors | length' 2>/dev/null || echo 'parse_error')"
+            echo "$body" | jq '[.actors[].actor_type] | group_by(.) | map({type: .[0], count: length})' 2>/dev/null || true
+          done
+
       - name: Credentialed full production lifecycle
         if: ${{ env.ADMIN_EMAIL != '' && env.ADMIN_PASSWORD != '' }}
         env:
