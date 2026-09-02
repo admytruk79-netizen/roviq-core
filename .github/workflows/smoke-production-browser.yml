@@ -29,6 +29,8 @@ jobs:
     timeout-minutes: 35
     env:
       EDGE_URL: https://roviq-core.admytruk79.workers.dev
+      RENDER_URL: https://roviq-core.onrender.com
+      EXPECTED_SHA: ${{ github.sha }}
       ADMIN_EMAIL: ${{ secrets.BOOTSTRAP_ADMIN_EMAIL }}
       ADMIN_PASSWORD: ${{ secrets.BOOTSTRAP_ADMIN_PASSWORD }}
       BROWSER_ARTIFACT_DIR: artifacts/production-browser
@@ -51,6 +53,31 @@ jobs:
         env:
           BROWSER_MODE: render
         run: node tests/production-browser-lifecycle.mjs
+
+      - name: Wait for exact Render Core revision
+        if: ${{ env.ADMIN_EMAIL != '' && env.ADMIN_PASSWORD != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 72); do
+            status="$(curl --silent --show-error --location \
+              --max-time 25 --output /tmp/render-health.json --write-out '%{http_code}' \
+              "$RENDER_URL/health" || true)"
+            revision="$(jq -r '.revision // empty' /tmp/render-health.json 2>/dev/null || true)"
+            if [[ "$status" == "200" && "$revision" == "$EXPECTED_SHA" ]]; then
+              echo "Render Core is running expected revision $EXPECTED_SHA"
+              break
+            fi
+            if [[ "$attempt" == "72" ]]; then
+              echo "Render Core did not reach expected revision $EXPECTED_SHA"
+              echo "Last HTTP status: $status"
+              echo "Last reported revision: ${revision:-none}"
+              cat /tmp/render-health.json || true
+              exit 1
+            fi
+            echo "Waiting for Render deploy: status=$status revision=${revision:-none} attempt=$attempt/72"
+            sleep 10
+          done
 
       - name: Diagnose credentialed Customer auth path
         if: ${{ env.ADMIN_EMAIL != '' && env.ADMIN_PASSWORD != '' }}
