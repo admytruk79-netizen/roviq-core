@@ -252,8 +252,17 @@ async function productionLifecycle(browser) {
   const partnerContext = await browser.newContext({ viewport: { width: 1360, height: 900 } });
   const partner = await partnerContext.newPage();
   await setPortalSession(partner, PORTALS.partner, 'roviq_partner_token', 'roviq_partner_principal', partnerSession);
+  const respondResponses = [];
+  partner.on('response', async response => {
+    if (!response.url().includes('/api/offers/') && !response.url().includes('/api/partners/me/offers')) return;
+    let body = null;
+    try { body = await response.json(); } catch { body = null; }
+    respondResponses.push({ url: new URL(response.url()).pathname, status: response.status(), body });
+  });
   const offerCard = partner.locator('article.offer').filter({ hasText: `Case ${casePrefix}` }).first();
   await offerCard.getByRole('button', { name: 'Accept work' }).click();
+  await partner.waitForTimeout(3000);
+  console.log(`[roviq-browser] debug respond responses: ${JSON.stringify(respondResponses)}`);
   await waitForCaseState(caseId, adminToken, 'repair_in_progress');
   await partner.getByText(/Work accepted/i).waitFor({ timeout: 20_000 }).catch(() => {});
   const workbench = partner.getByRole('heading', { name: 'Repair workbench' });
