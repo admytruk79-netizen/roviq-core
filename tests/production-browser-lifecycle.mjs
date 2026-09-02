@@ -312,7 +312,15 @@ async function productionLifecycle(browser) {
   await parts.getByText(new RegExp(`Inventory saved for ${sku.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i')).waitFor({ timeout: 20_000 });
   for (const action of ['Reserve stock', 'Mark ordered', 'Mark shipped', 'Mark delivered']) {
     const button = orderCard.getByRole('button', { name: action });
-    await button.waitFor({ state: 'visible', timeout: 20_000 });
+    try {
+      await button.waitFor({ state: 'visible', timeout: 20_000 });
+    } catch (error) {
+      const liveOrders = await requestJson('/api/parts/me/orders', { token: partsSession.accessToken }).catch(e => ({ error: String(e) }));
+      const cardText = await orderCard.innerText().catch(() => '<unreadable>');
+      log(`DIAGNOSTIC 7/10 "${action}" button missing. live orders: ${JSON.stringify(liveOrders)}`);
+      log(`DIAGNOSTIC 7/10 order-card text: ${cardText.replace(/\s+/g, ' ')}`);
+      throw error;
+    }
     await button.click();
   }
   await waitForCaseState(caseId, adminToken, 'repair_in_progress');
