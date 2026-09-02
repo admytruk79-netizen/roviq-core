@@ -213,7 +213,7 @@ export default function App() {
       setError('');
       setMessage('');
       if (kind === 'reserve') {
-        await req(`/api/parts/orders/${id}/reserve`, { method: 'POST' });
+        await req(`/api/parts/orders/${id}/reserve`, { method: 'POST', body: '{}' });
         setMessage('Required inventory reserved for this order.');
       } else {
         await req(`/api/parts/orders/${id}/status`, {
