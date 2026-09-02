@@ -14,6 +14,7 @@ import { routingRoutes } from './http/routes/routing.js';
 import { diagnosticRoutes } from './http/routes/diagnostics.js';
 import { caseRoutes } from './http/routes/cases.js';
 import { transportRoutes } from './http/routes/transport.js';
+import { fieldServiceRoutes } from './http/routes/field-service.js';
 import { mobilityRoutes } from './http/routes/mobility.js';
 import { partsRoutes } from './http/routes/parts.js';
 import { paymentRoutes } from './http/routes/payments.js';
@@ -60,6 +61,7 @@ export async function buildApp() {
   await app.register(adminRoutes);
   await app.register(routingRoutes);
   await app.register(diagnosticRoutes);
+  await app.register(fieldServiceRoutes);
   await app.register(transportRoutes);
   await app.register(mobilityRoutes);
   await app.register(partsRoutes);
