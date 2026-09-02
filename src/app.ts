@@ -23,6 +23,7 @@ import { integrationRoutes } from './http/routes/integrations.js';
 import { triageEvaluationRoutes } from './http/routes/triage-evaluation.js';
 import { servicePlanRoutes } from './http/routes/service-plans.js';
 import { coherenceRoutes } from './http/routes/coherence.js';
+import { fieldServiceRoutes } from './http/routes/field-service.js';
 
 export async function buildApp() {
   // Pino/Fastify logging currently triggers a Worker startup incompatibility.
@@ -55,6 +56,7 @@ export async function buildApp() {
   await app.register(demandRoutes);
   await app.register(caseRoutes);
   await app.register(coherenceRoutes);
+  await app.register(fieldServiceRoutes);
   await app.register(servicePlanRoutes);
   await app.register(partnerRoutes);
   await app.register(adminRoutes);

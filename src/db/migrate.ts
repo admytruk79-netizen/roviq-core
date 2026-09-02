@@ -14,9 +14,22 @@ const advisoryLockId = 7_605_173_481;
 // repository contains the later, expanded file. Keep checksum enforcement
 // strict everywhere else, but accept that one known historical checksum so
 // Render can continue to later idempotent alignment migrations (notably 022).
+//
+// Migration 020 hit the identical problem: it was edited twice more after
+// production first applied it (adding the diagnostic_findings constraint
+// update, then the whole field_service_actor_capabilities table), so
+// production's stored checksum can legitimately be either of those earlier
+// versions depending on when its environment first ran 020. Accept both --
+// migration 024 is the idempotent catch-up that brings every environment's
+// schema up to what the current 020 file assumes exists, the same role 022
+// played for 017.
 const acceptedHistoricalChecksums: Record<string, ReadonlySet<string>> = {
   '017_coherence_invariants.sql': new Set([
     '0c79975d4149019aa5ad433f6c4911ce622a29d5e93757970296d756731ba121'
+  ]),
+  '020_field_service_decisions.sql': new Set([
+    '6e284316cb30dbb621b50154fc54cdc6eecf59c06be6bcf315ec4600766d1076',
+    'ab90b925a1c6740d616555ad444b51bee1bf71858912c30aeedc6ad3d96e3cfb'
   ])
 };
 

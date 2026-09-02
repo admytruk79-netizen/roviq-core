@@ -280,12 +280,35 @@ async function processNotificationBatchNative(sql, workerId = 'cloudflare-cron',
   return results;
 }
 
+export async function pingCore(env) {
+  // Render's free tier spins Core down after ~15 minutes with no HTTP traffic, and takes 30-60s to
+  // wake back up on the next request -- long enough that a real user's portal request gives up and
+  // shows "Core temporarily unreachable" first. This cron already fires every 10 minutes (see
+  // wrangler.jsonc's triggers.crons) for the DB sweep below, well under that 15-minute window, so
+  // piggybacking a lightweight health request on it keeps Core continuously warm. Best-effort: a
+  // failure here must not fail the deadline/notification sweep this function also runs.
+  if (!env.CORE_API_URL) return { ok: false, reason: 'core_api_not_configured' };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 55_000);
+  try {
+    const response = await fetch(new URL('/health', env.CORE_API_URL), { signal: controller.signal });
+    return { ok: response.ok, status: response.status };
+  } catch (error) {
+    return { ok: false, reason: String(error?.message || error) };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function runScheduledOperations(env) {
   const sql = await sqlFor(env);
-  const deadlines = await sweepExpiredDeadlinesNative(sql, 200);
-  const notifications = await processNotificationBatchNative(sql, 'cloudflare-cron', 200);
-  console.log(JSON.stringify({ event: 'scheduled_operations_complete', deadlines: deadlines.length, notifications: notifications.length }));
-  return { deadlines, notifications };
+  const [deadlines, notifications, corePing] = await Promise.all([
+    sweepExpiredDeadlinesNative(sql, 200),
+    processNotificationBatchNative(sql, 'cloudflare-cron', 200),
+    pingCore(env)
+  ]);
+  console.log(JSON.stringify({ event: 'scheduled_operations_complete', deadlines: deadlines.length, notifications: notifications.length, corePing }));
+  return { deadlines, notifications, corePing };
 }
 
 export default {

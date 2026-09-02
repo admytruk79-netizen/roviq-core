@@ -155,4 +155,77 @@ describe('transport dispatch end-to-end lifecycle', () => {
     const strangerCase = await app.inject({ method: 'GET', url: `/api/maintenance/cases/${caseId}`, headers: actorHeaders('customer', strangerId) });
     expect(strangerCase.statusCode).toBe(403);
   });
+
+  it('completes a decline with only one pool connection available (pool-exhaustion regression)', async () => {
+    const demandRes = await app.inject({
+      method: 'POST', url: '/api/demands', headers: actorHeaders('customer', customerActorId),
+      payload: { domain: 'maintenance', demandType: 'wont_start', urgency: 'urgent' }
+    });
+    const caseId = JSON.parse(demandRes.body).case.id as string;
+    await app.inject({ method: 'POST', url: `/api/maintenance/cases/${caseId}/transition`, headers: adminHeaders(), payload: { toState: 'tow_pending' } });
+    const dispatchRes = await app.inject({
+      method: 'POST', url: '/api/admin/transport', headers: adminHeaders(),
+      payload: { caseId, transportType: 'tow', pickupLocation: { lat: 1, lng: 1 }, dropoffLocation: { lat: 2, lng: 2 } }
+    });
+    const dispatchId = JSON.parse(dispatchRes.body).dispatch.id as string;
+    await app.inject({ method: 'POST', url: `/api/admin/transport/${dispatchId}/assign`, headers: adminHeaders(), payload: { providerActorId: towActorId } });
+
+    // Pool max is 10 (src/db/pool.ts). Hold 9 raw connections so the decline's own transaction
+    // takes the last one. Before the fix, updateTransportStatus's declined branch called
+    // appendCaseEvent -- a second pool.query -- while still holding that transaction's connection;
+    // with zero spare connections left, the second acquisition would block until
+    // connectionTimeoutMillis and the whole decline would time out and roll back.
+    const heldClients = await Promise.all(Array.from({ length: 9 }, () => pool.connect()));
+    try {
+      const declineRes = await app.inject({
+        method: 'POST', url: `/api/transport/${dispatchId}/status`, headers: actorHeaders('tow', towActorId),
+        payload: { status: 'declined' }
+      });
+      expect(declineRes.statusCode).toBe(200);
+      expect(JSON.parse(declineRes.body).dispatch.status).toBe('declined');
+    } finally {
+      heldClients.forEach((c) => c.release());
+    }
+  }, 15000);
+
+  it('does not clear case ownership when a superseded dispatch declines after a newer one took over', async () => {
+    const demandRes = await app.inject({
+      method: 'POST', url: '/api/demands', headers: actorHeaders('customer', customerActorId),
+      payload: { domain: 'maintenance', demandType: 'wont_start', urgency: 'urgent' }
+    });
+    const caseId = JSON.parse(demandRes.body).case.id as string;
+    await app.inject({ method: 'POST', url: `/api/maintenance/cases/${caseId}/transition`, headers: adminHeaders(), payload: { toState: 'tow_pending' } });
+
+    const secondTow = await app.inject({ method: 'POST', url: '/api/admin/actors', headers: adminHeaders(), payload: { actorType: 'tow' } });
+    const secondTowActorId = JSON.parse(secondTow.body).actor.id as string;
+
+    // Two separate dispatches on the same case -- e.g. a first tow provider assigned, then
+    // reassigned to a second while the first dispatch record is still around, unresolved.
+    const dispatchARes = await app.inject({
+      method: 'POST', url: '/api/admin/transport', headers: adminHeaders(),
+      payload: { caseId, transportType: 'tow', pickupLocation: { lat: 1, lng: 1 }, dropoffLocation: { lat: 2, lng: 2 } }
+    });
+    const dispatchAId = JSON.parse(dispatchARes.body).dispatch.id as string;
+    await app.inject({ method: 'POST', url: `/api/admin/transport/${dispatchAId}/assign`, headers: adminHeaders(), payload: { providerActorId: towActorId } });
+
+    const dispatchBRes = await app.inject({
+      method: 'POST', url: '/api/admin/transport', headers: adminHeaders(),
+      payload: { caseId, transportType: 'tow', pickupLocation: { lat: 1, lng: 1 }, dropoffLocation: { lat: 2, lng: 2 } }
+    });
+    const dispatchBId = JSON.parse(dispatchBRes.body).dispatch.id as string;
+    await app.inject({ method: 'POST', url: `/api/admin/transport/${dispatchBId}/assign`, headers: adminHeaders(), payload: { providerActorId: secondTowActorId } });
+
+    const ownerAfterB = await pool.query('select current_owner_actor_id from service_cases where id=$1', [caseId]);
+    expect(ownerAfterB.rows[0].current_owner_actor_id).toBe(secondTowActorId);
+
+    // Dispatch A's provider declines -- this must not strip dispatch B's provider's ownership.
+    const declineRes = await app.inject({
+      method: 'POST', url: `/api/transport/${dispatchAId}/status`, headers: actorHeaders('tow', towActorId),
+      payload: { status: 'declined' }
+    });
+    expect(declineRes.statusCode).toBe(200);
+
+    const ownerAfterDecline = await pool.query('select current_owner_actor_id from service_cases where id=$1', [caseId]);
+    expect(ownerAfterDecline.rows[0].current_owner_actor_id).toBe(secondTowActorId);
+  });
 });

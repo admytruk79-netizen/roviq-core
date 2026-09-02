@@ -3,7 +3,29 @@ type Principal={role:string;actorId?:string};type Dispatch={id:string;case_id:st
 type FieldDecision={id:string;case_id:string;action:string;status:string;summary:string;repair_class:string;drivability?:string;confidence?:number;customer_authorization_required:boolean;outcome?:string};
 const BASE=(import.meta.env.VITE_API_BASE_URL??'').replace(/\/$/,'');const TOKEN='roviq_tow_token',PRINCIPAL='roviq_tow_principal',MODE='roviq_tow_mode';
 const sleep=(ms:number)=>new Promise(r=>setTimeout(r,ms));
-async function req<T>(path:string,init:RequestInit={}):Promise<T>{let last:unknown;for(let attempt=0;attempt<2;attempt++){try{const t=localStorage.getItem(TOKEN);const r=await fetch(`${BASE}${path}`,{cache:'no-store',...init,headers:{'content-type':'application/json','cache-control':'no-cache',...(t?{authorization:`Bearer ${t}`}:{})}});if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.error??`request_failed_${r.status}`)}return r.json()}catch(e){last=e;if(attempt===0){await sleep(450);continue}}}if(last instanceof Error&&last.message!=='Failed to fetch')throw last;throw new Error('Core temporarily unreachable. Tap Refresh to reconnect.')}
+// Core runs on Render's free tier, which spins down after ~15 minutes idle and takes 30-60s to wake
+// on the next request. A single 450ms retry (the old behavior) gives up long before that finishes,
+// so any user whose request lands during a cold start saw a permanent-looking "unreachable" error
+// even though a few more seconds would have gone through. Back off across a real network failure
+// for up to ~21s total, and detect that failure via `instanceof TypeError` (what every browser's
+// fetch throws for a network-level failure) rather than matching Chrome's exact "Failed to fetch"
+// wording, which Firefox/Safari don't use.
+const NETWORK_RETRY_BACKOFF_MS=[500,1500,3000,6000,10000];
+async function req<T>(path:string,init:RequestInit={}):Promise<T>{
+  for(let attempt=0;;attempt++){
+    try{
+      const t=localStorage.getItem(TOKEN);
+      const r=await fetch(`${BASE}${path}`,{cache:'no-store',...init,headers:{'content-type':'application/json','cache-control':'no-cache',...(t?{authorization:`Bearer ${t}`}:{})}});
+      if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.error??`request_failed_${r.status}`)}
+      return r.json()
+    }catch(e){
+      const isNetworkFailure=e instanceof TypeError;
+      if(!isNetworkFailure)throw e;
+      if(attempt>=NETWORK_RETRY_BACKOFF_MS.length)throw new Error('Core temporarily unreachable. Tap Refresh to reconnect.');
+      await sleep(NETWORK_RETRY_BACKOFF_MS[attempt]);
+    }
+  }
+}
 const next:Record<string,string>={accepted:'en_route',en_route:'arrived',arrived:'vehicle_loaded',vehicle_loaded:'in_transit',in_transit:'delivered'};const ACTIVE=new Set(['assigned','accepted','en_route','arrived','vehicle_loaded','in_transit']);const label:Record<string,string>={assigned:'Assignment',accepted:'Accepted',en_route:'En route',arrived:'Arrived',vehicle_loaded:'Vehicle loaded',in_transit:'In transit',delivered:'Delivered',declined:'Declined',cancelled:'Cancelled',failed:'Failed'};
 function initialMode():MapMode{const s=localStorage.getItem(MODE);if(s==='day'||s==='night')return s;const h=new Date().getHours();return h>=7&&h<19?'day':'night'}
 export default function App(){const[p,setP]=useState<Principal|null>(()=>{try{return JSON.parse(localStorage.getItem(PRINCIPAL)??'null')}catch{return null}}),[email,setEmail]=useState(''),[password,setPassword]=useState(''),[show,setShow]=useState(false),[error,setError]=useState(''),[activeItems,setActiveItems]=useState<Dispatch[]>([]),[historyJobs,setHistoryJobs]=useState<Dispatch[]>([]),[selected,setSelected]=useState<string|null>(null),[mode,setMode]=useState<MapMode>(initialMode),[view,setView]=useState<View>('drive'),[refreshing,setRefreshing]=useState(false),[lastUpdated,setLastUpdated]=useState<Date|null>(null);

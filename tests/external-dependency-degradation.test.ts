@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import worker from '../cloudflare/worker.js';
+import worker, { pingCore } from '../cloudflare/worker.js';
 import { handleLocalCoreRequest } from '../cloudflare/local-adapter.js';
 import { evaluateAssessmentAuthority } from '../src/services/ai-authority.js';
 
@@ -46,6 +46,37 @@ describe('external dependency degradation', () => {
 
     expect(response.status).toBe(503);
     expect(await response.json()).toEqual({ error: 'workers_ai_not_bound' });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('pings Core\'s /health on every scheduled cron tick to keep Render\'s free tier from spinning down', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await pingCore({ CORE_API_URL: 'https://roviq-core.onrender.com' });
+
+    expect(result).toEqual({ ok: true, status: 200 });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [pingedUrl] = fetchSpy.mock.calls[0] as [URL];
+    expect(pingedUrl.toString()).toBe('https://roviq-core.onrender.com/health');
+  });
+
+  it('does not throw when the keep-warm ping to Core fails -- it must never break the deadline/notification sweep', async () => {
+    const fetchSpy = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await pingCore({ CORE_API_URL: 'https://roviq-core.onrender.com' });
+
+    expect(result).toEqual({ ok: false, reason: 'Failed to fetch' });
+  });
+
+  it('reports a clear reason when Core\'s URL is not configured, rather than throwing', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await pingCore({});
+
+    expect(result).toEqual({ ok: false, reason: 'core_api_not_configured' });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 

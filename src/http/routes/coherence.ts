@@ -115,14 +115,24 @@ export async function coherenceRoutes(app: FastifyInstance) {
   });
 }
 
+// route_context.candidates is keyed by every eligible actor's id (see src/services/routing.ts),
+// with each candidate's own distance/ETA — internal routing-engine state, not something one
+// provider should see about its competitors. Only admins get the raw route_context.
+function sanitizeRouteContext(routeContext: unknown) {
+  if (!routeContext || typeof routeContext !== 'object') return routeContext;
+  const { candidates: _candidates, ...rest } = routeContext as Record<string, unknown>;
+  return rest;
+}
+
 function projectSpatial(role:string, s:Record<string,unknown>) {
   if (role === 'admin') return s;
   const base = { case_id:s.case_id, source:s.source, updated_at:s.updated_at };
-  if (role === 'tow') return {...base,origin:s.origin,current_vehicle:s.current_vehicle,destination:s.destination,transport_location:s.transport_location,route_context:s.route_context};
-  if (role === 'diagnostic') return {...base,origin:s.origin,current_vehicle:s.current_vehicle,diagnostic_location:s.diagnostic_location,route_context:s.route_context};
-  if (role === 'partner') return {...base,origin:s.origin,current_vehicle:s.current_vehicle,provider_location:s.provider_location,destination:s.destination,route_context:s.route_context};
-  if (role === 'parts') return {...base,parts_origin:s.parts_origin,destination:s.destination,route_context:s.route_context};
-  return {...base,origin:s.origin,current_vehicle:s.current_vehicle,destination:s.destination,provider_location:s.provider_location,transport_location:s.transport_location,route_context:s.route_context};
+  const route_context = sanitizeRouteContext(s.route_context);
+  if (role === 'tow') return {...base,origin:s.origin,current_vehicle:s.current_vehicle,destination:s.destination,transport_location:s.transport_location,route_context};
+  if (role === 'diagnostic') return {...base,origin:s.origin,current_vehicle:s.current_vehicle,diagnostic_location:s.diagnostic_location,route_context};
+  if (role === 'partner') return {...base,origin:s.origin,current_vehicle:s.current_vehicle,provider_location:s.provider_location,destination:s.destination,route_context};
+  if (role === 'parts') return {...base,parts_origin:s.parts_origin,destination:s.destination,route_context};
+  return {...base,origin:s.origin,current_vehicle:s.current_vehicle,destination:s.destination,provider_location:s.provider_location,transport_location:s.transport_location,route_context};
 }
 
 function json(value:unknown) { return value === undefined ? null : JSON.stringify(value); }
