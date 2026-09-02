@@ -303,6 +303,14 @@ async function productionLifecycle(browser) {
   const partsContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const parts = await partsContext.newPage();
   await setPortalSession(parts, PORTALS.parts, 'roviq_parts_token', 'roviq_parts_principal', partsSession);
+  const partsResponses = [];
+  parts.on('response', async response => {
+    const url = response.url();
+    if (!url.includes('/api/parts/orders/')) return;
+    let body = null;
+    try { body = await response.json(); } catch { body = null; }
+    partsResponses.push({ url: new URL(url).pathname, status: response.status(), body });
+  });
   const orderCard = parts.locator('article.order-card').filter({ hasText: `Case ${casePrefix}` }).first();
   await orderCard.locator('button.order-select').click();
   const inventoryForm = parts.locator('form.inventory-form');
@@ -317,8 +325,11 @@ async function productionLifecycle(browser) {
     } catch (error) {
       const liveOrders = await requestJson('/api/parts/me/orders', { token: partsSession.accessToken }).catch(e => ({ error: String(e) }));
       const cardText = await orderCard.innerText().catch(() => '<unreadable>');
+      const pageError = await parts.locator('.error').innerText().catch(() => '<none>');
       log(`DIAGNOSTIC 7/10 "${action}" button missing. live orders: ${JSON.stringify(liveOrders)}`);
       log(`DIAGNOSTIC 7/10 order-card text: ${cardText.replace(/\s+/g, ' ')}`);
+      log(`DIAGNOSTIC 7/10 page error text: ${pageError}`);
+      log(`DIAGNOSTIC 7/10 network responses: ${JSON.stringify(partsResponses)}`);
       throw error;
     }
     await button.click();
