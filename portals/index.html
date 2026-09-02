@@ -3,25 +3,25 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="theme-color" content="#101D2C" />
   <title>ROVIQ</title>
   <meta name="description" content="Unified ROVIQ portal for Customer, Diagnostic, Partner, Parts, Tow/Valet and Operations." />
   <style>
-    :root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#f4f2ed;background:#0b1624;--navy:#14253a;--deep:#0b1624;--copper:#e46f35;--copper-soft:#f0834b;--muted:#a8b4c2;--line:rgba(244,242,237,.14)}
-    *{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--deep)}body{min-height:100vh;background:radial-gradient(circle at 82% 3%,rgba(228,111,53,.16),transparent 30rem),linear-gradient(180deg,var(--navy),var(--deep));overflow:hidden}
-    button,a{font:inherit}.shell{height:100vh;display:grid;grid-template-rows:auto auto 1fr}.topbar{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:16px 20px;border-bottom:1px solid var(--line);background:rgba(11,22,36,.94);backdrop-filter:blur(14px)}
-    .brand{display:flex;align-items:center;gap:11px;font-weight:900;letter-spacing:.18em;white-space:nowrap}.mark{display:grid;place-items:center;width:36px;height:36px;border:2px solid var(--copper);border-radius:10px;color:var(--copper);letter-spacing:0}.context{color:var(--muted);font-size:12px;letter-spacing:.08em;text-transform:uppercase}
-    .tabs-wrap{border-bottom:1px solid var(--line);background:rgba(20,37,58,.95);overflow-x:auto;scrollbar-width:none}.tabs-wrap::-webkit-scrollbar{display:none}.tabs{display:flex;min-width:max-content;padding:9px 12px;gap:8px}.tab{border:1px solid var(--line);background:rgba(255,255,255,.03);color:#d8dee6;border-radius:999px;padding:10px 14px;cursor:pointer;font-weight:750;font-size:13px;white-space:nowrap;transition:.16s ease}.tab:hover{border-color:rgba(240,131,75,.45)}.tab.active{background:var(--copper);border-color:var(--copper);color:#101820}
-    .stage{position:relative;min-height:0;background:#fff}.frame{width:100%;height:100%;border:0;display:block;background:#fff}.loading{position:absolute;inset:0;display:grid;place-items:center;background:var(--deep);color:var(--muted);font-size:14px;letter-spacing:.05em;z-index:2}.loading.hidden{display:none}.fallback{position:absolute;right:14px;bottom:14px;z-index:3;text-decoration:none;background:rgba(11,22,36,.92);color:#f4f2ed;border:1px solid var(--line);padding:9px 12px;border-radius:12px;font-size:12px;font-weight:800;box-shadow:0 10px 30px rgba(0,0,0,.25)}
-    @media(max-width:640px){.topbar{padding:12px 14px}.mark{width:32px;height:32px}.brand{font-size:14px}.context{display:none}.tabs{padding:8px}.tab{padding:9px 12px;font-size:12px}.fallback{right:10px;bottom:10px}}
+    :root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#F4F2ED;background:#101D2C;--navy:#101D2C;--deep:#101D2C;--copper:#E46F35;--porcelain:#F4F2ED;--slate:#647386;--muted:#9AA5B3;--line:rgba(244,242,237,.14)}
+    *{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--deep)}body{min-height:100vh;background:radial-gradient(circle at 82% 3%,rgba(228,111,53,.12),transparent 30rem),linear-gradient(180deg,#16283B,var(--deep));overflow:hidden}
+    button,a{font:inherit}.shell{height:100vh;display:grid;grid-template-rows:auto auto 1fr}.topbar{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:15px 20px;border-bottom:1px solid var(--line);background:rgba(16,29,44,.95);backdrop-filter:blur(16px)}
+    .brand{display:flex;align-items:center;gap:11px;font-weight:900;letter-spacing:.14em;white-space:nowrap}.mark{display:grid;place-items:center;min-width:42px;height:36px;padding:0 7px;border:2px solid var(--copper);border-radius:10px;color:var(--copper);letter-spacing:-.08em;font-weight:900}.context{color:var(--muted);font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+    .tabs-wrap{border-bottom:1px solid var(--line);background:rgba(16,29,44,.97);overflow-x:auto;scrollbar-width:none}.tabs-wrap::-webkit-scrollbar{display:none}.tabs{display:flex;min-width:max-content;padding:9px 12px;gap:8px}.tab{min-height:40px;border:1px solid var(--line);background:transparent;color:var(--porcelain);border-radius:12px;padding:9px 14px;cursor:pointer;font-weight:750;font-size:13px;white-space:nowrap;transition:.16s ease}.tab:hover{border-color:rgba(228,111,53,.5);color:#fff}.tab.active{background:var(--copper);border-color:var(--copper);color:#fff}
+    .stage{position:relative;min-height:0;background:#F4F2ED}.frame{width:100%;height:100%;border:0;display:block;background:#F4F2ED}.loading{position:absolute;inset:0;display:grid;place-items:center;background:var(--deep);color:var(--muted);font-size:14px;letter-spacing:.05em;z-index:2}.loading.hidden{display:none}.fallback{position:absolute;right:14px;bottom:14px;z-index:3;text-decoration:none;background:rgba(16,29,44,.94);color:var(--porcelain);border:1px solid var(--line);padding:10px 13px;border-radius:12px;font-size:12px;font-weight:800;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+    @media(max-width:640px){.topbar{padding:11px 13px}.mark{min-width:38px;height:32px}.brand{font-size:14px}.context{display:none}.tabs{padding:7px}.tab{min-height:38px;padding:8px 11px;font-size:12px}.fallback{right:10px;bottom:10px}}
   </style>
 </head>
 <body>
   <main class="shell">
     <header class="topbar">
-      <div class="brand"><span class="mark">R</span><span>ROVIQ</span></div>
+      <div class="brand"><span class="mark">RR</span><span>ROVIQ</span></div>
       <div class="context" id="context">Customer portal</div>
     </header>
-
     <nav class="tabs-wrap" aria-label="ROVIQ portals">
       <div class="tabs">
         <button class="tab active" data-name="Customer" data-url="https://roviq-core-customer.pages.dev">Customer</button>
@@ -32,41 +32,16 @@
         <button class="tab" data-name="Ops" data-url="https://roviq-ops.pages.dev">Ops</button>
       </div>
     </nav>
-
     <section class="stage">
       <div class="loading" id="loading">Loading ROVIQ…</div>
       <iframe id="portalFrame" class="frame" src="https://roviq-core-customer.pages.dev" title="ROVIQ Customer portal" allow="geolocation; clipboard-read; clipboard-write"></iframe>
       <a id="fallback" class="fallback" href="https://roviq-core-customer.pages.dev" target="_blank" rel="noopener">Open full screen ↗</a>
     </section>
   </main>
-
   <script>
-    const frame = document.getElementById('portalFrame');
-    const loading = document.getElementById('loading');
-    const context = document.getElementById('context');
-    const fallback = document.getElementById('fallback');
-    const tabs = [...document.querySelectorAll('.tab')];
-
-    function selectPortal(tab) {
-      const url = tab.dataset.url;
-      const name = tab.dataset.name;
-      tabs.forEach(t => t.classList.toggle('active', t === tab));
-      context.textContent = name + ' portal';
-      fallback.href = url;
-      loading.classList.remove('hidden');
-      frame.title = 'ROVIQ ' + name + ' portal';
-      frame.src = url;
-      history.replaceState(null, '', '#' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-'));
-    }
-
-    tabs.forEach(tab => tab.addEventListener('click', () => selectPortal(tab)));
-    frame.addEventListener('load', () => loading.classList.add('hidden'));
-
-    const requested = location.hash.slice(1);
-    if (requested) {
-      const match = tabs.find(tab => tab.dataset.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') === requested);
-      if (match) selectPortal(match);
-    }
+    const frame=document.getElementById('portalFrame'),loading=document.getElementById('loading'),context=document.getElementById('context'),fallback=document.getElementById('fallback'),tabs=[...document.querySelectorAll('.tab')];
+    function selectPortal(tab){const url=tab.dataset.url,name=tab.dataset.name;tabs.forEach(t=>t.classList.toggle('active',t===tab));context.textContent=name+' portal';fallback.href=url;loading.classList.remove('hidden');frame.title='ROVIQ '+name+' portal';frame.src=url;history.replaceState(null,'','#'+name.toLowerCase().replace(/[^a-z0-9]+/g,'-'))}
+    tabs.forEach(tab=>tab.addEventListener('click',()=>selectPortal(tab)));frame.addEventListener('load',()=>loading.classList.add('hidden'));const requested=location.hash.slice(1);if(requested){const match=tabs.find(tab=>tab.dataset.name.toLowerCase().replace(/[^a-z0-9]+/g,'-')===requested);if(match)selectPortal(match)}
   </script>
 </body>
 </html>
