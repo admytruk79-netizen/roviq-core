@@ -96,7 +96,13 @@ export async function partnerRoutes(app: FastifyInstance) {
       if (serviceCase && body.outcome === 'accepted') {
         await pool.query('update service_cases set current_owner_role=$1,current_owner_actor_id=$2,updated_at=now() where id=$3',[req.principal.role,req.principal.actorId,offer.case_id]);
         const target = req.principal.role === 'diagnostic' ? 'diagnostic_in_progress' : req.principal.role === 'tow' ? 'tow_in_progress' : req.principal.role === 'parts' ? 'repair_in_progress' : 'repair_in_progress';
-        try { serviceCase = await transitionCase(req.principal,offer.case_id,target); } catch { /* domain-specific workflow may own the transition */ }
+        try { serviceCase = await transitionCase(req.principal,offer.case_id,target); }
+        catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (message !== 'invalid_case_transition' && message !== 'transition_forbidden') {
+            console.error('offer_accept_transition_unexpected_error', { caseId: offer.case_id, target, message });
+          }
+        }
       }
       if (serviceCase && body.outcome === 'declined') {
         if (serviceCase.state === 'provider_pending' && req.principal.role === 'partner') {
