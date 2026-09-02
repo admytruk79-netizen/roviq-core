@@ -1,0 +1,37 @@
+name: Debug ROVIQ Admin Probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      case_id:
+        description: 'Case id to replay the transition against'
+        required: true
+      to_state:
+        description: 'Target state to attempt'
+        required: false
+        default: 'repair_in_progress'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      EDGE_URL: https://roviq-core.admytruk79.workers.dev
+      ADMIN_EMAIL: ${{ secrets.BOOTSTRAP_ADMIN_EMAIL }}
+      ADMIN_PASSWORD: ${{ secrets.BOOTSTRAP_ADMIN_PASSWORD }}
+      DEBUG_CASE_ID: ${{ github.event.inputs.case_id }}
+      DEBUG_TO_STATE: ${{ github.event.inputs.to_state }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run admin transition replay
+        run: node tests/production-admin-debug.mjs
