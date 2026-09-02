@@ -38,7 +38,14 @@ export async function buildApp() {
     if (err instanceof Error && err.message === 'idempotency_key_reused') return reply.code(409).send({error:err.message});
     if (err instanceof Error && err.message === 'idempotency_key_too_long') return reply.code(400).send({error:err.message});
     console.error('roviq_core_error', err);
-    return reply.code(500).send({ error:'internal_error' });
+    // TEMPORARY: the trivial, side-effect-free GET /api/transport/me/dispatches select has 500'd
+    // intermittently in production despite a retry-once wrapper on pool.query for known
+    // connection-layer errors -- meaning this specific failure's error code/message isn't one of
+    // the ones that wrapper matches. Surface it (message + Postgres error code only, no query
+    // text or bound params) so the actual cause can be read directly instead of guessed at again.
+    // Remove once root-caused.
+    const code = (err as NodeJS.ErrnoException).code;
+    return reply.code(500).send({ error:'internal_error', debugMessage: err instanceof Error ? err.message : String(err), debugCode: code ?? null });
   });
 
   await app.register(cors, { origin: false });
