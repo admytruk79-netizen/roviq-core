@@ -1,3 +1,7 @@
+alter table diagnostic_findings drop constraint if exists diagnostic_findings_disposition_check;
+alter table diagnostic_findings add constraint diagnostic_findings_disposition_check
+  check (disposition in ('diagnose_only','diagnose_and_fix','field_service_assessment','route_to_shop','route_to_tow'));
+
 create table if not exists field_service_decisions (
   id uuid primary key default gen_random_uuid(),
   case_id uuid not null references service_cases(id) on delete cascade,
