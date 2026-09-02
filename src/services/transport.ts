@@ -22,14 +22,20 @@ export async function createTransportDispatch(principal: Principal, input:{
 }) {
   const c = await pool.query('select * from service_cases where id=$1',[input.caseId]);
   if (!c.rowCount) throw new Error('case_not_found');
+
+  const spatial = await pool.query('select origin,current_vehicle,destination from case_spatial_context where case_id=$1',[input.caseId]);
+  const caseAttributes = c.rows[0].attributes && typeof c.rows[0].attributes === 'object' ? c.rows[0].attributes : {};
+  const resolvedPickup = input.pickupLocation ?? spatial.rows[0]?.origin ?? spatial.rows[0]?.current_vehicle ?? caseAttributes.intakeLocation ?? undefined;
+  const resolvedDropoff = input.dropoffLocation ?? spatial.rows[0]?.destination ?? undefined;
+
   const r = await pool.query(
     `insert into transport_dispatches(case_id,transport_type,pickup_location,dropoff_location,vehicle_context,eta_at,metadata)
      values($1,$2,$3,$4,$5,$6,$7) returning *`,
-    [input.caseId,input.transportType,JSON.stringify(input.pickupLocation ?? {}),JSON.stringify(input.dropoffLocation ?? {}),JSON.stringify(input.vehicleContext ?? {}),input.etaAt ?? null,JSON.stringify(input.metadata ?? {})]
+    [input.caseId,input.transportType,JSON.stringify(resolvedPickup ?? {}),JSON.stringify(resolvedDropoff ?? {}),JSON.stringify(input.vehicleContext ?? {}),input.etaAt ?? null,JSON.stringify(input.metadata ?? {})]
   );
   const dispatch = r.rows[0];
 
-  if (input.pickupLocation || input.dropoffLocation) {
+  if (resolvedPickup || resolvedDropoff) {
     await pool.query(
       `insert into case_spatial_context(case_id,origin,current_vehicle,destination,route_context,source,updated_at)
        values($1,$2::jsonb,$2::jsonb,$3::jsonb,'{}'::jsonb,'transport_dispatch',now())
@@ -39,7 +45,7 @@ export async function createTransportDispatch(principal: Principal, input:{
          destination=coalesce(excluded.destination,case_spatial_context.destination),
          source='transport_dispatch',
          updated_at=now()`,
-      [input.caseId,input.pickupLocation ? JSON.stringify(input.pickupLocation) : null,input.dropoffLocation ? JSON.stringify(input.dropoffLocation) : null]
+      [input.caseId,resolvedPickup ? JSON.stringify(resolvedPickup) : null,resolvedDropoff ? JSON.stringify(resolvedDropoff) : null]
     );
   }
 
@@ -48,7 +54,7 @@ export async function createTransportDispatch(principal: Principal, input:{
   }
 
   const sideEffects = await Promise.allSettled([
-    appendCaseEvent(input.caseId,'TRANSPORT_REQUESTED',principal,{ dispatchId:dispatch.id, transportType:input.transportType }),
+    appendCaseEvent(input.caseId,'TRANSPORT_REQUESTED',principal,{ dispatchId:dispatch.id, transportType:input.transportType, pickupInherited:Boolean(!input.pickupLocation&&resolvedPickup) }),
     setCustomerSnapshot(input.caseId,'transport_requested','Vehicle transport has been requested.','Waiting for a transport provider',input.etaAt),
     createDeadline(input.caseId,'transport_assignment',new Date(Date.now()+5*60*1000).toISOString(),'escalate_transport_assignment',{ dispatchId:dispatch.id }),
     audit(principal,'create_transport_dispatch','transport_dispatch',dispatch.id,'transport_requested',{ caseId:input.caseId, transportType:input.transportType })
@@ -146,7 +152,19 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
   } else if (status === 'delivered') {
     await pool.query(`update workflow_deadlines set state='resolved',resolved_at=now() where case_id=$1 and deadline_type like 'transport_%' and state='open'`,[current.case_id]);
     await setCustomerSnapshot(current.case_id,'transport_delivered','Your vehicle has reached its destination.','Service journey continues');
-  } else if (status === 'declined' || status === 'failed') {
+  } else if (status === 'declined') {
+    await pool.query(`update service_cases set current_owner_role=null,current_owner_actor_id=null,updated_at=now() where id=$1`,[current.case_id]);
+    const released = await pool.query(
+      `update transport_dispatches
+       set provider_actor_id=null,status='requested',assigned_at=null,accepted_at=null,updated_at=now(),metadata=metadata || $2::jsonb
+       where id=$1 returning *`,
+      [dispatchId,JSON.stringify({lastDeclinedBy:principal.actorId??null,lastDeclinedAt:new Date().toISOString()})]
+    );
+    await appendCaseEvent(current.case_id,'TRANSPORT_RELEASED_FOR_REASSIGNMENT',principal,{dispatchId,declinedProviderActorId:current.provider_actor_id});
+    await setCustomerSnapshot(current.case_id,'transport_reassignment','A new transport provider is being arranged.','Reassigning transport');
+    await audit(principal,'update_transport_status','transport_dispatch',dispatchId,`${current.status}->declined->requested`,metadata);
+    return released.rows[0];
+  } else if (status === 'failed') {
     await pool.query(`update service_cases set current_owner_role=null,current_owner_actor_id=null,updated_at=now() where id=$1`,[current.case_id]);
     await setCustomerSnapshot(current.case_id,'transport_reassignment','A new transport provider is being arranged.','Reassigning transport');
   }
