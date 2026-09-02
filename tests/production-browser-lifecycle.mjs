@@ -217,6 +217,15 @@ async function productionLifecycle(browser) {
   log('5/10 Ops + Tow: assign Tow / Valet, then drive every dispatch status to delivered through the Tow UI.');
   await gotoStable(ops, `${PORTALS.ops}/cases/${caseId}`);
   const towSection = ops.locator('section').filter({ hasText: 'Tow handoff' }).first();
+  try {
+    await towSection.locator('select').waitFor({ timeout: 30_000 });
+  } catch (error) {
+    const liveCase = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken }).catch(e => ({ error: String(e) }));
+    const bodyText = await ops.locator('body').innerText().catch(() => '<unreadable>');
+    log(`DIAGNOSTIC 5/10 tow select missing. live case state=${liveCase?.case?.state ?? JSON.stringify(liveCase)}`);
+    log(`DIAGNOSTIC 5/10 ops page body snippet: ${bodyText.slice(0, 2000).replace(/\s+/g, ' ')}`);
+    throw error;
+  }
   await towSection.locator('select').selectOption(towSession.principal.actorId);
   await towSection.getByRole('button', { name: /Create and assign tow|Assign Tow provider/i }).click();
 
