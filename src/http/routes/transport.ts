@@ -55,6 +55,12 @@ export async function transportRoutes(app: FastifyInstance) {
   app.post('/api/transport/:id/status', { preHandler: requireRole('tow','partner','admin') }, async (req, reply) => {
     const { id } = req.params as { id:string }; const body = z.object({ status, metadata:z.record(z.unknown()).optional() }).parse(req.body);
     try { return { dispatch:await updateTransportStatus(req.principal,id,body.status,body.metadata ?? {}) }; }
-    catch (e) { const message=e instanceof Error?e.message:'transport_update_failed'; if (message==='dispatch_not_found') return reply.code(404).send({ error:message }); if (message==='dispatch_forbidden') return reply.code(403).send({ error:message }); if (message==='invalid_dispatch_transition') return reply.code(409).send({ error:message }); throw e; }
+    catch (e) {
+      const message=e instanceof Error?e.message:'transport_update_failed';
+      if (message==='dispatch_not_found') return reply.code(404).send({ error:message });
+      if (message==='dispatch_forbidden') return reply.code(403).send({ error:message });
+      if (['invalid_dispatch_transition','dropoff_location_required'].includes(message)) return reply.code(409).send({ error:message });
+      throw e;
+    }
   });
 }
