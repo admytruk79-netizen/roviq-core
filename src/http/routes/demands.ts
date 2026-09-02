@@ -5,10 +5,17 @@ import { audit } from '../../services/audit.js';
 import { createServiceCase, transitionCase } from '../../services/orchestration.js';
 import { requireRole } from '../middleware/principal.js';
 
+const intakeLocation = z.object({
+  lat: z.number().min(-90).max(90),
+  lng: z.number().min(-180).max(180),
+  accuracy: z.number().nonnegative().optional(),
+  capturedAt: z.string().datetime().optional()
+});
+
 const createDemand = z.object({
   domain: z.string().default('maintenance'),
   demandType: z.string().min(1),
-  location: z.object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) }).optional(),
+  location: intakeLocation.optional(),
   urgency: z.enum(['normal','urgent','emergency']).default('normal'),
   attributes: z.record(z.unknown()).default({})
 });
@@ -40,6 +47,8 @@ export async function demandRoutes(app: FastifyInstance) {
         const vehiclePoint = {
           lat:body.location.lat,
           lng:body.location.lng,
+          accuracy:body.location.accuracy ?? null,
+          capturedAt:body.location.capturedAt ?? new Date().toISOString(),
           label:'Customer vehicle location',
           source:'customer_intake'
         };
