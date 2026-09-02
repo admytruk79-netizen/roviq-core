@@ -51,33 +51,41 @@ export async function assignTransportDispatch(principal: Principal, dispatchId:s
     await client.query('begin');
     const d = await client.query('select * from transport_dispatches where id=$1 for update',[dispatchId]);
     if (!d.rowCount) throw new Error('dispatch_not_found');
-    if (!['requested','declined','failed'].includes(d.rows[0].status)) throw new Error('dispatch_not_assignable');
+    const current = d.rows[0];
+    if (!['requested','declined','failed'].includes(current.status)) {
+      if (current.provider_actor_id === providerActorId) {
+        await client.query('commit');
+        committed = true;
+        return current;
+      }
+      throw new Error('dispatch_not_assignable');
+    }
     const provider = await client.query(
       `select a.id,a.actor_type,coalesce(pc.tow_participation,false) as tow_participation,coalesce(pc.valet_participation,false) as valet_participation
        from actors a left join partner_controls pc on pc.actor_id=a.id where a.id=$1 and a.status='active'`,[providerActorId]
     );
     if (!provider.rowCount) throw new Error('provider_not_found');
-    const allowed = d.rows[0].transport_type === 'tow' ? (provider.rows[0].actor_type === 'tow' || provider.rows[0].tow_participation) : provider.rows[0].valet_participation;
+    const allowed = current.transport_type === 'tow' ? (provider.rows[0].actor_type === 'tow' || provider.rows[0].tow_participation) : provider.rows[0].valet_participation;
     if (!allowed) throw new Error('provider_not_transport_capable');
     const updated = await client.query(
       `update transport_dispatches set provider_actor_id=$1,status='assigned',assigned_at=now(),eta_at=coalesce($2,eta_at),updated_at=now() where id=$3 returning *`,
       [providerActorId,etaAt ?? null,dispatchId]
     );
-    await client.query(`update service_cases set current_owner_role='tow',current_owner_actor_id=$1,updated_at=now() where id=$2`,[providerActorId,d.rows[0].case_id]);
+    await client.query(`update service_cases set current_owner_role='tow',current_owner_actor_id=$1,updated_at=now() where id=$2`,[providerActorId,current.case_id]);
     await client.query('commit');
     committed = true;
 
     const sideEffects = await Promise.allSettled([
-      appendCaseEvent(d.rows[0].case_id,'TRANSPORT_ASSIGNED',principal,{ dispatchId, providerActorId, etaAt:updated.rows[0].eta_at }),
-      setCustomerSnapshot(d.rows[0].case_id,'transport_assigned','A transport provider has been assigned.','Provider confirmation pending',updated.rows[0].eta_at),
-      queueNotification({ caseId:d.rows[0].case_id, channel:'push', recipientType:'actor', recipientId:providerActorId, templateKey:'transport_assignment', payload:{ dispatchId, transportType:d.rows[0].transport_type } }),
+      appendCaseEvent(current.case_id,'TRANSPORT_ASSIGNED',principal,{ dispatchId, providerActorId, etaAt:updated.rows[0].eta_at }),
+      setCustomerSnapshot(current.case_id,'transport_assigned','A transport provider has been assigned.','Provider confirmation pending',updated.rows[0].eta_at),
+      queueNotification({ caseId:current.case_id, channel:'push', recipientType:'actor', recipientId:providerActorId, templateKey:'transport_assignment', payload:{ dispatchId, transportType:current.transport_type } }),
       audit(principal,'assign_transport','transport_dispatch',dispatchId,'transport_provider_assigned',{ providerActorId })
     ]);
     const failedSideEffects = sideEffects.filter((result) => result.status === 'rejected');
     if (failedSideEffects.length > 0) {
       console.warn('transport_assignment_side_effect_failed', {
         dispatchId,
-        caseId:d.rows[0].case_id,
+        caseId:current.case_id,
         failedCount:failedSideEffects.length
       });
     }
