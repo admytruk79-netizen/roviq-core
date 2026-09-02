@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.js';
 import { pool } from '../src/db/pool.js';
@@ -202,5 +202,57 @@ describe('field service on-site assessment', () => {
       payload: { outcome: 'fixed' }
     });
     expect(completeRes.statusCode).toBe(403);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('does not 500 (and does not permanently lock the decision behind a 409) when the post-authorize event log write fails', async () => {
+    const demandRes = await app.inject({
+      method: 'POST', url: '/api/demands', headers: actorHeaders('customer', customerActorId),
+      payload: { domain: 'maintenance', demandType: 'wont_start', urgency: 'normal' }
+    });
+    const caseId = JSON.parse(demandRes.body).case.id as string;
+
+    await app.inject({
+      method: 'PUT', url: `/api/admin/field-service/actors/${towActorId}/capabilities`, headers: adminHeaders(),
+      payload: { active: true, repairClasses: ['electrical_minor'] }
+    });
+    const assessRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/assess`, headers: adminHeaders(),
+      payload: {
+        operatorActorId: towActorId, summary: 'Minor electrical repair possible on site',
+        repairClass: 'electrical_minor', drivability: 'drivable', confidence: 0.9, safety: {},
+        customerAuthorizationRequired: true
+      }
+    });
+    expect(assessRes.statusCode).toBe(201);
+    const decision = JSON.parse(assessRes.body).decision;
+    expect(decision.action).toBe('field_repair');
+    expect(decision.status).toBe('authorization_required');
+
+    // Simulate the event-log write failing after the status update has already committed --
+    // everything except the events insert passes through to the real pool unchanged.
+    const originalQuery = pool.query.bind(pool);
+    vi.spyOn(pool, 'query').mockImplementation(((...args: Parameters<typeof pool.query>) => {
+      const text = typeof args[0] === 'string' ? args[0] : (args[0] as { text?: string } | undefined)?.text;
+      if (typeof text === 'string' && text.includes('insert into events')) {
+        return Promise.reject(new Error('simulated_event_log_failure'));
+      }
+      return originalQuery(...(args as Parameters<typeof originalQuery>));
+    }) as typeof pool.query);
+
+    // The status update (guarded by `where ... and status='authorization_required'`) has already
+    // committed by the time the event-log write fails. The response must still be a success --
+    // otherwise the client sees a 500 while the decision is already 'authorized', and every retry
+    // is rejected by that same guard with a 409, permanently losing the event with no way to
+    // recover it (Devin review finding on this PR).
+    const authorizeRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/${decision.id}/authorize`, headers: actorHeaders('customer', customerActorId),
+      payload: { approved: true }
+    });
+    expect(authorizeRes.statusCode).toBe(200);
+    expect(JSON.parse(authorizeRes.body).decision.status).toBe('authorized');
   });
 });

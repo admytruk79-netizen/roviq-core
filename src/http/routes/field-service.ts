@@ -141,8 +141,16 @@ export async function fieldServiceRoutes(app:FastifyInstance){
     const status=b.approved?'authorized':'declined';
     const r=await pool.query(`update field_service_decisions set status=$1,authorized_by_actor_id=$2,customer_authorized_at=case when $3 then now() else customer_authorized_at end,updated_at=now() where id=$4 and status='authorization_required' returning *`,[status,req.principal.actorId??null,b.approved,decisionId]);
     if(!r.rowCount)return reply.code(409).send({error:'field_service_not_awaiting_authorization'});
-    await appendCaseEvent(id,b.approved?'FIELD_SERVICE_AUTHORIZED':'FIELD_SERVICE_DECLINED',req.principal,{decisionId,action:r.rows[0].action});
-    await setCustomerSnapshot(id,b.approved?'field_service_authorized':'field_service_declined',b.approved?'On-site work has been authorized.':'On-site work was declined.',b.approved?'Field operator may begin approved work':'ROVIQ will arrange another service path');
+    // Best-effort once the exact-state-guarded update above has committed: a thrown error here must
+    // not turn a persisted transition into a 500, since the decision's status has already moved past
+    // 'authorization_required' and every retry would then be rejected by that same guard with a 409,
+    // permanently losing the event/snapshot with no way to recover it (Devin review finding on this PR).
+    const sideEffects=await Promise.allSettled([
+      appendCaseEvent(id,b.approved?'FIELD_SERVICE_AUTHORIZED':'FIELD_SERVICE_DECLINED',req.principal,{decisionId,action:r.rows[0].action}),
+      setCustomerSnapshot(id,b.approved?'field_service_authorized':'field_service_declined',b.approved?'On-site work has been authorized.':'On-site work was declined.',b.approved?'Field operator may begin approved work':'ROVIQ will arrange another service path')
+    ]);
+    const failed=sideEffects.filter(s=>s.status==='rejected');
+    if(failed.length>0)console.warn('field_service_authorize_side_effect_failed',{decisionId,caseId:id,approved:b.approved,failedCount:failed.length});
     return{decision:r.rows[0]};
   });
 
@@ -166,7 +174,10 @@ export async function fieldServiceRoutes(app:FastifyInstance){
     if(!profile.rows[0]?.active||!profile.rows[0]?.verified_at)return reply.code(409).send({error:'field_service_operator_not_verified'});
     const r=await pool.query(`update field_service_decisions set status='in_progress',started_at=now(),updated_at=now() where id=$1 and status=$2 returning *`,[decisionId,startableStatus]);
     if(!r.rowCount)return reply.code(409).send({error:'field_service_not_startable'});
-    await appendCaseEvent(id,'FIELD_SERVICE_STARTED',req.principal,{decisionId,action:r.rows[0].action,operatorActorId});return{decision:r.rows[0]};
+    // Best-effort, same reasoning as authorize: the transition already committed, so a failure here
+    // must not 500 -- a retry would otherwise be rejected forever by the exact-state guard above.
+    await appendCaseEvent(id,'FIELD_SERVICE_STARTED',req.principal,{decisionId,action:r.rows[0].action,operatorActorId}).catch(e=>console.warn('field_service_start_side_effect_failed',{decisionId,caseId:id,error:e instanceof Error?e.message:e}));
+    return{decision:r.rows[0]};
   });
 
   app.post('/api/maintenance/cases/:id/field-service/:decisionId/complete',{preHandler:requireRole('diagnostic','tow','partner','admin')},async(req,reply)=>{
@@ -183,8 +194,14 @@ export async function fieldServiceRoutes(app:FastifyInstance){
     const status=b.outcome==='failed'||b.outcome==='escalated'?'escalated':'completed';
     const r=await pool.query(`update field_service_decisions set status=$1,outcome=$2,completed_at=now(),evidence=evidence || $3::jsonb,metadata=metadata || $4::jsonb,updated_at=now() where id=$5 and case_id=$6 and status='in_progress' returning *`,[status,b.outcome,JSON.stringify(b.evidence??{}),JSON.stringify(b.notes?{completionNotes:b.notes}:{}),decisionId,id]);
     if(!r.rowCount)return reply.code(409).send({error:'field_service_not_in_progress'});
-    await appendCaseEvent(id,'FIELD_SERVICE_COMPLETED',req.principal,{decisionId,outcome:b.outcome});
-    await setCustomerSnapshot(id,b.outcome==='fixed'?'field_service_fixed':b.outcome==='stabilized'?'field_service_stabilized':'field_service_escalated',b.outcome==='fixed'?'Vehicle repaired on site.':b.outcome==='stabilized'?'Vehicle stabilized on site.':'On-site work could not be completed safely.',b.outcome==='fixed'?'Confirm resolution':b.outcome==='stabilized'?'Continue with approved next step':'ROVIQ will arrange towing or specialist service');
+    // Best-effort, same reasoning as authorize/start: the transition already committed, so a
+    // failure here must not 500 -- a retry would otherwise be rejected forever by the 'in_progress' guard above.
+    const sideEffects=await Promise.allSettled([
+      appendCaseEvent(id,'FIELD_SERVICE_COMPLETED',req.principal,{decisionId,outcome:b.outcome}),
+      setCustomerSnapshot(id,b.outcome==='fixed'?'field_service_fixed':b.outcome==='stabilized'?'field_service_stabilized':'field_service_escalated',b.outcome==='fixed'?'Vehicle repaired on site.':b.outcome==='stabilized'?'Vehicle stabilized on site.':'On-site work could not be completed safely.',b.outcome==='fixed'?'Confirm resolution':b.outcome==='stabilized'?'Continue with approved next step':'ROVIQ will arrange towing or specialist service')
+    ]);
+    const failed=sideEffects.filter(s=>s.status==='rejected');
+    if(failed.length>0)console.warn('field_service_complete_side_effect_failed',{decisionId,caseId:id,outcome:b.outcome,failedCount:failed.length});
     return{decision:r.rows[0]};
   });
 }
