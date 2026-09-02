@@ -1,3 +1,21 @@
+alter table diagnostic_findings drop constraint if exists diagnostic_findings_disposition_check;
+alter table diagnostic_findings add constraint diagnostic_findings_disposition_check
+  check (disposition in ('diagnose_only','diagnose_and_fix','field_service_assessment','route_to_shop','route_to_tow'));
+
+create table if not exists field_service_actor_capabilities (
+  actor_id uuid primary key references actors(id) on delete cascade,
+  active boolean not null default true,
+  repair_classes jsonb not null default '[]'::jsonb,
+  capabilities jsonb not null default '[]'::jsonb,
+  tools jsonb not null default '[]'::jsonb,
+  max_estimated_minutes integer,
+  max_estimated_cost numeric(12,2),
+  verified_by_actor_id uuid references actors(id) on delete set null,
+  verified_at timestamptz,
+  metadata jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists field_service_decisions (
   id uuid primary key default gen_random_uuid(),
   case_id uuid not null references service_cases(id) on delete cascade,
@@ -32,4 +50,5 @@ create table if not exists field_service_decisions (
 create index if not exists idx_field_service_decisions_case on field_service_decisions(case_id, created_at desc);
 create index if not exists idx_field_service_decisions_status on field_service_decisions(status, updated_at desc);
 
+comment on table field_service_actor_capabilities is 'Admin-verified repair classes, capabilities and tools for actors permitted to perform field work.';
 comment on table field_service_decisions is 'Core-owned decision and authorization record for roadside/on-site repair, stabilization, escalation, shop routing, or tow.';
