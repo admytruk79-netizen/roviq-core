@@ -48,9 +48,9 @@ jobs:
         working-directory: web
         shell: bash
         run: |
-          npx wrangler pages project list | grep -qw roviq-web \
-            || npx wrangler pages project create roviq-web --production-branch=main
+          npx wrangler pages project list | grep -qw roviq-core-customer \
+            || npx wrangler pages project create roviq-core-customer --production-branch=main
 
       - name: Deploy to Cloudflare Pages
         working-directory: web
-        run: npx wrangler pages deploy dist --project-name=roviq-web --branch=main --commit-dirty=true
+        run: npx wrangler pages deploy dist --project-name=roviq-core-customer --branch=main --commit-dirty=true
