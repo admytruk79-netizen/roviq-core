@@ -20,12 +20,15 @@ describe('case access policy', () => {
     expect(principalCanAccessCase({role:'fleet',actorId:'fleet-1'},base)).toBe(false);
   });
 
-  it('grants access only through the role-specific case relation', () => {
+  it('grants access through any real case relation', () => {
     expect(principalCanAccessCase({role:'partner',actorId:'shop-1'},{...base,has_provider_relation:true})).toBe(true);
     expect(principalCanAccessCase({role:'tow',actorId:'tow-1'},{...base,has_transport_relation:true})).toBe(true);
     expect(principalCanAccessCase({role:'parts',actorId:'supplier-1'},{...base,has_parts_relation:true})).toBe(true);
     expect(principalCanAccessCase({role:'fleet',actorId:'fleet-1'},{...base,has_mobility_relation:true})).toBe(true);
-    expect(principalCanAccessCase({role:'tow',actorId:'tow-1'},{...base,has_provider_relation:true})).toBe(false);
+    // A Field Response identity can hold a capability outside its base role (e.g. a tow-role
+    // actor granted 'diagnostics'), acting on a case only through the relation that capability
+    // earned -- a real relation is sufficient proof of access regardless of which one it is.
+    expect(principalCanAccessCase({role:'tow',actorId:'tow-1'},{...base,has_provider_relation:true})).toBe(true);
   });
 
   it('allows network administrators without an actor id', () => {
