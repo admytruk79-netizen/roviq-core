@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { pool } from '../../db/pool.js';
 import { audit } from '../../services/audit.js';
-import { transitionCase } from '../../services/orchestration.js';
+import { transitionCase, type CaseState } from '../../services/orchestration.js';
 import { assignTransportDispatch, createTransportDispatch } from '../../services/transport.js';
 import { requireRole, requireRoleOrCapability } from '../middleware/principal.js';
 
@@ -63,7 +63,7 @@ export async function diagnosticRoutes(app: FastifyInstance) {
     await pool.query('update demand_requests set state=$1, updated_at=now() where id=$2', [nextDemandState,id]);
 
     let serviceCase = null;
-    let target:string|null = null;
+    let target:CaseState|null = null;
     if (caseId) {
       await pool.query('update service_cases set drivability=$1,updated_at=now() where id=$2',[b.drivability,caseId]);
       target = b.disposition === 'diagnose_and_fix' ? 'repair_in_progress' : b.disposition === 'route_to_tow' || b.drivability === 'non_drivable' ? 'tow_pending' : 'provider_selection';
