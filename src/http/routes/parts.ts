@@ -37,13 +37,20 @@ export async function partsRoutes(app: FastifyInstance) {
     const result = await getPartsOrder(id);
     if (!result) return reply.code(404).send({ error:'order_not_found' });
     const order:any = (result as any).order;
+    // Explicit allow-list, default deny -- the previous if/else-if only rejected 'customer' and
+    // 'parts' mismatches, so every other role (partner, tow, diagnostic, fleet) fell through
+    // unchecked and could read any parts order by id alone.
+    if (req.principal.role === 'admin') return result;
     if (req.principal.role === 'customer') {
       const c = await pool.query('select customer_actor_id from service_cases where id=$1',[order.case_id]);
       if (!c.rowCount || c.rows[0].customer_actor_id !== req.principal.actorId) return reply.code(403).send({ error:'forbidden' });
-    } else if (req.principal.role === 'parts' && order.supplier_actor_id !== req.principal.actorId) {
-      return reply.code(403).send({ error:'forbidden' });
+      return result;
     }
-    return result;
+    if (req.principal.role === 'parts') {
+      if (order.supplier_actor_id !== req.principal.actorId) return reply.code(403).send({ error:'forbidden' });
+      return result;
+    }
+    return reply.code(403).send({ error:'forbidden' });
   });
 
   app.post('/api/admin/parts-orders/:id/assign-supplier', { preHandler: requireRole('admin') }, async (req, reply) => {

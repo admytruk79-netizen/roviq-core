@@ -69,6 +69,12 @@ describe('transport dispatch end-to-end lifecycle', () => {
     const caseStillPendingRes = await app.inject({ method: 'GET', url: `/api/maintenance/cases/${caseId}`, headers: adminHeaders() });
     expect(JSON.parse(caseStillPendingRes.body).case.state).toBe('tow_pending');
 
+    // An unassigned dispatch (provider_actor_id is still null) must not be readable by just any
+    // authenticated tow provider -- the previous check only compared provider_actor_id when it was
+    // already set, so a still-unassigned dispatch's `&&` short-circuited and let anyone through.
+    const unassignedViewRes = await app.inject({ method: 'GET', url: `/api/transport/${dispatchId}`, headers: actorHeaders('tow', strangerTowActorId) });
+    expect(unassignedViewRes.statusCode).toBe(403);
+
     // A provider with no tow capability (no actor_type='tow', no partner_controls.tow_participation) must be rejected.
     const incapableAssignRes = await app.inject({
       method: 'POST', url: `/api/admin/transport/${dispatchId}/assign`, headers: adminHeaders(),

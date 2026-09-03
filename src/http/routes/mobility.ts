@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { pool } from '../../db/pool.js';
 import { requireRole } from '../middleware/principal.js';
 import { assignMobility, createMobilityResource, listMobilityForCase, requestMobility, updateMobilityState } from '../../services/mobility.js';
+import { loadCaseForPrincipal } from '../../services/case-access.js';
 
 export async function mobilityRoutes(app: FastifyInstance) {
   app.post('/api/admin/mobility/resources', { preHandler: requireRole('admin') }, async (req, reply) => {
@@ -40,10 +41,18 @@ export async function mobilityRoutes(app: FastifyInstance) {
 
   app.get('/api/maintenance/cases/:id/mobility', async (req, reply) => {
     const { id } = req.params as { id:string };
-    const c = await pool.query('select customer_actor_id from service_cases where id=$1',[id]);
-    if (!c.rowCount) return reply.code(404).send({ error:'case_not_found' });
-    if (req.principal.role === 'customer' && c.rows[0].customer_actor_id !== req.principal.actorId) return reply.code(403).send({ error:'forbidden' });
-    return { allocations:await listMobilityForCase(id) };
+    try {
+      // The previous check only ever tested the 'customer' role -- every other role fell
+      // through unchecked and could read any case's mobility allocations by id alone. Route
+      // through the shared access service (also used by cases.ts/coherence.ts) instead of a
+      // second, incomplete ad hoc check.
+      const c = await loadCaseForPrincipal(req.principal,id);
+      if (!c) return reply.code(404).send({ error:'case_not_found' });
+      return { allocations:await listMobilityForCase(id) };
+    } catch (e) {
+      if (e instanceof Error && e.message === 'forbidden') return reply.code(403).send({ error:'forbidden' });
+      throw e;
+    }
   });
 
   app.post('/api/admin/mobility/:id/assign', { preHandler: requireRole('admin') }, async (req, reply) => {

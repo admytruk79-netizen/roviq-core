@@ -65,7 +65,7 @@ export async function transportRoutes(app: FastifyInstance) {
     return { dispatches:history };
   });
   app.get('/api/transport/:id', async (req, reply) => {
-    const { id } = req.params as { id:string }; const d = await getTransportDispatch(id); if (!d) return reply.code(404).send({ error:'dispatch_not_found' }); if (req.principal.role !== 'admin' && d.provider_actor_id && d.provider_actor_id !== req.principal.actorId) return reply.code(403).send({ error:'forbidden' }); return { dispatch:d };
+    const { id } = req.params as { id:string }; const d = await getTransportDispatch(id); if (!d) return reply.code(404).send({ error:'dispatch_not_found' }); if (req.principal.role !== 'admin' && d.provider_actor_id !== req.principal.actorId) return reply.code(403).send({ error:'forbidden' }); return { dispatch:d };
   });
   app.post('/api/transport/:id/location', { preHandler: requireRoleOrCapability('tow','tow','partner','admin') }, async (req, reply) => {
     const { id } = req.params as { id:string };

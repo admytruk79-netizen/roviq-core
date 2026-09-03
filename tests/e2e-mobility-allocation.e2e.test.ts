@@ -146,6 +146,12 @@ describe('mobility allocation end-to-end lifecycle', () => {
     const forbiddenListRes = await app.inject({ method: 'GET', url: `/api/maintenance/cases/${caseId}/mobility`, headers: actorHeaders('customer', strangerCustomerId) });
     expect(forbiddenListRes.statusCode).toBe(403);
 
+    // A fleet provider with no relation to this case cannot read its mobility allocations either --
+    // the previous check only ever tested the 'customer' role, so every other role fell through
+    // unchecked.
+    const forbiddenFleetListRes = await app.inject({ method: 'GET', url: `/api/maintenance/cases/${caseId}/mobility`, headers: actorHeaders('fleet', strangerFleetActorId) });
+    expect(forbiddenFleetListRes.statusCode).toBe(403);
+
     const listRes = await app.inject({ method: 'GET', url: `/api/maintenance/cases/${caseId}/mobility`, headers: actorHeaders('customer', customerActorId) });
     expect(listRes.statusCode).toBe(200);
     const allocations = JSON.parse(listRes.body).allocations;

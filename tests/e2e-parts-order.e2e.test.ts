@@ -19,6 +19,7 @@ describe('parts order end-to-end lifecycle', () => {
   let strangerCustomerId: string;
   let supplierActorId: string;
   let strangerSupplierId: string;
+  let unrelatedTowActorId: string;
 
   beforeAll(async () => {
     app = await buildApp();
@@ -34,6 +35,9 @@ describe('parts order end-to-end lifecycle', () => {
 
     const strangerSupplier = await app.inject({ method: 'POST', url: '/api/admin/actors', headers: adminHeaders(), payload: { actorType: 'parts' } });
     strangerSupplierId = JSON.parse(strangerSupplier.body).actor.id;
+
+    const unrelatedTow = await app.inject({ method: 'POST', url: '/api/admin/actors', headers: adminHeaders(), payload: { actorType: 'tow' } });
+    unrelatedTowActorId = JSON.parse(unrelatedTow.body).actor.id;
   });
 
   afterAll(async () => {
@@ -146,6 +150,11 @@ describe('parts order end-to-end lifecycle', () => {
     expect(forbiddenCustomerRes.statusCode).toBe(403);
     const forbiddenSupplierRes = await app.inject({ method: 'GET', url: `/api/maintenance/parts-orders/${orderId}`, headers: actorHeaders('parts', strangerSupplierId) });
     expect(forbiddenSupplierRes.statusCode).toBe(403);
+    // A role with no relation to this order at all (not the customer, not the assigned supplier)
+    // must be denied too -- the previous if/else-if only rejected 'customer' and 'parts'
+    // mismatches, so every other role fell through unchecked.
+    const forbiddenUnrelatedRoleRes = await app.inject({ method: 'GET', url: `/api/maintenance/parts-orders/${orderId}`, headers: actorHeaders('tow', unrelatedTowActorId) });
+    expect(forbiddenUnrelatedRoleRes.statusCode).toBe(403);
     const ownerRes = await app.inject({ method: 'GET', url: `/api/maintenance/parts-orders/${orderId}`, headers: actorHeaders('customer', customerActorId) });
     expect(ownerRes.statusCode).toBe(200);
     expect(JSON.parse(ownerRes.body).order.status).toBe('delivered');
