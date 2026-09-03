@@ -14,7 +14,7 @@ type RoutingPolicy = { id:string; version:number; configuration:{ weights?:Recor
 export async function routeMaintenanceDemand(demandId: string) {
   const demandResult = await pool.query(
     `select d.*, dom.id as domain_id, dom.code as domain_code,
-            sc.id as case_id, sc.originating_actor_id, sc.relationship_owner_actor_id,
+            sc.id as case_id, sc.originating_actor_id, sc.relationship_owner_actor_id, sc.current_owner_actor_id,
             sc.selection_mode, sc.location_id
      from demand_requests d join domains dom on dom.id=d.domain_id
      left join lateral (select * from service_cases where demand_id=d.id order by created_at desc limit 1) sc on true
@@ -53,7 +53,7 @@ export async function routeMaintenanceDemand(demandId: string) {
     if(excluded.includes(demand.demand_type)){rejected.push({actorId:c.actor_id,reason:'job_type_excluded'});continue;}
     if(accepted.length&&!accepted.includes(demand.demand_type)){rejected.push({actorId:c.actor_id,reason:'job_type_not_accepted'});continue;}
     if(c.active_capacity<=0&&c.earliest_available_at&&new Date(c.earliest_available_at)>new Date()){rejected.push({actorId:c.actor_id,reason:'no_current_capacity'});continue;}
-    const continuity = [demand.originating_actor_id,demand.relationship_owner_actor_id].filter(Boolean).includes(c.actor_id) ? 1 : 0;
+    const continuity = [demand.originating_actor_id,demand.relationship_owner_actor_id,demand.current_owner_actor_id].filter(Boolean).includes(c.actor_id) ? 1 : 0;
     const route = routeCandidates?.[c.actor_id] ?? {};
     eligible.push({actorId:c.actor_id,signals:{
       capacity:c.active_capacity,rating:c.avg_rating,onTime:c.on_time_rate,
