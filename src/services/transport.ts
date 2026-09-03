@@ -83,11 +83,16 @@ export async function assignTransportDispatch(principal: Principal, dispatchId:s
       throw new Error('dispatch_not_assignable');
     }
     const provider = await client.query(
-      `select a.id,a.actor_type,coalesce(pc.tow_participation,false) as tow_participation,coalesce(pc.valet_participation,false) as valet_participation
+      `select a.id,a.actor_type,coalesce(pc.tow_participation,false) as tow_participation,coalesce(pc.valet_participation,false) as valet_participation,
+              exists(
+                select 1 from actor_capabilities ac
+                join capabilities c on c.id=ac.capability_id
+                where ac.actor_id=a.id and ac.active=true and c.capability_code='tow'
+              ) as has_tow_capability
        from actors a left join partner_controls pc on pc.actor_id=a.id where a.id=$1 and a.status='active'`,[providerActorId]
     );
     if (!provider.rowCount) throw new Error('provider_not_found');
-    const allowed = current.transport_type === 'tow' ? (provider.rows[0].actor_type === 'tow' || provider.rows[0].tow_participation) : provider.rows[0].valet_participation;
+    const allowed = current.transport_type === 'tow' ? (provider.rows[0].actor_type === 'tow' || provider.rows[0].tow_participation || provider.rows[0].has_tow_capability) : provider.rows[0].valet_participation;
     if (!allowed) throw new Error('provider_not_transport_capable');
     updated = await client.query(
       `update transport_dispatches set provider_actor_id=$1,status='assigned',assigned_at=now(),eta_at=coalesce($2,eta_at),updated_at=now() where id=$3 returning *`,
