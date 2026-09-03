@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import { formatAmount, formatDateTime, formatMinorAmount, humanizeToken } from '../lib/format';
@@ -9,11 +9,46 @@ type Spatial = {
   origin?: unknown;
   current_vehicle?: unknown;
   destination?: unknown;
+  diagnostic_location?: unknown;
   provider_location?: unknown;
   transport_location?: unknown;
   route_context?: Record<string, unknown>;
   updated_at?: string;
 };
+
+type Point = { lat: number; lng: number };
+
+const LOCAL_MAP = 'https://roviq-local2.admytruk79.workers.dev';
+
+function point(value: unknown, depth = 0): Point | null {
+  if (value == null || depth > 4) return null;
+  if (Array.isArray(value) && value.length >= 2) {
+    const lng = Number(value[0]);
+    const lat = Number(value[1]);
+    return Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 ? { lat, lng } : null;
+  }
+  if (typeof value === 'string') {
+    const match = value.trim().match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+    if (!match) return null;
+    const lat = Number(match[1]);
+    const lng = Number(match[2]);
+    return Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 ? { lat, lng } : null;
+  }
+  if (typeof value !== 'object') return null;
+  const v = value as Record<string, unknown>;
+  const lat = Number(v.lat ?? v.latitude);
+  const lng = Number(v.lng ?? v.lon ?? v.longitude);
+  if (Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) return { lat, lng };
+  if (Array.isArray(v.coordinates)) {
+    const nested = point(v.coordinates, depth + 1);
+    if (nested) return nested;
+  }
+  for (const key of ['location', 'point', 'position', 'geometry', 'coords', 'value']) {
+    const nested = point(v[key], depth + 1);
+    if (nested) return nested;
+  }
+  return null;
+}
 
 function locationLabel(value: unknown) {
   if (!value) return 'Not available yet';
@@ -22,8 +57,64 @@ function locationLabel(value: unknown) {
     const v = value as Record<string, unknown>;
     const text = [v.name, v.label, v.address, v.formatted_address, v.description].find(x => typeof x === 'string');
     if (typeof text === 'string') return text;
+    const p = point(v);
+    if (p) return `${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}`;
   }
   return 'Location available';
+}
+
+function CustomerLiveMap({ spatial, caseState }: { spatial: Spatial | null; caseState: string }) {
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const [mapReady, setMapReady] = useState(false);
+  const normalizedState = caseState.toLowerCase();
+  const vehicle = point(spatial?.current_vehicle) ?? point(spatial?.origin);
+  const destination = point(spatial?.destination) ?? point(spatial?.diagnostic_location);
+  const responder = point(spatial?.transport_location) ?? point(spatial?.provider_location);
+  const responderName = normalizedState.startsWith('tow') ? 'Tow / Valet' : normalizedState.startsWith('diagnostic') ? 'Diagnostic' : 'Service provider';
+  const hasMapLocation = Boolean(vehicle || destination || responder);
+
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      if (event.origin === LOCAL_MAP && event.data?.type === 'roviq:tow-map-ready') setMapReady(true);
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
+
+  useEffect(() => {
+    if (!mapReady || !frameRef.current?.contentWindow) return;
+    frameRef.current.contentWindow.postMessage({
+      type: 'roviq:tow-map-state',
+      state: { tow: responder, pickup: vehicle, destination, follow: true, assigned: Boolean(responder) },
+      route: null
+    }, LOCAL_MAP);
+  }, [mapReady, responder?.lat, responder?.lng, vehicle?.lat, vehicle?.lng, destination?.lat, destination?.lng]);
+
+  return (
+    <div className="mt-3 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-col gap-2 border-b border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Live service map</p>
+          <p className="mt-1 text-sm font-semibold text-slate-800">{responder ? `${responderName} location` : 'Tracking your service journey'}</p>
+        </div>
+        <span className="text-xs text-slate-500">Updates automatically</span>
+      </div>
+      {hasMapLocation ? (
+        <iframe
+          ref={frameRef}
+          src={`${LOCAL_MAP}/tow-map.html?mode=day`}
+          title="ROVIQ live service map"
+          className="block h-[320px] w-full border-0 sm:h-[380px]"
+          onLoad={() => setMapReady(false)}
+        />
+      ) : (
+        <div className="px-4 py-8 text-center text-sm text-slate-500">The live map will appear as soon as location data is available for this service.</div>
+      )}
+      <div className="border-t border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
+        {responder ? `${responderName} is sharing a service location for this case.` : 'Provider location will appear here when a field responder begins sharing location.'}
+      </div>
+    </div>
+  );
 }
 
 export function CaseDetail() {
@@ -61,7 +152,31 @@ export function CaseDetail() {
     }
   }, [id]);
 
+  const loadLive = useCallback(async () => {
+    if (!id) return;
+    try {
+      const [caseRes, spatialRes] = await Promise.all([
+        api.get<{ case: ServiceCase; customerSnapshot: CustomerSnapshot }>(`/api/maintenance/cases/${id}`),
+        api.get<{ spatial: Spatial }>(`/api/maintenance/cases/${id}/spatial`).catch(() => null)
+      ]);
+      setCaseData(caseRes.case);
+      setSnapshot(caseRes.customerSnapshot);
+      setSpatial(spatialRes?.spatial ?? null);
+    } catch {
+      // Keep the last known customer-visible state during a transient live refresh failure.
+    }
+  }, [id]);
+
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    const interval = window.setInterval(() => void loadLive(), 10000);
+    const onFocus = () => void loadLive();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [loadLive]);
 
   async function refresh() {
     setRefreshing(true);
@@ -119,6 +234,8 @@ export function CaseDetail() {
   const isComplete = ['completed', 'closed'].includes(normalizedState);
   const statusMessage = snapshot?.customer_message ?? humanizeToken(snapshot?.customer_status ?? caseData.state);
   const nextAction = snapshot?.next_action ?? (isComplete ? 'Your service is complete. No action is required.' : 'We are coordinating the next step.');
+  const responderLocation = spatial?.transport_location ?? spatial?.provider_location;
+  const responderLabel = normalizedState.startsWith('tow') ? 'Tow / Valet' : normalizedState.startsWith('diagnostic') ? 'Diagnostic' : 'Service provider';
 
   return (
     <div className="space-y-6">
@@ -172,13 +289,14 @@ export function CaseDetail() {
         <div className="flex items-end justify-between gap-3">
           <div>
             <h2 className="text-sm font-semibold text-slate-800">Vehicle journey</h2>
-            <p className="mt-1 text-xs text-slate-500">Where your vehicle is now and where it is headed.</p>
+            <p className="mt-1 text-xs text-slate-500">Live case location, responder progress and where your vehicle is headed.</p>
           </div>
         </div>
+        <CustomerLiveMap spatial={spatial} caseState={String(caseData.state)} />
         <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <div className="rounded-xl border border-slate-200 bg-white p-4"><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Vehicle / origin</p><p className="mt-1 text-sm text-slate-700">{locationLabel(spatial?.current_vehicle ?? spatial?.origin)}</p></div>
-          <div className="rounded-xl border border-slate-200 bg-white p-4"><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Service destination</p><p className="mt-1 text-sm text-slate-700">{locationLabel(spatial?.destination ?? spatial?.provider_location)}</p></div>
-          <div className="rounded-xl border border-slate-200 bg-white p-4"><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Transport</p><p className="mt-1 text-sm text-slate-700">{locationLabel(spatial?.transport_location)}</p>{(typeof eta === 'number' || typeof eta === 'string') && <p className="mt-1 text-xs text-slate-500">Estimated travel {String(eta)} min</p>}</div>
+          <div className="rounded-xl border border-slate-200 bg-white p-4"><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Service destination</p><p className="mt-1 text-sm text-slate-700">{locationLabel(spatial?.destination ?? spatial?.diagnostic_location)}</p></div>
+          <div className="rounded-xl border border-slate-200 bg-white p-4"><p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{responderLabel}</p><p className="mt-1 text-sm text-slate-700">{locationLabel(responderLocation)}</p>{(typeof eta === 'number' || typeof eta === 'string') && <p className="mt-1 text-xs text-slate-500">Estimated travel {String(eta)} min</p>}</div>
         </div>
       </section>
 
