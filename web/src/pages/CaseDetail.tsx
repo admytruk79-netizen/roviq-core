@@ -69,7 +69,9 @@ function CustomerLiveMap({ spatial, caseState }: { spatial: Spatial | null; case
   const normalizedState = caseState.toLowerCase();
   const vehicle = point(spatial?.current_vehicle) ?? point(spatial?.origin);
   const destination = point(spatial?.destination) ?? point(spatial?.diagnostic_location);
-  const responder = point(spatial?.transport_location) ?? point(spatial?.provider_location);
+  const responder = normalizedState.startsWith('diagnostic')
+    ? point(spatial?.diagnostic_location) ?? point(spatial?.transport_location) ?? point(spatial?.provider_location)
+    : point(spatial?.transport_location) ?? point(spatial?.provider_location) ?? point(spatial?.diagnostic_location);
   const responderName = normalizedState.startsWith('tow') ? 'Tow / Valet' : normalizedState.startsWith('diagnostic') ? 'Diagnostic' : 'Service provider';
   const hasMapLocation = Boolean(vehicle || destination || responder);
 
@@ -234,7 +236,9 @@ export function CaseDetail() {
   const isComplete = ['completed', 'closed'].includes(normalizedState);
   const statusMessage = snapshot?.customer_message ?? humanizeToken(snapshot?.customer_status ?? caseData.state);
   const nextAction = snapshot?.next_action ?? (isComplete ? 'Your service is complete. No action is required.' : 'We are coordinating the next step.');
-  const responderLocation = spatial?.transport_location ?? spatial?.provider_location;
+  const responderLocation = normalizedState.startsWith('diagnostic')
+    ? spatial?.diagnostic_location ?? spatial?.transport_location ?? spatial?.provider_location
+    : spatial?.transport_location ?? spatial?.provider_location ?? spatial?.diagnostic_location;
   const responderLabel = normalizedState.startsWith('tow') ? 'Tow / Valet' : normalizedState.startsWith('diagnostic') ? 'Diagnostic' : 'Service provider';
 
   return (
