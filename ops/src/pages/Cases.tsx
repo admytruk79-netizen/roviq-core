@@ -5,6 +5,25 @@ import { formatDateTime } from '../lib/format';
 import { StatusBadge } from '../components/StatusBadge';
 import { CASE_STATES, type ServiceCase } from '../lib/types';
 
+function nextAction(state: string) {
+  const actions: Record<string, string> = {
+    intake: 'Review intake and move the case into triage.',
+    triage: 'Send the case to diagnostic pending when it is ready for field verification.',
+    diagnostic_pending: 'Assign an active diagnostic provider.',
+    diagnostic_in_progress: 'Monitor the diagnostic finding and next handoff.',
+    tow_pending: 'Assign an active Tow / Valet provider.',
+    tow_in_progress: 'Monitor transport until the vehicle is delivered.',
+    provider_selection: 'Evaluate repair providers and send the selected offer.',
+    provider_pending: 'Monitor provider acceptance and repair handoff.',
+    repair_in_progress: 'Monitor repair, parts, approval and payment requirements.',
+    parts_pending: 'Confirm the Parts supplier handoff is progressing.',
+    payment_pending: 'Confirm approval and capture the authorized payment when ready.',
+    completed: 'No action required — service is complete.',
+    cancelled: 'No action required — case is cancelled.'
+  };
+  return actions[state] ?? 'Open case control and review the current workflow state.';
+}
+
 export function Cases() {
   const [cases, setCases] = useState<ServiceCase[] | null>(null);
   const [stateFilter, setStateFilter] = useState('');
@@ -45,6 +64,7 @@ export function Cases() {
             <Link to={`/cases/${c.id}`} key={c.id} className="ops-case-card">
               <div className="ops-case-top"><div><p className="roviq-kicker">{String(c.case_type).replaceAll('_',' ')} case</p><h2>Case {c.id.slice(0,8)}</h2></div><StatusBadge state={c.state} /></div>
               <div className="ops-case-meta"><span className={`ops-priority priority-${String(c.priority).toLowerCase()}`}>{c.priority}</span><span>Updated {formatDateTime(c.updated_at)}</span></div>
+              <p className="roviq-muted text-sm"><strong className="text-slate-700">Next action:</strong> {nextAction(c.state)}</p>
               <div className="ops-open-row"><span>Open case control</span><strong>›</strong></div>
             </Link>
           ))}
