@@ -22,6 +22,34 @@ export async function coherenceRoutes(app: FastifyInstance) {
     }
   });
 
+  app.post('/api/maintenance/cases/:id/diagnostic-location', { preHandler: requireRole('diagnostic') }, async (req, reply) => {
+    const { id } = req.params as { id:string };
+    const body = z.object({
+      lat:z.number().min(-90).max(90),
+      lng:z.number().min(-180).max(180),
+      accuracy:z.number().nonnegative().optional(),
+      heading:z.number().min(0).max(360).nullable().optional(),
+      speed:z.number().nonnegative().nullable().optional(),
+      capturedAt:z.string().datetime().optional()
+    }).parse(req.body);
+    const assigned = await pool.query(
+      `select 1 from matches_offers where case_id=$1 and actor_id=$2 and outcome='accepted' limit 1`,
+      [id,req.principal.actorId]
+    );
+    if (!assigned.rowCount) return reply.code(403).send({ error:'diagnostic_case_not_assigned' });
+    const point = {
+      lat:body.lat,lng:body.lng,accuracy:body.accuracy ?? null,heading:body.heading ?? null,
+      speed:body.speed ?? null,capturedAt:body.capturedAt ?? new Date().toISOString(),actorId:req.principal.actorId
+    };
+    await pool.query(
+      `insert into case_spatial_context(case_id,diagnostic_location,source,updated_at)
+       values($1,$2::jsonb,'diagnostic_live_gps',now())
+       on conflict(case_id) do update set diagnostic_location=excluded.diagnostic_location,source='diagnostic_live_gps',updated_at=now()`,
+      [id,JSON.stringify(point)]
+    );
+    return { ok:true, diagnosticLocation:point };
+  });
+
   app.get('/api/admin/spatial/network', { preHandler: requireRole('admin') }, async () => {
     const r = await pool.query(`
       select c.id as case_id,c.state,c.priority,c.drivability,c.updated_at,
@@ -132,7 +160,7 @@ function projectSpatial(role:string, s:Record<string,unknown>) {
   if (role === 'diagnostic') return {...base,origin:s.origin,current_vehicle:s.current_vehicle,diagnostic_location:s.diagnostic_location,route_context};
   if (role === 'partner') return {...base,origin:s.origin,current_vehicle:s.current_vehicle,provider_location:s.provider_location,destination:s.destination,route_context};
   if (role === 'parts') return {...base,parts_origin:s.parts_origin,destination:s.destination,route_context};
-  return {...base,origin:s.origin,current_vehicle:s.current_vehicle,destination:s.destination,provider_location:s.provider_location,transport_location:s.transport_location,route_context};
+  return {...base,origin:s.origin,current_vehicle:s.current_vehicle,destination:s.destination,diagnostic_location:s.diagnostic_location,provider_location:s.provider_location,transport_location:s.transport_location,route_context};
 }
 
 function json(value:unknown) { return value === undefined ? null : JSON.stringify(value); }
