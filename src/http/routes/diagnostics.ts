@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { pool } from '../../db/pool.js';
 import { audit } from '../../services/audit.js';
 import { transitionCase } from '../../services/orchestration.js';
-import { requireRole } from '../middleware/principal.js';
+import { requireRole, requireRoleOrCapability } from '../middleware/principal.js';
 
 const findingBody = z.object({
   findingCode: z.string().optional(),
@@ -15,7 +15,7 @@ const findingBody = z.object({
 });
 
 export async function diagnosticRoutes(app: FastifyInstance) {
-  app.get('/api/diagnostics/me/queue', { preHandler: requireRole('diagnostic') }, async (req) => {
+  app.get('/api/diagnostics/me/queue', { preHandler: requireRoleOrCapability('diagnostics','diagnostic') }, async (req) => {
     const r = await pool.query(
       `select m.id as offer_id, m.case_id, m.demand_id, m.outcome, m.offered_at, d.demand_type, d.urgency, d.location, d.attributes
        from matches_offers m join demand_requests d on d.id=m.demand_id
@@ -25,7 +25,7 @@ export async function diagnosticRoutes(app: FastifyInstance) {
     return { queue: r.rows };
   });
 
-  app.post('/api/diagnostics/demands/:id/findings', { preHandler: requireRole('diagnostic') }, async (req, reply) => {
+  app.post('/api/diagnostics/demands/:id/findings', { preHandler: requireRoleOrCapability('diagnostics','diagnostic') }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const b = findingBody.parse(req.body);
     const owned = await pool.query(
