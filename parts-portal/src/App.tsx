@@ -152,6 +152,16 @@ export default function App() {
 
   useEffect(() => { if (principal) void load(); }, [principal]);
   useEffect(() => { if (principal && selected) void loadDetail(selected); }, [principal, selected]);
+  useEffect(() => {
+    if (!principal) return;
+    const interval = window.setInterval(() => void load(), 5000);
+    const onFocus = () => void load();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [principal, selected]);
 
   function clearInventoryForm() {
     setSku('');
@@ -253,6 +263,7 @@ export default function App() {
         <p>Confirm inventory, reserve stock and keep fulfilment status current. Geography is restricted to the selected case order.</p>
         {error && <div className="error">{error}</div>}
         {message && <div className="success">{message}</div>}
+        <div className="actions"><button className="secondary" type="button" onClick={() => void load()}>Refresh orders</button></div>
 
         <div className="grid">
           {orders.map((order) => (
