@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { pool } from '../../db/pool.js';
 import { audit } from '../../services/audit.js';
 import { loadCaseForPrincipal } from '../../services/case-access.js';
-import { requireRole } from '../middleware/principal.js';
+import { requireRole, requireRoleOrCapability } from '../middleware/principal.js';
 
 const partnerSubtype = z.enum(['dealership','independent_repair','service_center','mobile_service']);
 
@@ -22,7 +22,7 @@ export async function coherenceRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post('/api/maintenance/cases/:id/diagnostic-location', { preHandler: requireRole('diagnostic') }, async (req, reply) => {
+  app.post('/api/maintenance/cases/:id/diagnostic-location', { preHandler: requireRoleOrCapability('diagnostics','diagnostic') }, async (req, reply) => {
     const { id } = req.params as { id:string };
     const body = z.object({
       lat:z.number().min(-90).max(90),
