@@ -149,7 +149,10 @@ describe('spatial authorization and role projection', () => {
     expect(customerSpatial.origin).toBeTruthy();
     expect(customerSpatial.destination).toBeTruthy();
     expect(customerSpatial.transport_location.dispatchId).toBe(dispatchId);
-    expect(customerSpatial).not.toHaveProperty('diagnostic_location');
+    // A customer's live map plots the diagnostic's pin (lat/lng only) but must never see the
+    // diagnostic's internal telemetry -- actorId, accuracy, heading, speed, or this fixture's
+    // 'diagnostic-only' marker.
+    expect(customerSpatial.diagnostic_location).toEqual({ lat: 45.51, lng: -122.68 });
     expect(customerSpatial).not.toHaveProperty('parts_origin');
     expect(customerSpatial.route_context).not.toHaveProperty('candidates');
 

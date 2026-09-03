@@ -152,6 +152,18 @@ function sanitizeRouteContext(routeContext: unknown) {
   return rest;
 }
 
+// A diagnostic's live GPS point carries their own actorId plus device telemetry
+// (accuracy/heading/speed) -- useful to the diagnostic role and admin, but a customer's live map
+// only ever plots lat/lng (see web/src/pages/CaseDetail.tsx's `point()`). Strip everything else
+// before it reaches a customer, and omit the key entirely when there's no location yet rather
+// than returning a phantom object -- keeps "no location" and "location, but not disclosable"
+// distinguishable the same way an absent key already does for every other spatial field here.
+function narrowLocation(location: unknown) {
+  if (!location || typeof location !== 'object') return null;
+  const { lat, lng } = location as Record<string, unknown>;
+  return typeof lat === 'number' && typeof lng === 'number' ? { lat, lng } : null;
+}
+
 function projectSpatial(role:string, s:Record<string,unknown>) {
   if (role === 'admin') return s;
   const base = { case_id:s.case_id, source:s.source, updated_at:s.updated_at };
@@ -160,7 +172,8 @@ function projectSpatial(role:string, s:Record<string,unknown>) {
   if (role === 'diagnostic') return {...base,origin:s.origin,current_vehicle:s.current_vehicle,diagnostic_location:s.diagnostic_location,route_context};
   if (role === 'partner') return {...base,origin:s.origin,current_vehicle:s.current_vehicle,provider_location:s.provider_location,destination:s.destination,route_context};
   if (role === 'parts') return {...base,parts_origin:s.parts_origin,destination:s.destination,route_context};
-  return {...base,origin:s.origin,current_vehicle:s.current_vehicle,destination:s.destination,provider_location:s.provider_location,transport_location:s.transport_location,route_context};
+  const diagnosticPin = narrowLocation(s.diagnostic_location);
+  return {...base,origin:s.origin,current_vehicle:s.current_vehicle,destination:s.destination,provider_location:s.provider_location,transport_location:s.transport_location,route_context,...(diagnosticPin ? { diagnostic_location:diagnosticPin } : {})};
 }
 
 function json(value:unknown) { return value === undefined ? null : JSON.stringify(value); }
