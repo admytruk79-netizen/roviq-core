@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { pool } from '../../db/pool.js';
-import { requireRole } from '../middleware/principal.js';
+import { requireRole, requireRoleOrCapability } from '../middleware/principal.js';
 import { assignTransportDispatch, createTransportDispatch, getTransportDispatch, updateTransportStatus } from '../../services/transport.js';
 
 const location = z.record(z.unknown()).optional();
@@ -30,11 +30,11 @@ export async function transportRoutes(app: FastifyInstance) {
     try { return { dispatch:await assignTransportDispatch(req.principal,id,body.providerActorId,body.etaAt) }; }
     catch (e) { const message=e instanceof Error?e.message:'transport_assign_failed'; if (['dispatch_not_found','provider_not_found'].includes(message)) return reply.code(404).send({ error:message }); if (['dispatch_not_assignable','provider_not_transport_capable'].includes(message)) return reply.code(409).send({ error:message }); throw e; }
   });
-  app.get('/api/transport/me/dispatches', { preHandler: requireRole('tow','partner') }, async (req) => {
+  app.get('/api/transport/me/dispatches', { preHandler: requireRoleOrCapability('tow','tow','partner') }, async (req) => {
     const r = await pool.query(`select * from transport_dispatches where provider_actor_id=$1 order by created_at desc limit 200`, [req.principal.actorId]);
     return { dispatches:r.rows };
   });
-  app.get('/api/transport/me/history', { preHandler: requireRole('tow','partner') }, async (req) => {
+  app.get('/api/transport/me/history', { preHandler: requireRoleOrCapability('tow','tow','partner') }, async (req) => {
     const r = await pool.query(
       `select distinct on (td.id)
          td.*,
@@ -67,7 +67,7 @@ export async function transportRoutes(app: FastifyInstance) {
   app.get('/api/transport/:id', async (req, reply) => {
     const { id } = req.params as { id:string }; const d = await getTransportDispatch(id); if (!d) return reply.code(404).send({ error:'dispatch_not_found' }); if (req.principal.role !== 'admin' && d.provider_actor_id && d.provider_actor_id !== req.principal.actorId) return reply.code(403).send({ error:'forbidden' }); return { dispatch:d };
   });
-  app.post('/api/transport/:id/location', { preHandler: requireRole('tow','partner','admin') }, async (req, reply) => {
+  app.post('/api/transport/:id/location', { preHandler: requireRoleOrCapability('tow','tow','partner','admin') }, async (req, reply) => {
     const { id } = req.params as { id:string };
     const body = z.object({ lat:z.number().min(-90).max(90), lng:z.number().min(-180).max(180), accuracy:z.number().nonnegative().optional(), heading:z.number().min(0).max(360).nullable().optional(), speed:z.number().nonnegative().nullable().optional(), capturedAt:z.string().datetime().optional() }).parse(req.body);
     const d = await getTransportDispatch(id);
@@ -82,7 +82,7 @@ export async function transportRoutes(app: FastifyInstance) {
     );
     return { ok:true, transportLocation:point };
   });
-  app.post('/api/transport/:id/status', { preHandler: requireRole('tow','partner','admin') }, async (req, reply) => {
+  app.post('/api/transport/:id/status', { preHandler: requireRoleOrCapability('tow','tow','partner','admin') }, async (req, reply) => {
     const { id } = req.params as { id:string }; const body = z.object({ status, metadata:z.record(z.unknown()).optional() }).parse(req.body);
     try { return { dispatch:await updateTransportStatus(req.principal,id,body.status,body.metadata ?? {}) }; }
     catch (e) {
