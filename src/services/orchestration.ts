@@ -4,6 +4,7 @@ import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
 import { audit } from './audit.js';
 import { assertCaseAccess } from './case-access.js';
+import { publishIntegrationEvent } from './integration-gateway.js';
 
 export type CaseState =
   | 'intake' | 'triage' | 'diagnostic_pending' | 'diagnostic_in_progress'
@@ -57,6 +58,13 @@ export async function createServiceCase(principal: Principal, input: {
       [principal.role,principal.actorId ?? null,c.id,JSON.stringify({servicePlanId:plan.rows[0].id,selectionMode:c.selection_mode})]
     );
     if (ownsTransaction) await client.query('commit');
+    if (ownsTransaction) {
+      try {
+        await publishIntegrationEvent({ aggregateType:'service_case', aggregateId:c.id, eventType:'CASE_CREATED', actorId:principal.actorId ?? undefined, payload:{ state:c.state, priority:c.priority } });
+      } catch (error) {
+        console.error('integration_event_publish_failed', { eventType:'CASE_CREATED', caseId:c.id, message: error instanceof Error ? error.message : String(error) });
+      }
+    }
     return c;
   } catch (error) {
     if (ownsTransaction) await client.query('rollback');
@@ -103,6 +111,11 @@ export async function transitionCase(principal: Principal, caseId: string, toSta
     }
     await client.query('commit');
     await audit(principal,'transition_case','service_case',caseId,`${c.state}->${toState}`,metadata);
+    try {
+      await publishIntegrationEvent({ aggregateType:'service_case', aggregateId:caseId, eventType:`CASE_${toState.toUpperCase()}`, actorId:principal.actorId ?? undefined, payload:{ from:c.state, to:toState } });
+    } catch (error) {
+      console.error('integration_event_publish_failed', { eventType:`CASE_${toState.toUpperCase()}`, caseId, message: error instanceof Error ? error.message : String(error) });
+    }
     return updated.rows[0];
   } catch (e) {
     await client.query('rollback');
