@@ -15,7 +15,7 @@ export async function coherenceRoutes(app: FastifyInstance) {
       if (!c) return reply.code(404).send({ error:'case_not_found' });
       const r = await pool.query('select * from case_spatial_context where case_id=$1',[id]);
       const spatial = r.rows[0] ?? { case_id:id, route_context:{} };
-      return { spatial:projectSpatial(req.principal.role,spatial) };
+      return { spatial:projectSpatial(req.principal.role,spatial,c) };
     } catch (error) {
       if (error instanceof Error && error.message === 'forbidden') return reply.code(403).send({error:'forbidden'});
       throw error;
@@ -164,12 +164,26 @@ function narrowLocation(location: unknown) {
   return typeof lat === 'number' && typeof lng === 'number' ? { lat, lng } : null;
 }
 
-function projectSpatial(role:string, s:Record<string,unknown>) {
+type SpatialCaseRelation = { has_provider_relation?:boolean; has_transport_relation?:boolean };
+
+function projectSpatial(role:string, s:Record<string,unknown>, relation:SpatialCaseRelation = {}) {
   if (role === 'admin') return s;
   const base = { case_id:s.case_id, source:s.source, updated_at:s.updated_at };
   const route_context = sanitizeRouteContext(s.route_context);
-  if (role === 'tow') return {...base,origin:s.origin,current_vehicle:s.current_vehicle,destination:s.destination,transport_location:s.transport_location,route_context};
-  if (role === 'diagnostic') return {...base,origin:s.origin,current_vehicle:s.current_vehicle,diagnostic_location:s.diagnostic_location,route_context};
+
+  // Field Response identities may legitimately work across Diagnostic and Tow under one actor.
+  // Project spatial context from this actor's actual relationship to this case rather than from
+  // the token's primary role, while keeping all existing case-access/assignment checks intact.
+  if (role === 'diagnostic' || role === 'tow') {
+    const diagnostic = Boolean(relation.has_provider_relation);
+    const transport = Boolean(relation.has_transport_relation);
+    if (diagnostic && transport) return {...base,origin:s.origin,current_vehicle:s.current_vehicle,destination:s.destination,diagnostic_location:s.diagnostic_location,transport_location:s.transport_location,route_context};
+    if (transport) return {...base,origin:s.origin,current_vehicle:s.current_vehicle,destination:s.destination,transport_location:s.transport_location,route_context};
+    if (diagnostic) return {...base,origin:s.origin,current_vehicle:s.current_vehicle,diagnostic_location:s.diagnostic_location,route_context};
+    if (role === 'tow') return {...base,origin:s.origin,current_vehicle:s.current_vehicle,destination:s.destination,transport_location:s.transport_location,route_context};
+    return {...base,origin:s.origin,current_vehicle:s.current_vehicle,diagnostic_location:s.diagnostic_location,route_context};
+  }
+
   if (role === 'partner') return {...base,origin:s.origin,current_vehicle:s.current_vehicle,provider_location:s.provider_location,destination:s.destination,route_context};
   if (role === 'parts') return {...base,parts_origin:s.parts_origin,destination:s.destination,route_context};
   const diagnosticPin = narrowLocation(s.diagnostic_location);
