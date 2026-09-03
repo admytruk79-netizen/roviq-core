@@ -160,7 +160,7 @@ function projectSpatial(role:string, s:Record<string,unknown>) {
   if (role === 'diagnostic') return {...base,origin:s.origin,current_vehicle:s.current_vehicle,diagnostic_location:s.diagnostic_location,route_context};
   if (role === 'partner') return {...base,origin:s.origin,current_vehicle:s.current_vehicle,provider_location:s.provider_location,destination:s.destination,route_context};
   if (role === 'parts') return {...base,parts_origin:s.parts_origin,destination:s.destination,route_context};
-  return {...base,origin:s.origin,current_vehicle:s.current_vehicle,destination:s.destination,diagnostic_location:s.diagnostic_location,provider_location:s.provider_location,transport_location:s.transport_location,route_context};
+  return {...base,origin:s.origin,current_vehicle:s.current_vehicle,destination:s.destination,provider_location:s.provider_location,transport_location:s.transport_location,route_context};
 }
 
 function json(value:unknown) { return value === undefined ? null : JSON.stringify(value); }
