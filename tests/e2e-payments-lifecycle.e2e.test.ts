@@ -168,5 +168,13 @@ describe('payments and settlement end-to-end lifecycle', () => {
       'PAYMENT_INTENT_CREATED', 'PAYMENT_CAPTURED', 'PAYMENT_REFUNDED',
       'PAYOUT_CREATED', 'PAYOUT_APPROVED', 'PAYOUT_PROCESSING', 'PAYOUT_PAID'
     ]));
+
+    // What ROVIQ pays the partner (partner payable) is never part of the customer's own case
+    // narrative -- only admins see PAYOUT_* events on the case timeline.
+    const customerTimelineRes = await app.inject({ method: 'GET', url: `/api/maintenance/cases/${caseId}/timeline`, headers: actorHeaders('customer', customerActorId) });
+    expect(customerTimelineRes.statusCode).toBe(200);
+    const customerTimelineEvents = JSON.parse(customerTimelineRes.body).timeline.map((e: { event_type: string }) => e.event_type);
+    expect(customerTimelineEvents.some((t: string) => t.startsWith('PAYOUT_'))).toBe(false);
+    expect(customerTimelineEvents).toEqual(expect.arrayContaining(['PAYMENT_INTENT_CREATED', 'PAYMENT_CAPTURED']));
   });
 });
