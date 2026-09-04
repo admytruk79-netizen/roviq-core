@@ -67,11 +67,6 @@ function decide(a:Assessment,p:CapabilityProfile|null,partsFulfillable:boolean):
   if(a.requiredParts.length>0&&!partsFulfillable)return'dispatch_field_technician' as const;
   return'field_repair' as const;
 }
-// Parts fulfilment is authoritative for availability, not the on-scene operator (see
-// docs/FIELD_SERVICE_ONSITE_REPAIR_ARCHITECTURE.md's "Parts integration"). Finds one active
-// supplier whose inventory can cover every required sku/quantity simultaneously -- not just each
-// item individually against possibly-different suppliers, since a single job needs one fulfilling
-// source. Returns null (nothing to reserve, or no supplier holds the complete set) accordingly.
 async function findFulfillingSupplier(items:{sku:string;quantity:number}[]):Promise<string|null>{
   if(!items.length)return null;
   const first=await pool.query(
@@ -145,18 +140,12 @@ export async function fieldServiceRoutes(app:FastifyInstance){
     const action=decide(b,profile,partsFulfillable);
     const authorizationRequired=b.customerAuthorizationRequired&&(action==='field_repair'||action==='temporary_stabilization');
     const status=authorizationRequired?'authorization_required':'proposed';
-    // fulfillingSupplierActorId is the source /start will reserve against -- required_parts is
-    // authority data (what the job needs), this is Core's own resolution of who can supply it,
-    // so it belongs in metadata rather than mixed into the client-supplied required_parts payload.
     const metadata={...b.metadata,...(fulfillingSupplierActorId?{fulfillingSupplierActorId}:{})};
     const r=await pool.query(
       `insert into field_service_decisions(case_id,demand_id,diagnostic_finding_id,created_by_actor_id,action,status,repair_class,drivability,confidence,summary,safety_flags,required_capabilities,required_tools,required_parts,operator_context,evidence,estimated_minutes,estimated_cost,customer_authorization_required,metadata)
        values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) returning *`,
       [id,b.demandId??c.demand_id??null,b.diagnosticFindingId??null,req.principal.actorId??null,action,status,b.repairClass,b.drivability,b.confidence,b.summary,JSON.stringify(b.safety),JSON.stringify(b.requiredCapabilities),JSON.stringify(b.requiredTools),JSON.stringify(b.requiredParts),JSON.stringify({operatorActorId,verifiedProfile:Boolean(profile?.verified_at),repairClasses:stringArray(profile?.repair_classes),capabilities:stringArray(profile?.capabilities),tools:stringArray(profile?.tools),role:req.principal.role}),JSON.stringify(b.evidence),b.estimatedMinutes??null,b.estimatedCost??null,b.customerAuthorizationRequired,JSON.stringify(metadata)]
     );
-    // Core already resolved fulfillability against real inventory above (partsFulfillable) --
-    // when it can't be met, open a real trackable order through the same Parts fulfilment path
-    // ordinary repairs use, rather than just a text label on the decision.
     let partsOrder=null;
     if(b.requiredParts.length>0&&!partsFulfillable){
       try{
@@ -203,15 +192,9 @@ export async function fieldServiceRoutes(app:FastifyInstance){
     let decisionRow:any;
     try{
       await client.query('begin');
-      // Row lock for the whole read-check-write sequence: without it, two concurrent start calls
-      // on the same decision could both pass the state guard and double-reserve inventory before
-      // either commits.
       const d=await client.query('select * from field_service_decisions where id=$1 and case_id=$2 for update',[decisionId,id]);
       if(!d.rowCount)throw new Error('field_service_decision_not_found');
       const decision=d.rows[0];
-      // Source state must match exactly: when authorization is waived, only a fresh 'proposed'
-      // decision may start; otherwise a completed/escalated/in-progress decision (status != 'proposed'
-      // or 'authorized') would restart and clobber its own terminal outcome.
       const startableStatus=decision.customer_authorization_required?'authorized':'proposed';
       if(decision.status!==startableStatus)throw new Error('field_service_not_startable');
       if(!['field_repair','temporary_stabilization'].includes(decision.action))throw new Error('field_service_action_not_executable');
@@ -220,33 +203,38 @@ export async function fieldServiceRoutes(app:FastifyInstance){
       const profile=await client.query('select active,verified_at from field_service_actor_capabilities where actor_id=$1',[operatorActorId]);
       if(!profile.rows[0]?.active||!profile.rows[0]?.verified_at)throw new Error('field_service_operator_not_verified');
 
-      // Parts fulfilment is authoritative here, not the operator: reserve against the supplier
-      // assess-time resolved as able to cover the complete required set. If that supplier's stock
-      // has since changed and can no longer cover it, reject rather than let unsupported work
-      // start (docs/FIELD_SERVICE_ONSITE_REPAIR_ARCHITECTURE.md "Parts integration"). decide()
-      // only ever reaches field_repair/temporary_stabilization with non-empty required_parts when
-      // a fulfilling supplier was found at assess time, so its absence here means stale/tampered state.
       const requiredParts=(decision.required_parts??[]) as {sku:string;quantity:number}[];
       const reservation:{sku:string;quantity:number;inventoryId:string}[]=[];
       if(requiredParts.length){
-        const supplierActorId=decision.metadata?.fulfillingSupplierActorId as string|undefined;
-        if(!supplierActorId)throw new Error('field_service_parts_unavailable');
-        for(const item of requiredParts){
-          const inv=await client.query(
-            `select * from parts_inventory where supplier_actor_id=$1 and sku=$2 and active=true
-             and (quantity_on_hand-quantity_reserved)>=$3 for update`,
-            [supplierActorId,item.sku,item.quantity]
+        const fulfilledPartsOrderId=decision.metadata?.fulfilledPartsOrderId as string|undefined;
+        if(fulfilledPartsOrderId){
+          const fulfilled=await client.query(
+            `select 1 from parts_orders
+             where id=$1 and case_id=$2 and status='delivered' and attributes->>'fieldServiceDecisionId'=$3`,
+            [fulfilledPartsOrderId,id,decisionId]
           );
-          if(!inv.rowCount)throw new Error('field_service_parts_unavailable');
-          await client.query('update parts_inventory set quantity_reserved=quantity_reserved+$1,updated_at=now() where id=$2',[item.quantity,inv.rows[0].id]);
-          reservation.push({sku:item.sku,quantity:item.quantity,inventoryId:inv.rows[0].id});
+          if(!fulfilled.rowCount)throw new Error('field_service_parts_unavailable');
+        }else{
+          const supplierActorId=decision.metadata?.fulfillingSupplierActorId as string|undefined;
+          if(!supplierActorId)throw new Error('field_service_parts_unavailable');
+          for(const item of requiredParts){
+            const inv=await client.query(
+              `select * from parts_inventory where supplier_actor_id=$1 and sku=$2 and active=true
+               and (quantity_on_hand-quantity_reserved)>=$3 for update`,
+              [supplierActorId,item.sku,item.quantity]
+            );
+            if(!inv.rowCount)throw new Error('field_service_parts_unavailable');
+            await client.query('update parts_inventory set quantity_reserved=quantity_reserved+$1,updated_at=now() where id=$2',[item.quantity,inv.rows[0].id]);
+            reservation.push({sku:item.sku,quantity:item.quantity,inventoryId:inv.rows[0].id});
+          }
         }
       }
 
+      const startMetadata=reservation.length?{partsReservation:reservation}:decision.metadata?.fulfilledPartsOrderId?{partsFulfillmentSource:'delivered_order'}:{};
       const r=await client.query(
         `update field_service_decisions set status='in_progress',started_at=now(),updated_at=now(),metadata=metadata||$1::jsonb
          where id=$2 and status=$3 returning *`,
-        [JSON.stringify(reservation.length?{partsReservation:reservation}:{}),decisionId,startableStatus]
+        [JSON.stringify(startMetadata),decisionId,startableStatus]
       );
       if(!r.rowCount)throw new Error('field_service_not_startable');
       decisionRow=r.rows[0];
@@ -262,8 +250,6 @@ export async function fieldServiceRoutes(app:FastifyInstance){
     }finally{
       client.release();
     }
-    // Best-effort, same reasoning as authorize: the transition already committed, so a failure here
-    // must not 500 -- a retry would otherwise be rejected forever by the exact-state guard above.
     await appendCaseEvent(id,'FIELD_SERVICE_STARTED',req.principal,{decisionId,action:decisionRow.action,operatorActorId:decisionRow.operator_context?.operatorActorId}).catch(e=>console.warn('field_service_start_side_effect_failed',{decisionId,caseId:id,error:e instanceof Error?e.message:e}));
     return{decision:decisionRow};
   });
@@ -288,9 +274,6 @@ export async function fieldServiceRoutes(app:FastifyInstance){
       if(req.principal.role!=='admin'&&operatorActorId!==req.principal.actorId)throw new Error('field_service_operator_mismatch');
       if(decision.status!=='in_progress')throw new Error('field_service_not_in_progress');
       const status=b.outcome==='failed'||b.outcome==='escalated'?'escalated':'completed';
-      // Release start's reservation: 'completed' means the parts were actually used (decrement
-      // on-hand stock along with the reservation); any other outcome means the job didn't consume
-      // them, so only the reservation itself is released back to available stock.
       const reservation=(decision.metadata?.partsReservation??[]) as {sku:string;quantity:number;inventoryId:string}[];
       for(const item of reservation){
         if(status==='completed'){
@@ -318,8 +301,6 @@ export async function fieldServiceRoutes(app:FastifyInstance){
     }finally{
       client.release();
     }
-    // Best-effort, same reasoning as authorize/start: the transition already committed, so a
-    // failure here must not 500 -- a retry would otherwise be rejected forever by the 'in_progress' guard above.
     const sideEffects=await Promise.allSettled([
       appendCaseEvent(id,'FIELD_SERVICE_COMPLETED',req.principal,{decisionId,outcome:b.outcome}),
       setCustomerSnapshot(id,b.outcome==='fixed'?'field_service_fixed':b.outcome==='stabilized'?'field_service_stabilized':'field_service_escalated',b.outcome==='fixed'?'Vehicle repaired on site.':b.outcome==='stabilized'?'Vehicle stabilized on site.':'On-site work could not be completed safely.',b.outcome==='fixed'?'Confirm resolution':b.outcome==='stabilized'?'Continue with approved next step':'ROVIQ will arrange towing or specialist service')
