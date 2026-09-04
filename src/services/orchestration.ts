@@ -13,6 +13,8 @@ export type CaseState =
 
 export type SelectionMode = 'customer_choice' | 'dealer_controlled' | 'auto_dispatch' | 'ops_override';
 
+type Queryable = Pick<PoolClient, 'query'>;
+
 export async function createServiceCase(principal: Principal, input: {
   demandId?: string; marketId?: string; locationId?: string; priority?: string;
   drivability?: string; attributes?: Record<string, unknown>;
@@ -123,8 +125,8 @@ export async function transitionCase(principal: Principal, caseId: string, toSta
   } finally { client.release(); }
 }
 
-export async function appendCaseEvent(caseId: string, eventType: string, principal: Principal, payload: Record<string, unknown> = {}) {
-  await pool.query(
+export async function appendCaseEvent(caseId: string, eventType: string, principal: Principal, payload: Record<string, unknown> = {}, queryable: Queryable = pool) {
+  await queryable.query(
     `insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload)
      values('service_case',$1,$2,$3,$4)`,
     [caseId,eventType,principal.actorId ?? null,JSON.stringify(payload)]
