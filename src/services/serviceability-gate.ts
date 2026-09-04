@@ -1,5 +1,13 @@
 import type { PoolClient } from 'pg';
 import { pool } from '../db/pool.js';
+import {
+  CAPACITY_CURRENT_MAX_AGE_MS,
+  CAPACITY_STALE_MAX_AGE_MS,
+  type CapacityConfidence,
+  type CapacityState,
+  type PartnerOperatingMode,
+  type SyncState
+} from './liveCapacity.js';
 import { evaluateServiceability, type ServiceabilityConstraint, type ServiceabilityDecision } from './serviceability.js';
 
 type Queryable = Pick<PoolClient, 'query'>;
@@ -10,26 +18,30 @@ export type ActorServiceability = {
   decision: ServiceabilityDecision;
   source: 'canonical_capacity' | 'legacy_capacity' | 'missing';
   capacityWindowId: string | null;
+  capacityUnits: number;
 };
 
-/**
- * Loads the case constraints and the actor's current normalized capacity, then
- * applies the deterministic serviceability evaluator at the point of use.
- *
- * Route = candidate may be considered before ranking.
- * Hold = stale capacity is usable only when the caller explicitly requests a hold.
- * Confirm = capacity must be current and fully confirmable.
- *
- * Actors that have entered ROVIQ Connect / Shop OS fail closed when canonical
- * capacity is missing. Legacy snapshots remain a transitional compatibility path
- * only for actors that have no partner-system connection yet.
- */
+type CanonicalWindowRow = {
+  id:string;
+  capacity_state:CapacityState;
+  confidence:CapacityConfidence;
+  sync_state:SyncState;
+  capacity_units:number|string;
+  updated_at:string|Date;
+  source_connection_id:string|null;
+  connection_mode:PartnerOperatingMode|null;
+  connection_status:string|null;
+  connection_last_success_at:string|Date|null;
+  service_category:string|null;
+};
+
 export async function evaluateActorServiceability(
   caseId: string | null | undefined,
   actorId: string,
   serviceCategory: string | null | undefined,
   intent: ServiceabilityIntent,
-  queryable: Queryable = pool
+  queryable: Queryable = pool,
+  now = new Date()
 ): Promise<ActorServiceability> {
   const actor = await queryable.query(
     `select a.organization_id,a.location_id,
@@ -43,69 +55,120 @@ export async function evaluateActorServiceability(
   );
 
   if (!actor.rowCount) {
-    return { decision:evaluateServiceability({capacity:null}), source:'missing', capacityWindowId:null };
+    return { decision:evaluateServiceability({capacity:null}), source:'missing', capacityWindowId:null, capacityUnits:0 };
   }
 
   const a = actor.rows[0];
   const constraints = caseId ? await loadConstraints(caseId,queryable) : [];
-  const canonical = await queryable.query(
-    `select id,capacity_state,confidence,sync_state,capacity_units
-     from capacity_windows
-     where window_start<=now() and window_end>now()
-       and (
-         ($1::uuid is not null and location_id=$1)
-         or ($1::uuid is null and $2::uuid is not null and organization_id=$2)
-       )
-       and ($3::text is null or service_category is null or service_category=$3)
-     order by (service_category=$3) desc nulls last, capacity_units desc, updated_at desc
-     limit 1`,
+  const canonical = await queryable.query<CanonicalWindowRow>(
+    `select cw.id,cw.capacity_state,cw.confidence,cw.sync_state,cw.capacity_units,cw.updated_at,
+            cw.source_connection_id,cw.service_category,
+            psc.mode as connection_mode,psc.connection_status,psc.last_success_at as connection_last_success_at
+       from capacity_windows cw
+       left join partner_system_connections psc on psc.id=cw.source_connection_id
+      where cw.window_start<=now() and cw.window_end>now()
+        and (
+          ($1::uuid is not null and cw.location_id=$1)
+          or ($1::uuid is null and $2::uuid is not null and cw.organization_id=$2)
+        )
+        and ($3::text is null or cw.service_category is null or cw.service_category=$3)
+      order by (cw.service_category=$3) desc nulls last,cw.updated_at desc,cw.capacity_units desc`,
     [a.location_id ?? null,a.organization_id ?? null,serviceCategory ?? null]
   );
 
-  let source: ActorServiceability['source']='missing';
-  let capacityWindowId:string|null=null;
-  let capacity:any=null;
+  const canonicalEvaluation=evaluateCanonicalWindows(canonical.rows,constraints,intent,now);
+  if(canonicalEvaluation) return canonicalEvaluation;
 
-  if (canonical.rowCount) {
-    const row=canonical.rows[0];
-    source='canonical_capacity';
-    capacityWindowId=row.id;
-    capacity={
-      capacityState:row.capacity_state,
-      confidence:row.confidence,
-      syncState:row.sync_state,
-      capacityUnits:Number(row.capacity_units)
-    };
-  } else if (!a.has_connection) {
+  if (!a.has_connection) {
     const legacy=await queryable.query(
       `select coalesce(sum(quantity),0)::float as units
        from capacity_snapshots where actor_id=$1 and start_at<=now() and end_at>now()`,
       [actorId]
     );
-    source='legacy_capacity';
     const units=Number(legacy.rows[0]?.units ?? 0);
-    capacity={
-      capacityState:units>0?'available':'full',
-      confidence:'declared',
-      syncState:'current',
-      capacityUnits:units
-    };
+    const decision=evaluateServiceability({
+      capacity:{capacityState:units>0?'available':'full',confidence:'declared',syncState:'current',capacityUnits:units},
+      constraints,
+      allowManualVerified:false,
+      allowStaleHold:intent==='hold'
+    });
+    return {decision,source:'legacy_capacity',capacityWindowId:null,capacityUnits:units};
   }
 
-  const decision=evaluateServiceability({
-    capacity,
-    constraints,
-    allowManualVerified:false,
-    allowStaleHold:intent==='hold'
-  });
+  return { decision:evaluateServiceability({capacity:null,constraints}), source:'missing', capacityWindowId:null, capacityUnits:0 };
+}
 
-  return {decision,source,capacityWindowId};
+export function evaluateCanonicalWindows(
+  rows:CanonicalWindowRow[],
+  constraints:ServiceabilityConstraint[],
+  intent:ServiceabilityIntent,
+  now=new Date()
+):ActorServiceability|null {
+  if(!rows.length) return null;
+  let firstRejected:ActorServiceability|null=null;
+
+  for(const row of rows){
+    const syncState=deriveCanonicalSyncState(row,now);
+    const confidence=deriveEffectiveConfidence(row.confidence,syncState);
+    const capacityUnits=Number(row.capacity_units);
+    const decision=evaluateServiceability({
+      capacity:{
+        capacityState:row.capacity_state,
+        confidence,
+        syncState,
+        capacityUnits:Number.isFinite(capacityUnits)?capacityUnits:0
+      },
+      constraints,
+      allowManualVerified:false,
+      allowStaleHold:intent==='hold'
+    });
+    const result:ActorServiceability={
+      decision,
+      source:'canonical_capacity',
+      capacityWindowId:row.id,
+      capacityUnits:Number.isFinite(capacityUnits)?capacityUnits:0
+    };
+    if(serviceabilityAllows(intent,decision)) return result;
+    if(!firstRejected) firstRejected=result;
+  }
+  return firstRejected;
+}
+
+export function deriveCanonicalSyncState(row:CanonicalWindowRow,now=new Date()):SyncState {
+  if(row.connection_status==='failed'||row.connection_status==='revoked') return 'failed';
+  if(row.connection_status==='degraded'||row.connection_status==='paused') return 'degraded';
+
+  if(row.connection_mode==='roviq_native') {
+    return row.sync_state==='failed'?'failed':row.sync_state==='manual'?'manual':'current';
+  }
+
+  const anchor=row.connection_mode==='native_integration'
+    ? row.connection_last_success_at
+    : row.connection_mode==='bridge'
+      ? row.updated_at
+      : row.source_connection_id
+        ? row.connection_last_success_at
+        : row.updated_at;
+
+  if(!anchor) return 'degraded';
+  const anchorMs=new Date(anchor).getTime();
+  if(!Number.isFinite(anchorMs)) return 'degraded';
+  const ageMs=Math.max(0,now.getTime()-anchorMs);
+  if(ageMs<=CAPACITY_CURRENT_MAX_AGE_MS) return row.sync_state==='manual'?'manual':'current';
+  if(ageMs<=CAPACITY_STALE_MAX_AGE_MS) return 'stale';
+  return 'degraded';
 }
 
 export function serviceabilityAllows(intent:ServiceabilityIntent, decision:ServiceabilityDecision) {
   if (intent==='route') return decision.eligible;
   if (intent==='hold') return decision.holdable;
   return decision.confirmable;
+}
+
+function deriveEffectiveConfidence(stored:CapacityConfidence,syncState:SyncState):CapacityConfidence {
+  if(syncState==='failed'||syncState==='degraded') return 'unknown';
+  if(syncState==='stale') return 'stale';
+  return stored;
 }
 
 async function loadConstraints(caseId:string,queryable:Queryable):Promise<ServiceabilityConstraint[]> {
