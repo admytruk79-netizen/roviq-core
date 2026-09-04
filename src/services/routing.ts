@@ -1,6 +1,6 @@
 import { pool } from '../db/pool.js';
 import { COORDINATION_ENGINE_VERSION, rankCoordinationCandidates } from './coordination-engine.js';
-import { capabilityFromCaseIntelligence, loadCaseIntelligenceForDemand } from './case-intelligence.js';
+import { resolveRequestedCapabilityForDemand } from './case-intelligence.js';
 import { recordRecommendation } from './selection-authority.js';
 import { evaluateActorServiceability, serviceabilityAllows } from './serviceability-gate.js';
 
@@ -25,9 +25,7 @@ export async function routeMaintenanceDemand(demandId: string) {
   const demand = demandResult.rows[0];
   if (demand.domain_code !== 'maintenance') throw new Error('unsupported_domain');
 
-  const intelligence = await loadCaseIntelligenceForDemand(demandId);
-  const aiCapability = capabilityFromCaseIntelligence(intelligence);
-  const requestedCapability = demand.attributes?.requiredCapability ?? aiCapability ?? capabilityForDemand(demand.demand_type,demand.attributes);
+  const { capability:requestedCapability, intelligence } = await resolveRequestedCapabilityForDemand(demandId);
 
   const spatial = demand.case_id
     ? await pool.query('select route_context from case_spatial_context where case_id=$1',[demand.case_id])
@@ -53,7 +51,6 @@ export async function routeMaintenanceDemand(demandId: string) {
     if(!c.routing_enabled){rejected.push({actorId:c.actor_id,reason:'routing_disabled'});continue;}
     if(excluded.includes(demand.demand_type)){rejected.push({actorId:c.actor_id,reason:'job_type_excluded'});continue;}
     if(accepted.length&&!accepted.includes(demand.demand_type)){rejected.push({actorId:c.actor_id,reason:'job_type_not_accepted'});continue;}
-    if(c.active_capacity<=0&&c.earliest_available_at&&new Date(c.earliest_available_at)>new Date()){rejected.push({actorId:c.actor_id,reason:'no_current_capacity'});continue;}
 
     const serviceability=await evaluateActorServiceability(demand.case_id,c.actor_id,requestedCapability,'route');
     if(!serviceabilityAllows('route',serviceability.decision)){
@@ -66,14 +63,20 @@ export async function routeMaintenanceDemand(demandId: string) {
       continue;
     }
 
+    if(serviceability.source==='legacy_capacity'&&serviceability.capacityUnits<=0&&c.earliest_available_at&&new Date(c.earliest_available_at)>new Date()){
+      rejected.push({actorId:c.actor_id,reason:'no_current_capacity'});
+      continue;
+    }
+
     const continuity = [demand.originating_actor_id,demand.relationship_owner_actor_id,demand.current_owner_actor_id].filter(Boolean).includes(c.actor_id) ? 1 : 0;
     const route = routeCandidates?.[c.actor_id] ?? {};
     eligible.push({actorId:c.actor_id,signals:{
-      capacity:c.active_capacity,rating:c.avg_rating,onTime:c.on_time_rate,
+      capacity:serviceability.capacityUnits,rating:c.avg_rating,onTime:c.on_time_rate,
       distanceMiles:finiteOrNull(route.distanceMiles),etaMinutes:finiteOrNull(route.etaMinutes),continuity
     },serviceability:{
       capacitySource:serviceability.source,
       capacityWindowId:serviceability.capacityWindowId,
+      capacityUnits:serviceability.capacityUnits,
       reasons:serviceability.decision.reasons
     }});
   }
@@ -99,6 +102,5 @@ export async function routeMaintenanceDemand(demandId: string) {
 }
 
 async function getActivePolicy(domainId:string,policyKey:string):Promise<RoutingPolicy|null>{const r=await pool.query<RoutingPolicy>(`select id,version,configuration from routing_policies where domain_id=$1 and policy_key=$2 and active=true order by version desc limit 1`,[domainId,policyKey]);return r.rows[0]??null;}
-function capabilityForDemand(demandType:string,attributes:any):string{if(attributes?.drivability==='non_drivable')return'tow';if(demandType.includes('diagnostic')||attributes?.requiresDiagnostic===true)return'diagnostics';if(demandType.includes('tow'))return'tow';if(demandType.includes('part'))return'parts_supply';return'repair';}
 function positiveInteger(value:unknown){return typeof value==='number'&&Number.isInteger(value)&&value>0?value:null;}
 function finiteOrNull(value:unknown){return typeof value==='number'&&Number.isFinite(value)?value:null;}
