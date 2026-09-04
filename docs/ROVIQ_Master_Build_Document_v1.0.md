@@ -4,6 +4,11 @@
 **Scope:** ROVIQ Core, Maintenance, ROVIQ Connect, ROVIQ Shop OS, actor portals, operations, pilot readiness  
 **Prepared:** September 2026
 
+## Implementation status
+- **Implemented on working branch:** partner-system connections, external references, normalized resources/capacity windows, ROVIQ-native appointments, sync events, live-capacity normalization, unified Service Case support tables, compatible exception enrichment, deterministic serviceability evaluator, first-class exception assignment/state/remediation API, master build authority and service-case operating model.
+- **In progress:** lifecycle enforcement against the expanded serviceability model, operations console projection, partner administration/integration-health endpoints, actor projections, notification orchestration, case-level financial reconciliation and expanded pilot analytics.
+- **Pilot dependency:** at least one real partner connector and one ROVIQ Shop OS location must be validated end to end before production claims are made.
+
 ## 1. Purpose and authority
 This is the controlling build document for ROVIQ implementation. It consolidates product architecture, canonical data, role projections, delivery gates, acceptance criteria, and pilot instrumentation. Where older documents conflict, the newest approved architecture and migrations prevail.
 
