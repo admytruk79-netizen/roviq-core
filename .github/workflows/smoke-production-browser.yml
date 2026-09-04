@@ -7,6 +7,7 @@ on:
     paths:
       - 'tests/production-browser-lifecycle.mjs'
       - 'tests/production-auth-probe.mjs'
+      - 'tests/production-launcher-smoke.mjs'
       - 'src/**'
       - 'web/**'
       - 'diagnostic/**'
@@ -14,6 +15,7 @@ on:
       - 'parts-portal/**'
       - 'tow/**'
       - 'ops/**'
+      - 'portals/**'
       - '.github/workflows/smoke-production-browser.yml'
 
 permissions:
@@ -53,6 +55,9 @@ jobs:
         env:
           BROWSER_MODE: render
         run: node tests/production-browser-lifecycle.mjs
+
+      - name: Unified launcher render and embed smoke
+        run: node tests/production-launcher-smoke.mjs
 
       - name: Wait for exact Render Core revision
         if: ${{ env.ADMIN_EMAIL != '' && env.ADMIN_PASSWORD != '' }}
@@ -101,7 +106,7 @@ jobs:
         run: |
           echo 'Credentialed browser lifecycle skipped because BOOTSTRAP_ADMIN_EMAIL / BOOTSTRAP_ADMIN_PASSWORD are not injected into GitHub Actions.'
           echo 'This does not change or invalidate the working production credentials.'
-          echo 'The desktop/mobile browser render smoke still ran against all six deployed portals.'
+          echo 'The desktop/mobile browser render smoke still ran against all six deployed portals plus the unified launcher.'
 
       - name: Upload browser evidence
         if: always()
