@@ -7,6 +7,7 @@ import {
   type PartnerOperatingMode,
   type SyncState
 } from './liveCapacity.js';
+import { syncOperationalConstraints } from './case-constraint-projection.js';
 import { evaluateServiceability, type ServiceabilityConstraint, type ServiceabilityDecision } from './serviceability.js';
 
 type Queryable = Pick<PoolClient, 'query'>;
@@ -59,6 +60,7 @@ export async function evaluateActorServiceability(
   }
 
   const a = actor.rows[0];
+  if(caseId) await syncOperationalConstraints(caseId,db);
   const constraints = caseId ? await loadConstraints(caseId,db) : [];
   const canonical = await db.query<CanonicalWindowRow>(
     `select cw.id,cw.capacity_state,cw.confidence,cw.sync_state,cw.capacity_units,cw.updated_at,
