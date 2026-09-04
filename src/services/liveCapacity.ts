@@ -19,6 +19,7 @@ export interface ExternalCapacitySignal {
   paused?: boolean | null;
   lastSuccessfulSyncAt?: string | Date | null;
   importedAt?: string | Date | null;
+  manuallyVerified?: boolean | null;
   constraintSummary?: Record<string, unknown> | null;
 }
 
@@ -45,7 +46,11 @@ export function normalizeCapacitySignal(signal: ExternalCapacitySignal, now = ne
     throw new Error('capacity window must end after it starts');
   }
 
-  const capacityUnits = Math.max(0, Number(signal.capacityUnits ?? 1));
+  const parsedCapacityUnits = Number(signal.capacityUnits ?? 1);
+  if (!Number.isFinite(parsedCapacityUnits) || !Number.isInteger(parsedCapacityUnits) || parsedCapacityUnits < 0) {
+    throw new Error('capacityUnits must be a non-negative finite integer');
+  }
+  const capacityUnits = parsedCapacityUnits;
   const syncState = resolveSyncState(signal, now);
   const capacityState = resolveCapacityState(signal, capacityUnits, syncState);
 
@@ -59,7 +64,7 @@ export function normalizeCapacitySignal(signal: ExternalCapacitySignal, now = ne
     windowEnd,
     capacityUnits,
     capacityState,
-    confidence: resolveConfidence(signal.mode, syncState),
+    confidence: resolveConfidence(signal, syncState),
     syncState,
     constraintSummary: signal.constraintSummary ?? {},
   };
@@ -73,22 +78,32 @@ function resolveCapacityState(signal: ExternalCapacitySignal, capacityUnits: num
   return 'available';
 }
 
-function resolveConfidence(mode: PartnerOperatingMode, syncState: SyncState): CapacityConfidence {
-  if (syncState === 'failed') return 'unknown';
+function resolveConfidence(signal: ExternalCapacitySignal, syncState: SyncState): CapacityConfidence {
+  if (syncState === 'failed' || syncState === 'degraded') return 'unknown';
   if (syncState === 'stale') return 'stale';
-  if (mode === 'native_integration') return 'integrated';
-  if (mode === 'roviq_native') return 'roviq_native';
-  return syncState === 'manual' ? 'manual_verified' : 'declared';
+  if (signal.mode === 'native_integration') return 'integrated';
+  if (signal.mode === 'roviq_native') return 'roviq_native';
+  if (syncState === 'manual' && signal.manuallyVerified === true) return 'manual_verified';
+  return 'declared';
 }
 
 function resolveSyncState(signal: ExternalCapacitySignal, now: Date): SyncState {
-  if (signal.mode === 'bridge') return 'manual';
+  const maxCurrentAgeMs = 15 * 60 * 1000;
+  const maxStaleAgeMs = 60 * 60 * 1000;
+
+  if (signal.mode === 'bridge') {
+    const importedAt = signal.importedAt ? toDate(signal.importedAt, 'importedAt') : null;
+    if (!importedAt) return 'degraded';
+    const ageMs = Math.max(0, now.getTime() - importedAt.getTime());
+    if (ageMs <= maxCurrentAgeMs) return signal.manuallyVerified === true ? 'manual' : 'current';
+    if (ageMs <= maxStaleAgeMs) return 'stale';
+    return 'degraded';
+  }
+
   const lastSuccess = signal.lastSuccessfulSyncAt ? toDate(signal.lastSuccessfulSyncAt, 'lastSuccessfulSyncAt') : null;
   if (!lastSuccess) return signal.mode === 'roviq_native' ? 'current' : 'degraded';
   const ageMs = now.getTime() - lastSuccess.getTime();
   if (ageMs < 0) return 'current';
-  const maxCurrentAgeMs = 15 * 60 * 1000;
-  const maxStaleAgeMs = 60 * 60 * 1000;
   if (ageMs <= maxCurrentAgeMs) return 'current';
   if (ageMs <= maxStaleAgeMs) return 'stale';
   return 'degraded';
