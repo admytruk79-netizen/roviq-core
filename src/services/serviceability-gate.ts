@@ -40,7 +40,10 @@ export async function evaluateActorServiceability(
     `select id,capacity_state,confidence,sync_state,capacity_units
      from capacity_windows
      where window_start<=now() and window_end>now()
-       and ($1::uuid is null or location_id=$1 or (location_id is null and organization_id=$2))
+       and (
+         ($1::uuid is not null and location_id=$1)
+         or ($1::uuid is null and $2::uuid is not null and organization_id=$2)
+       )
        and ($3::text is null or service_category is null or service_category=$3)
      order by (service_category=$3) desc nulls last, capacity_units desc, updated_at desc
      limit 1`,
