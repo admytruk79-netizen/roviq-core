@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
 import { appendCaseEvent } from './orchestration.js';
+import { resolveRequestedCapabilityForDemand } from './case-intelligence.js';
 import { evaluateActorServiceability, serviceabilityAllows } from './serviceability-gate.js';
 
 export type SelectionMode = 'customer_choice' | 'dealer_controlled' | 'auto_dispatch' | 'ops_override';
@@ -40,6 +41,7 @@ export async function selectCaseActor(principal: Principal, caseId: string, acto
     const row = c.rows[0];
     const mode = row.selection_mode as SelectionMode;
     if (!canSelect(principal,mode,row.relationship_owner_actor_id)) throw new Error('selection_forbidden');
+    if (!row.demand_id) throw new Error('case_demand_missing');
 
     const eligible = await client.query(
       `select 1 from routing_decisions
@@ -50,7 +52,8 @@ export async function selectCaseActor(principal: Principal, caseId: string, acto
     );
     if (!eligible.rowCount && mode !== 'ops_override') throw new Error('actor_not_eligible');
 
-    const serviceability=await evaluateActorServiceability(caseId,actorId,null,'confirm',client);
+    const {capability}=await resolveRequestedCapabilityForDemand(row.demand_id,client);
+    const serviceability=await evaluateActorServiceability(caseId,actorId,capability,'confirm',client);
     if(!serviceabilityAllows('confirm',serviceability.decision)) {
       const error=new Error('actor_not_serviceable');
       (error as Error & {reasons?:string[]}).reasons=serviceability.decision.reasons;
@@ -64,9 +67,9 @@ export async function selectCaseActor(principal: Principal, caseId: string, acto
     await client.query(
       `insert into case_selections(case_id,recommended_actor_id,selected_actor_id,selection_mode,authority_role,authority_actor_id,rationale)
        values($1,$2,$3,$4,$5,$6,$7)`,
-      [caseId,row.recommended_actor_id ?? null,actorId,mode,principal.role,principal.actorId ?? null,JSON.stringify({...rationale,serviceability:{capacitySource:serviceability.source,capacityWindowId:serviceability.capacityWindowId}})]
+      [caseId,row.recommended_actor_id ?? null,actorId,mode,principal.role,principal.actorId ?? null,JSON.stringify({...rationale,serviceability:{serviceCategory:capability,capacitySource:serviceability.source,capacityWindowId:serviceability.capacityWindowId,capacityUnits:serviceability.capacityUnits}})]
     );
-    await appendCaseEvent(caseId,'PROVIDER_SELECTED',principal,{actorId,selectionMode:mode,...rationale,serviceability:{capacitySource:serviceability.source,capacityWindowId:serviceability.capacityWindowId}},client);
+    await appendCaseEvent(caseId,'PROVIDER_SELECTED',principal,{actorId,selectionMode:mode,...rationale,serviceability:{serviceCategory:capability,capacitySource:serviceability.source,capacityWindowId:serviceability.capacityWindowId,capacityUnits:serviceability.capacityUnits}},client);
     await client.query('commit');
     return {caseId,selectedActorId:actorId,selectionMode:mode,serviceability:serviceability.decision};
   } catch (error) {
@@ -79,11 +82,13 @@ export async function autoDispatchCase(caseId: string, actorId: string, routingD
   const client = await pool.connect();
   try {
     await client.query('begin');
-    const c = await client.query(`select selection_mode,recommended_actor_id from service_cases where id=$1 for update`,[caseId]);
+    const c = await client.query(`select demand_id,selection_mode,recommended_actor_id from service_cases where id=$1 for update`,[caseId]);
     if (!c.rowCount) throw new Error('case_not_found');
     if (c.rows[0].selection_mode !== 'auto_dispatch') throw new Error('auto_dispatch_not_authorized');
+    if (!c.rows[0].demand_id) throw new Error('case_demand_missing');
 
-    const serviceability=await evaluateActorServiceability(caseId,actorId,null,'confirm',client);
+    const {capability}=await resolveRequestedCapabilityForDemand(c.rows[0].demand_id,client);
+    const serviceability=await evaluateActorServiceability(caseId,actorId,capability,'confirm',client);
     if(!serviceabilityAllows('confirm',serviceability.decision)) throw new Error('actor_not_serviceable');
 
     await client.query(
@@ -93,12 +98,12 @@ export async function autoDispatchCase(caseId: string, actorId: string, routingD
     await client.query(
       `insert into case_selections(case_id,recommended_actor_id,selected_actor_id,selection_mode,authority_role,routing_decision_id,rationale)
        values($1,$2,$3,'auto_dispatch','system',$4,$5)`,
-      [caseId,c.rows[0].recommended_actor_id ?? null,actorId,routingDecisionId,JSON.stringify({...rationale,serviceability:{capacitySource:serviceability.source,capacityWindowId:serviceability.capacityWindowId}})]
+      [caseId,c.rows[0].recommended_actor_id ?? null,actorId,routingDecisionId,JSON.stringify({...rationale,serviceability:{serviceCategory:capability,capacitySource:serviceability.source,capacityWindowId:serviceability.capacityWindowId,capacityUnits:serviceability.capacityUnits}})]
     );
     await client.query(
       `insert into events(aggregate_type,aggregate_id,event_type,payload)
        values('service_case',$1,'PROVIDER_AUTO_DISPATCHED',$2)`,
-      [caseId,JSON.stringify({actorId,routingDecisionId,...rationale,serviceability:{capacitySource:serviceability.source,capacityWindowId:serviceability.capacityWindowId}})]
+      [caseId,JSON.stringify({actorId,routingDecisionId,...rationale,serviceability:{serviceCategory:capability,capacitySource:serviceability.source,capacityWindowId:serviceability.capacityWindowId,capacityUnits:serviceability.capacityUnits}})]
     );
     await client.query('commit');
     return {caseId,selectedActorId:actorId,selectionMode:'auto_dispatch' as const,serviceability:serviceability.decision};
