@@ -16,6 +16,15 @@ type Spatial = {
   updated_at?: string;
 };
 
+type FieldDecision = {
+  id: string;
+  action: string;
+  status: string;
+  summary: string;
+  repair_class?: string;
+  customer_authorization_required: boolean;
+};
+
 type Point = { lat: number; lng: number };
 
 const LOCAL_MAP = 'https://roviq-local2.admytruk79.workers.dev';
@@ -127,21 +136,25 @@ export function CaseDetail() {
   const [payments, setPayments] = useState<PaymentIntent[]>([]);
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [spatial, setSpatial] = useState<Spatial | null>(null);
+  const [fieldDecisions, setFieldDecisions] = useState<FieldDecision[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
+  const [fieldDecisionError, setFieldDecisionError] = useState<string | null>(null);
   const [decidingId, setDecidingId] = useState<string | null>(null);
+  const [fieldDecidingId, setFieldDecidingId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
     setError(null);
     try {
-      const [caseRes, planRes, paymentsRes, timelineRes, spatialRes] = await Promise.all([
+      const [caseRes, planRes, paymentsRes, timelineRes, spatialRes, fieldRes] = await Promise.all([
         api.get<{ case: ServiceCase; customerSnapshot: CustomerSnapshot }>(`/api/maintenance/cases/${id}`),
         api.get<ServicePlanResponse>(`/api/maintenance/cases/${id}/service-plan`).catch(() => null),
         api.get<{ payments: PaymentIntent[] }>(`/api/maintenance/cases/${id}/payments`),
         api.get<{ timeline: TimelineEvent[] }>(`/api/maintenance/cases/${id}/timeline`),
-        api.get<{ spatial: Spatial }>(`/api/maintenance/cases/${id}/spatial`).catch(() => null)
+        api.get<{ spatial: Spatial }>(`/api/maintenance/cases/${id}/spatial`).catch(() => null),
+        api.get<{ decisions: FieldDecision[] }>(`/api/maintenance/cases/${id}/field-service`).catch(() => ({ decisions: [] }))
       ]);
       setCaseData(caseRes.case);
       setSnapshot(caseRes.customerSnapshot);
@@ -149,6 +162,7 @@ export function CaseDetail() {
       setPayments(paymentsRes.payments);
       setTimeline(timelineRes.timeline);
       setSpatial(spatialRes?.spatial ?? null);
+      setFieldDecisions(fieldRes.decisions);
     } catch (e) {
       setError(e instanceof ApiError && e.status === 403 ? "You don't have access to this case." : 'Could not load this case.');
     }
@@ -157,13 +171,15 @@ export function CaseDetail() {
   const loadLive = useCallback(async () => {
     if (!id) return;
     try {
-      const [caseRes, spatialRes] = await Promise.all([
+      const [caseRes, spatialRes, fieldRes] = await Promise.all([
         api.get<{ case: ServiceCase; customerSnapshot: CustomerSnapshot }>(`/api/maintenance/cases/${id}`),
-        api.get<{ spatial: Spatial }>(`/api/maintenance/cases/${id}/spatial`).catch(() => null)
+        api.get<{ spatial: Spatial }>(`/api/maintenance/cases/${id}/spatial`).catch(() => null),
+        api.get<{ decisions: FieldDecision[] }>(`/api/maintenance/cases/${id}/field-service`).catch(() => ({ decisions: [] }))
       ]);
       setCaseData(caseRes.case);
       setSnapshot(caseRes.customerSnapshot);
       setSpatial(spatialRes?.spatial ?? null);
+      setFieldDecisions(fieldRes.decisions);
     } catch {
       // Keep the last known customer-visible state during a transient live refresh failure.
     }
@@ -202,6 +218,23 @@ export function CaseDetail() {
     }
   }
 
+  async function decideFieldService(decisionId: string, approved: boolean) {
+    if (!id) return;
+    setFieldDecidingId(decisionId);
+    setFieldDecisionError(null);
+    try {
+      await api.post(`/api/maintenance/cases/${id}/field-service/${decisionId}/authorize`, { approved });
+      await load();
+    } catch (e) {
+      const message = e instanceof ApiError && e.status === 409
+        ? 'This on-site repair request has already changed. Refresh the case to see the latest status.'
+        : 'Could not save your on-site repair decision. Please try again.';
+      setFieldDecisionError(message);
+    } finally {
+      setFieldDecidingId(null);
+    }
+  }
+
   if (error) {
     return (
       <section className="rounded-xl border border-red-200 bg-red-50 p-5">
@@ -230,6 +263,7 @@ export function CaseDetail() {
   }
 
   const pendingApproval = plan?.approvals.find((a) => a.state === 'pending' && a.approval_type === 'quote');
+  const pendingFieldDecision = fieldDecisions.find((decision) => decision.status === 'authorization_required');
   const route = spatial?.route_context ?? {};
   const eta = route.etaMinutes;
   const normalizedState = String(caseData.state).toLowerCase();
@@ -273,6 +307,20 @@ export function CaseDetail() {
         <section className="rounded-xl border border-slate-200 bg-white p-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Reported issue</p>
           <p className="mt-1 text-sm text-slate-700">{caseData.attributes.description}</p>
+        </section>
+      )}
+
+      {pendingFieldDecision && (
+        <section className="rounded-xl border border-emerald-300 bg-emerald-50 p-5 shadow-sm">
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-700">On-site repair approval</p>
+          <p className="mt-1 text-base font-semibold text-emerald-950">A field responder can perform {humanizeToken(pendingFieldDecision.action)}.</p>
+          <p className="mt-1 text-sm text-emerald-900">{pendingFieldDecision.summary}</p>
+          <p className="mt-2 text-sm text-emerald-800">Approve only if you want the responder to begin this on-site work. Declining keeps the case open so ROVIQ can coordinate another service path.</p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button onClick={() => void decideFieldService(pendingFieldDecision.id, true)} disabled={fieldDecidingId === pendingFieldDecision.id} className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50">{fieldDecidingId === pendingFieldDecision.id ? 'Saving…' : 'Approve on-site repair'}</button>
+            <button onClick={() => void decideFieldService(pendingFieldDecision.id, false)} disabled={fieldDecidingId === pendingFieldDecision.id} className="rounded-md border border-emerald-300 bg-white px-4 py-2 text-sm font-medium text-emerald-900 hover:bg-emerald-100 disabled:opacity-50">Decline</button>
+          </div>
+          {fieldDecisionError && <p className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{fieldDecisionError}</p>}
         </section>
       )}
 
