@@ -12,6 +12,18 @@ export type ActorServiceability = {
   capacityWindowId: string | null;
 };
 
+/**
+ * Loads the case constraints and the actor's current normalized capacity, then
+ * applies the deterministic serviceability evaluator at the point of use.
+ *
+ * Route = candidate may be considered before ranking.
+ * Hold = stale capacity is usable only when the caller explicitly requests a hold.
+ * Confirm = capacity must be current and fully confirmable.
+ *
+ * Actors that have entered ROVIQ Connect / Shop OS fail closed when canonical
+ * capacity is missing. Legacy snapshots remain a transitional compatibility path
+ * only for actors that have no partner-system connection yet.
+ */
 export async function evaluateActorServiceability(
   caseId: string | null | undefined,
   actorId: string,
@@ -65,9 +77,6 @@ export async function evaluateActorServiceability(
       capacityUnits:Number(row.capacity_units)
     };
   } else if (!a.has_connection) {
-    // Transitional compatibility for actors not yet onboarded to ROVIQ Connect/Shop OS.
-    // Once a partner connection exists, canonical capacity becomes mandatory and missing
-    // windows fail closed rather than silently falling back to legacy snapshots.
     const legacy=await queryable.query(
       `select coalesce(sum(quantity),0)::float as units
        from capacity_snapshots where actor_id=$1 and start_at<=now() and end_at>now()`,
