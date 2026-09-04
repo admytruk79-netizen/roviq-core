@@ -1,6 +1,10 @@
 -- ROVIQ Core migration 014
 -- Unified case lifecycle support: vehicles, case events, serviceability constraints,
--- parts readiness, exceptions, communications, partner admin, and case financial ledger.
+-- parts readiness, exception enrichment, communications, partner admin, and case financial ledger.
+-- Compatibility note: migrations/004_service_orchestration.sql already owns case_exceptions.
+-- This migration evolves that table in place and deliberately retains its established
+-- case_id / exception_code / state / summary / metadata contract so existing routes,
+-- orchestration, analytics and tests remain valid on both fresh and upgraded databases.
 begin;
 
 create table if not exists customer_vehicles (
@@ -36,17 +40,19 @@ create table if not exists case_parts_requirements (
 );
 create index if not exists idx_case_parts_case on case_parts_requirements(service_case_id,readiness_status);
 
-create table if not exists case_exceptions (
-  id uuid primary key default gen_random_uuid(), service_case_id uuid references service_cases(id) on delete cascade,
-  exception_type text not null, severity text not null default 'warning' check (severity in ('info','warning','critical')),
-  status text not null default 'open' check (status in ('open','acknowledged','remediating','resolved','dismissed')),
-  owner_actor_id uuid, resource_id uuid references service_resources(id) on delete set null,
-  connection_id uuid references partner_system_connections(id) on delete set null,
-  due_at timestamptz, resolution_code text, details jsonb not null default '{}'::jsonb,
-  created_at timestamptz not null default now(), resolved_at timestamptz
-);
-create index if not exists idx_case_exceptions_open on case_exceptions(status,severity,created_at);
-create index if not exists idx_case_exceptions_case on case_exceptions(service_case_id);
+-- case_exceptions is created by migration 004. Preserve the original public/storage contract
+-- and add only the fields needed by the vNext exception engine.
+alter table case_exceptions add column if not exists owner_actor_id uuid references actors(id);
+alter table case_exceptions add column if not exists resource_id uuid references service_resources(id) on delete set null;
+alter table case_exceptions add column if not exists connection_id uuid references partner_system_connections(id) on delete set null;
+alter table case_exceptions add column if not exists due_at timestamptz;
+alter table case_exceptions add column if not exists resolution_code text;
+alter table case_exceptions add column if not exists remediation_history jsonb not null default '[]'::jsonb;
+
+-- Existing migration 004 already creates case_exceptions_open_idx on (state,severity,created_at).
+-- Keep a case lookup index using the established case_id column.
+create index if not exists idx_case_exceptions_case on case_exceptions(case_id);
+create index if not exists idx_case_exceptions_due on case_exceptions(state,due_at) where state <> 'resolved';
 
 create table if not exists communication_events (
   id uuid primary key default gen_random_uuid(), service_case_id uuid references service_cases(id) on delete cascade,
