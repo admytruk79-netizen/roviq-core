@@ -4,6 +4,9 @@ export type CapacityState = 'available' | 'limited' | 'blocked' | 'reserved' | '
 export type CapacityConfidence = 'integrated' | 'roviq_native' | 'manual_verified' | 'declared' | 'stale' | 'unknown';
 export type SyncState = 'current' | 'stale' | 'degraded' | 'manual' | 'failed';
 
+export const CAPACITY_CURRENT_MAX_AGE_MS = 15 * 60 * 1000;
+export const CAPACITY_STALE_MAX_AGE_MS = 60 * 60 * 1000;
+
 export interface ExternalCapacitySignal {
   partnerLocationId: string;
   sourceConnectionId?: string | null;
@@ -88,15 +91,12 @@ function resolveConfidence(signal: ExternalCapacitySignal, syncState: SyncState)
 }
 
 function resolveSyncState(signal: ExternalCapacitySignal, now: Date): SyncState {
-  const maxCurrentAgeMs = 15 * 60 * 1000;
-  const maxStaleAgeMs = 60 * 60 * 1000;
-
   if (signal.mode === 'bridge') {
     const importedAt = signal.importedAt ? toDate(signal.importedAt, 'importedAt') : null;
     if (!importedAt) return 'degraded';
     const ageMs = Math.max(0, now.getTime() - importedAt.getTime());
-    if (ageMs <= maxCurrentAgeMs) return signal.manuallyVerified === true ? 'manual' : 'current';
-    if (ageMs <= maxStaleAgeMs) return 'stale';
+    if (ageMs <= CAPACITY_CURRENT_MAX_AGE_MS) return signal.manuallyVerified === true ? 'manual' : 'current';
+    if (ageMs <= CAPACITY_STALE_MAX_AGE_MS) return 'stale';
     return 'degraded';
   }
 
@@ -104,8 +104,8 @@ function resolveSyncState(signal: ExternalCapacitySignal, now: Date): SyncState 
   if (!lastSuccess) return signal.mode === 'roviq_native' ? 'current' : 'degraded';
   const ageMs = now.getTime() - lastSuccess.getTime();
   if (ageMs < 0) return 'current';
-  if (ageMs <= maxCurrentAgeMs) return 'current';
-  if (ageMs <= maxStaleAgeMs) return 'stale';
+  if (ageMs <= CAPACITY_CURRENT_MAX_AGE_MS) return 'current';
+  if (ageMs <= CAPACITY_STALE_MAX_AGE_MS) return 'stale';
   return 'degraded';
 }
 
