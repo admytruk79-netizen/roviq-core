@@ -30,8 +30,12 @@ const assessmentSchema = z.object({
   safety:safetySchema,
   requiredCapabilities:z.array(z.string().min(1)).default([]),
   requiredTools:z.array(z.string().min(1)).default([]),
-  requiredParts:z.array(z.record(z.unknown())).default([]),
-  partsAvailable:z.boolean().default(false),
+  requiredParts:z.array(z.object({
+    sku:z.string().min(1),
+    quantity:z.number().int().positive(),
+    partNumber:z.string().optional(),
+    description:z.string().optional()
+  })).default([]),
   estimatedMinutes:z.number().int().nonnegative().max(720).optional(),
   estimatedCost:z.number().nonnegative().optional(),
   customerAuthorizationRequired:z.boolean().default(true),
@@ -42,19 +46,9 @@ const assessmentSchema = z.object({
 type Assessment = z.infer<typeof assessmentSchema>;
 type CapabilityProfile={actor_id:string;active:boolean;repair_classes:unknown;capabilities:unknown;tools:unknown;max_estimated_minutes:number|null;max_estimated_cost:string|number|null;verified_at:string|null};
 type FieldServiceAction='field_repair'|'temporary_stabilization'|'dispatch_field_technician'|'route_to_shop'|'tow_required'|'remote_review';
-type PartsOrderItem={sku:string;partNumber?:string;description?:string;quantity:number;attributes?:Record<string,unknown>};
 
 function stringArray(value:unknown):string[]{return Array.isArray(value)?value.filter((v):v is string=>typeof v==='string'):[]}
 function includesAll(have:string[],need:string[]){const set=new Set(have);return need.every(v=>set.has(v))}
-function normalizeRequiredPart(value:Record<string,unknown>):PartsOrderItem|null{
-  const sku=typeof value.sku==='string'&&value.sku.trim()?value.sku.trim():typeof value.partNumber==='string'&&value.partNumber.trim()?value.partNumber.trim():typeof value.part_number==='string'&&value.part_number.trim()?value.part_number.trim():null;
-  if(!sku)return null;
-  const partNumber=typeof value.partNumber==='string'&&value.partNumber.trim()?value.partNumber.trim():typeof value.part_number==='string'&&value.part_number.trim()?value.part_number.trim():undefined;
-  const description=typeof value.description==='string'&&value.description.trim()?value.description.trim():typeof value.name==='string'&&value.name.trim()?value.name.trim():undefined;
-  const quantity=typeof value.quantity==='number'&&Number.isInteger(value.quantity)&&value.quantity>0?value.quantity:1;
-  const attributes=Object.fromEntries(Object.entries(value).filter(([key])=>!['sku','partNumber','part_number','description','name','quantity'].includes(key)));
-  return{sku,partNumber,description,quantity,attributes:Object.keys(attributes).length?attributes:undefined};
-}
 function operatorEligible(a:Assessment,p:CapabilityProfile|null){
   if(!p||!p.active||!p.verified_at)return false;
   if(!stringArray(p.repair_classes).includes(a.repairClass))return false;
@@ -64,14 +58,36 @@ function operatorEligible(a:Assessment,p:CapabilityProfile|null){
   if(a.estimatedCost!=null&&p.max_estimated_cost!=null&&a.estimatedCost>Number(p.max_estimated_cost))return false;
   return true;
 }
-function decide(a:Assessment,p:CapabilityProfile|null):FieldServiceAction{
+function decide(a:Assessment,p:CapabilityProfile|null,partsFulfillable:boolean):FieldServiceAction{
   const unsafe=Object.values(a.safety).some(Boolean);
   if(unsafe||a.drivability==='non_drivable')return'tow_required' as const;
   if(a.confidence<0.75)return'remote_review' as const;
   if(a.repairClass==='unknown')return'remote_review' as const;
   if(!operatorEligible(a,p))return'dispatch_field_technician' as const;
-  if(a.requiredParts.length>0&&!a.partsAvailable)return'dispatch_field_technician' as const;
+  if(a.requiredParts.length>0&&!partsFulfillable)return'dispatch_field_technician' as const;
   return'field_repair' as const;
+}
+// Parts fulfilment is authoritative for availability, not the on-scene operator (see
+// docs/FIELD_SERVICE_ONSITE_REPAIR_ARCHITECTURE.md's "Parts integration"). Finds one active
+// supplier whose inventory can cover every required sku/quantity simultaneously -- not just each
+// item individually against possibly-different suppliers, since a single job needs one fulfilling
+// source. Returns null (nothing to reserve, or no supplier holds the complete set) accordingly.
+async function findFulfillingSupplier(items:{sku:string;quantity:number}[]):Promise<string|null>{
+  if(!items.length)return null;
+  const first=await pool.query(
+    `select distinct supplier_actor_id from parts_inventory where active=true and sku=$1 and (quantity_on_hand-quantity_reserved)>=$2`,
+    [items[0].sku,items[0].quantity]
+  );
+  let candidates=first.rows.map((r:any)=>r.supplier_actor_id as string);
+  for(const item of items.slice(1)){
+    if(!candidates.length)break;
+    const r=await pool.query(
+      `select distinct supplier_actor_id from parts_inventory where active=true and sku=$1 and (quantity_on_hand-quantity_reserved)>=$2 and supplier_actor_id=any($3::uuid[])`,
+      [item.sku,item.quantity,candidates]
+    );
+    candidates=r.rows.map((x:any)=>x.supplier_actor_id as string);
+  }
+  return candidates[0]??null;
 }
 
 export async function fieldServiceRoutes(app:FastifyInstance){
@@ -124,29 +140,33 @@ export async function fieldServiceRoutes(app:FastifyInstance){
     if(req.principal.role!=='admin'&&operatorActorId!==req.principal.actorId)return reply.code(403).send({error:'operator_override_forbidden'});
     const profileResult=operatorActorId?await pool.query('select * from field_service_actor_capabilities where actor_id=$1',[operatorActorId]):{rows:[]};
     const profile=(profileResult.rows[0]??null) as CapabilityProfile|null;
-    const action=decide(b,profile);
+    const fulfillingSupplierActorId=b.requiredParts.length?await findFulfillingSupplier(b.requiredParts):null;
+    const partsFulfillable=b.requiredParts.length===0||fulfillingSupplierActorId!==null;
+    const action=decide(b,profile,partsFulfillable);
     const authorizationRequired=b.customerAuthorizationRequired&&(action==='field_repair'||action==='temporary_stabilization');
     const status=authorizationRequired?'authorization_required':'proposed';
+    // fulfillingSupplierActorId is the source /start will reserve against -- required_parts is
+    // authority data (what the job needs), this is Core's own resolution of who can supply it,
+    // so it belongs in metadata rather than mixed into the client-supplied required_parts payload.
+    const metadata={...b.metadata,...(fulfillingSupplierActorId?{fulfillingSupplierActorId}:{})};
     const r=await pool.query(
       `insert into field_service_decisions(case_id,demand_id,diagnostic_finding_id,created_by_actor_id,action,status,repair_class,drivability,confidence,summary,safety_flags,required_capabilities,required_tools,required_parts,operator_context,evidence,estimated_minutes,estimated_cost,customer_authorization_required,metadata)
        values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) returning *`,
-      [id,b.demandId??c.demand_id??null,b.diagnosticFindingId??null,req.principal.actorId??null,action,status,b.repairClass,b.drivability,b.confidence,b.summary,JSON.stringify(b.safety),JSON.stringify(b.requiredCapabilities),JSON.stringify(b.requiredTools),JSON.stringify(b.requiredParts),JSON.stringify({operatorActorId,verifiedProfile:Boolean(profile?.verified_at),repairClasses:stringArray(profile?.repair_classes),capabilities:stringArray(profile?.capabilities),tools:stringArray(profile?.tools),partsAvailable:b.partsAvailable,role:req.principal.role}),JSON.stringify(b.evidence),b.estimatedMinutes??null,b.estimatedCost??null,b.customerAuthorizationRequired,JSON.stringify(b.metadata)]
+      [id,b.demandId??c.demand_id??null,b.diagnosticFindingId??null,req.principal.actorId??null,action,status,b.repairClass,b.drivability,b.confidence,b.summary,JSON.stringify(b.safety),JSON.stringify(b.requiredCapabilities),JSON.stringify(b.requiredTools),JSON.stringify(b.requiredParts),JSON.stringify({operatorActorId,verifiedProfile:Boolean(profile?.verified_at),repairClasses:stringArray(profile?.repair_classes),capabilities:stringArray(profile?.capabilities),tools:stringArray(profile?.tools),role:req.principal.role}),JSON.stringify(b.evidence),b.estimatedMinutes??null,b.estimatedCost??null,b.customerAuthorizationRequired,JSON.stringify(metadata)]
     );
+    // Core already resolved fulfillability against real inventory above (partsFulfillable) --
+    // when it can't be met, open a real trackable order through the same Parts fulfilment path
+    // ordinary repairs use, rather than just a text label on the decision.
     let partsOrder=null;
-    if(b.requiredParts.length>0&&!b.partsAvailable){
-      const items=b.requiredParts.map(normalizeRequiredPart).filter((item):item is PartsOrderItem=>Boolean(item));
-      if(items.length===b.requiredParts.length){
-        try{
-          partsOrder=await createPartsOrder(req.principal,{caseId:id,items,attributes:{source:'field_service_required_parts',fieldServiceDecisionId:r.rows[0].id,repairClass:b.repairClass}});
-        }catch(error){
-          console.warn('field_service_parts_order_failed',{caseId:id,decisionId:r.rows[0].id,error:error instanceof Error?error.message:'unknown_error'});
-        }
-      }else{
-        console.warn('field_service_parts_order_skipped',{caseId:id,decisionId:r.rows[0].id,reason:'required_part_identifier_missing'});
+    if(b.requiredParts.length>0&&!partsFulfillable){
+      try{
+        partsOrder=await createPartsOrder(req.principal,{caseId:id,items:b.requiredParts,attributes:{source:'field_service_required_parts',fieldServiceDecisionId:r.rows[0].id,repairClass:b.repairClass}});
+      }catch(error){
+        console.warn('field_service_parts_order_failed',{caseId:id,decisionId:r.rows[0].id,error:error instanceof Error?error.message:'unknown_error'});
       }
     }
     await appendCaseEvent(id,'FIELD_SERVICE_DECISION_PROPOSED',req.principal,{decisionId:r.rows[0].id,action,status,operatorActorId,partsOrderId:(partsOrder as any)?.order?.id??null});
-    await setCustomerSnapshot(id,'field_service_assessment',action==='tow_required'?'On-site assessment requires vehicle transport.':action==='field_repair'?'An on-site repair is available.':b.requiredParts.length>0&&!b.partsAvailable?'Required parts are being sourced for the on-site repair.':'The on-site assessment is being reviewed.',authorizationRequired?'Approval required':b.requiredParts.length>0&&!b.partsAvailable?'Waiting for parts availability':'ROVIQ is coordinating the next action');
+    await setCustomerSnapshot(id,'field_service_assessment',action==='tow_required'?'On-site assessment requires vehicle transport.':action==='field_repair'?'An on-site repair is available.':b.requiredParts.length>0&&!partsFulfillable?'Required parts are being sourced for the on-site repair.':'The on-site assessment is being reviewed.',authorizationRequired?'Approval required':b.requiredParts.length>0&&!partsFulfillable?'Waiting for parts availability':'ROVIQ is coordinating the next action');
     await audit(req.principal,'create_field_service_decision','service_case',id,action,{decisionId:r.rows[0].id,status,operatorActorId,partsOrderId:(partsOrder as any)?.order?.id??null});
     return reply.code(201).send({decision:r.rows[0],partsOrder});
   });
@@ -177,19 +197,75 @@ export async function fieldServiceRoutes(app:FastifyInstance){
     try{c=await loadCaseForPrincipal(req.principal,id);}
     catch(e){if(e instanceof Error&&e.message==='forbidden')return reply.code(403).send({error:'forbidden'});throw e;}
     if(!c)return reply.code(404).send({error:'case_not_found'});
-    const d=await pool.query('select * from field_service_decisions where id=$1 and case_id=$2',[decisionId,id]);if(!d.rowCount)return reply.code(404).send({error:'field_service_decision_not_found'});
-    const decision=d.rows[0];
-    const startableStatus=decision.customer_authorization_required?'authorized':'proposed';
-    if(decision.status!==startableStatus)return reply.code(409).send({error:'field_service_not_startable'});
-    if(!['field_repair','temporary_stabilization'].includes(decision.action))return reply.code(409).send({error:'field_service_action_not_executable'});
-    const operatorActorId=decision.operator_context?.operatorActorId??req.principal.actorId;
-    if(req.principal.role!=='admin'&&operatorActorId!==req.principal.actorId)return reply.code(403).send({error:'field_service_operator_mismatch'});
-    const profile=await pool.query('select active,verified_at from field_service_actor_capabilities where actor_id=$1',[operatorActorId]);
-    if(!profile.rows[0]?.active||!profile.rows[0]?.verified_at)return reply.code(409).send({error:'field_service_operator_not_verified'});
-    const r=await pool.query(`update field_service_decisions set status='in_progress',started_at=now(),updated_at=now() where id=$1 and status=$2 returning *`,[decisionId,startableStatus]);
-    if(!r.rowCount)return reply.code(409).send({error:'field_service_not_startable'});
-    await appendCaseEvent(id,'FIELD_SERVICE_STARTED',req.principal,{decisionId,action:r.rows[0].action,operatorActorId}).catch(e=>console.warn('field_service_start_side_effect_failed',{decisionId,caseId:id,error:e instanceof Error?e.message:e}));
-    return{decision:r.rows[0]};
+
+    const client=await pool.connect();
+    let committed=false;
+    let decisionRow:any;
+    try{
+      await client.query('begin');
+      // Row lock for the whole read-check-write sequence: without it, two concurrent start calls
+      // on the same decision could both pass the state guard and double-reserve inventory before
+      // either commits.
+      const d=await client.query('select * from field_service_decisions where id=$1 and case_id=$2 for update',[decisionId,id]);
+      if(!d.rowCount)throw new Error('field_service_decision_not_found');
+      const decision=d.rows[0];
+      // Source state must match exactly: when authorization is waived, only a fresh 'proposed'
+      // decision may start; otherwise a completed/escalated/in-progress decision (status != 'proposed'
+      // or 'authorized') would restart and clobber its own terminal outcome.
+      const startableStatus=decision.customer_authorization_required?'authorized':'proposed';
+      if(decision.status!==startableStatus)throw new Error('field_service_not_startable');
+      if(!['field_repair','temporary_stabilization'].includes(decision.action))throw new Error('field_service_action_not_executable');
+      const operatorActorId=decision.operator_context?.operatorActorId??req.principal.actorId;
+      if(req.principal.role!=='admin'&&operatorActorId!==req.principal.actorId)throw new Error('field_service_operator_mismatch');
+      const profile=await client.query('select active,verified_at from field_service_actor_capabilities where actor_id=$1',[operatorActorId]);
+      if(!profile.rows[0]?.active||!profile.rows[0]?.verified_at)throw new Error('field_service_operator_not_verified');
+
+      // Parts fulfilment is authoritative here, not the operator: reserve against the supplier
+      // assess-time resolved as able to cover the complete required set. If that supplier's stock
+      // has since changed and can no longer cover it, reject rather than let unsupported work
+      // start (docs/FIELD_SERVICE_ONSITE_REPAIR_ARCHITECTURE.md "Parts integration"). decide()
+      // only ever reaches field_repair/temporary_stabilization with non-empty required_parts when
+      // a fulfilling supplier was found at assess time, so its absence here means stale/tampered state.
+      const requiredParts=(decision.required_parts??[]) as {sku:string;quantity:number}[];
+      const reservation:{sku:string;quantity:number;inventoryId:string}[]=[];
+      if(requiredParts.length){
+        const supplierActorId=decision.metadata?.fulfillingSupplierActorId as string|undefined;
+        if(!supplierActorId)throw new Error('field_service_parts_unavailable');
+        for(const item of requiredParts){
+          const inv=await client.query(
+            `select * from parts_inventory where supplier_actor_id=$1 and sku=$2 and active=true
+             and (quantity_on_hand-quantity_reserved)>=$3 for update`,
+            [supplierActorId,item.sku,item.quantity]
+          );
+          if(!inv.rowCount)throw new Error('field_service_parts_unavailable');
+          await client.query('update parts_inventory set quantity_reserved=quantity_reserved+$1,updated_at=now() where id=$2',[item.quantity,inv.rows[0].id]);
+          reservation.push({sku:item.sku,quantity:item.quantity,inventoryId:inv.rows[0].id});
+        }
+      }
+
+      const r=await client.query(
+        `update field_service_decisions set status='in_progress',started_at=now(),updated_at=now(),metadata=metadata||$1::jsonb
+         where id=$2 and status=$3 returning *`,
+        [JSON.stringify(reservation.length?{partsReservation:reservation}:{}),decisionId,startableStatus]
+      );
+      if(!r.rowCount)throw new Error('field_service_not_startable');
+      decisionRow=r.rows[0];
+      await client.query('commit');
+      committed=true;
+    }catch(e){
+      if(!committed)await client.query('rollback');
+      const message=e instanceof Error?e.message:'field_service_start_failed';
+      if(message==='field_service_decision_not_found')return reply.code(404).send({error:message});
+      if(message==='field_service_operator_mismatch')return reply.code(403).send({error:message});
+      if(['field_service_not_startable','field_service_action_not_executable','field_service_operator_not_verified','field_service_parts_unavailable'].includes(message))return reply.code(409).send({error:message});
+      throw e;
+    }finally{
+      client.release();
+    }
+    // Best-effort, same reasoning as authorize: the transition already committed, so a failure here
+    // must not 500 -- a retry would otherwise be rejected forever by the exact-state guard above.
+    await appendCaseEvent(id,'FIELD_SERVICE_STARTED',req.principal,{decisionId,action:decisionRow.action,operatorActorId:decisionRow.operator_context?.operatorActorId}).catch(e=>console.warn('field_service_start_side_effect_failed',{decisionId,caseId:id,error:e instanceof Error?e.message:e}));
+    return{decision:decisionRow};
   });
 
   app.post('/api/maintenance/cases/:id/field-service/:decisionId/complete',{preHandler:requireRole('diagnostic','tow','partner','admin')},async(req,reply)=>{
@@ -199,19 +275,57 @@ export async function fieldServiceRoutes(app:FastifyInstance){
     try{c=await loadCaseForPrincipal(req.principal,id);}
     catch(e){if(e instanceof Error&&e.message==='forbidden')return reply.code(403).send({error:'forbidden'});throw e;}
     if(!c)return reply.code(404).send({error:'case_not_found'});
-    const d=await pool.query('select * from field_service_decisions where id=$1 and case_id=$2',[decisionId,id]);
-    if(!d.rowCount)return reply.code(404).send({error:'field_service_decision_not_found'});
-    const operatorActorId=d.rows[0].operator_context?.operatorActorId??null;
-    if(req.principal.role!=='admin'&&operatorActorId!==req.principal.actorId)return reply.code(403).send({error:'field_service_operator_mismatch'});
-    const status=b.outcome==='failed'||b.outcome==='escalated'?'escalated':'completed';
-    const r=await pool.query(`update field_service_decisions set status=$1,outcome=$2,completed_at=now(),evidence=evidence || $3::jsonb,metadata=metadata || $4::jsonb,updated_at=now() where id=$5 and case_id=$6 and status='in_progress' returning *`,[status,b.outcome,JSON.stringify(b.evidence??{}),JSON.stringify(b.notes?{completionNotes:b.notes}:{}),decisionId,id]);
-    if(!r.rowCount)return reply.code(409).send({error:'field_service_not_in_progress'});
+
+    const client=await pool.connect();
+    let committed=false;
+    let decisionRow:any;
+    try{
+      await client.query('begin');
+      const d=await client.query('select * from field_service_decisions where id=$1 and case_id=$2 for update',[decisionId,id]);
+      if(!d.rowCount)throw new Error('field_service_decision_not_found');
+      const decision=d.rows[0];
+      const operatorActorId=decision.operator_context?.operatorActorId??null;
+      if(req.principal.role!=='admin'&&operatorActorId!==req.principal.actorId)throw new Error('field_service_operator_mismatch');
+      if(decision.status!=='in_progress')throw new Error('field_service_not_in_progress');
+      const status=b.outcome==='failed'||b.outcome==='escalated'?'escalated':'completed';
+      // Release start's reservation: 'completed' means the parts were actually used (decrement
+      // on-hand stock along with the reservation); any other outcome means the job didn't consume
+      // them, so only the reservation itself is released back to available stock.
+      const reservation=(decision.metadata?.partsReservation??[]) as {sku:string;quantity:number;inventoryId:string}[];
+      for(const item of reservation){
+        if(status==='completed'){
+          await client.query('update parts_inventory set quantity_on_hand=greatest(quantity_on_hand-$1,0),quantity_reserved=greatest(quantity_reserved-$1,0),updated_at=now() where id=$2',[item.quantity,item.inventoryId]);
+        }else{
+          await client.query('update parts_inventory set quantity_reserved=greatest(quantity_reserved-$1,0),updated_at=now() where id=$2',[item.quantity,item.inventoryId]);
+        }
+      }
+      const r=await client.query(
+        `update field_service_decisions set status=$1,outcome=$2,completed_at=now(),evidence=evidence || $3::jsonb,metadata=metadata || $4::jsonb,updated_at=now()
+         where id=$5 and case_id=$6 and status='in_progress' returning *`,
+        [status,b.outcome,JSON.stringify(b.evidence??{}),JSON.stringify(b.notes?{completionNotes:b.notes}:{}),decisionId,id]
+      );
+      if(!r.rowCount)throw new Error('field_service_not_in_progress');
+      decisionRow=r.rows[0];
+      await client.query('commit');
+      committed=true;
+    }catch(e){
+      if(!committed)await client.query('rollback');
+      const message=e instanceof Error?e.message:'field_service_complete_failed';
+      if(message==='field_service_decision_not_found')return reply.code(404).send({error:message});
+      if(message==='field_service_operator_mismatch')return reply.code(403).send({error:message});
+      if(message==='field_service_not_in_progress')return reply.code(409).send({error:message});
+      throw e;
+    }finally{
+      client.release();
+    }
+    // Best-effort, same reasoning as authorize/start: the transition already committed, so a
+    // failure here must not 500 -- a retry would otherwise be rejected forever by the 'in_progress' guard above.
     const sideEffects=await Promise.allSettled([
       appendCaseEvent(id,'FIELD_SERVICE_COMPLETED',req.principal,{decisionId,outcome:b.outcome}),
       setCustomerSnapshot(id,b.outcome==='fixed'?'field_service_fixed':b.outcome==='stabilized'?'field_service_stabilized':'field_service_escalated',b.outcome==='fixed'?'Vehicle repaired on site.':b.outcome==='stabilized'?'Vehicle stabilized on site.':'On-site work could not be completed safely.',b.outcome==='fixed'?'Confirm resolution':b.outcome==='stabilized'?'Continue with approved next step':'ROVIQ will arrange towing or specialist service')
     ]);
     const failed=sideEffects.filter(s=>s.status==='rejected');
     if(failed.length>0)console.warn('field_service_complete_side_effect_failed',{decisionId,caseId:id,outcome:b.outcome,failedCount:failed.length});
-    return{decision:r.rows[0]};
+    return{decision:decisionRow};
   });
 }

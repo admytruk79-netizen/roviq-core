@@ -29,6 +29,22 @@ describe('field service on-site assessment', () => {
     await pool.end();
   });
 
+  async function createCaseWithTowRelation(): Promise<string> {
+    const demandRes = await app.inject({
+      method: 'POST', url: '/api/demands', headers: actorHeaders('customer', customerActorId),
+      payload: { domain: 'maintenance', demandType: 'wont_start', urgency: 'normal' }
+    });
+    const caseId = JSON.parse(demandRes.body).case.id as string;
+    await app.inject({ method: 'POST', url: `/api/maintenance/cases/${caseId}/transition`, headers: adminHeaders(), payload: { toState: 'tow_pending' } });
+    const dispatchRes = await app.inject({
+      method: 'POST', url: '/api/admin/transport', headers: adminHeaders(),
+      payload: { caseId, transportType: 'tow', pickupLocation: { lat: 45.52, lng: -122.67 }, dropoffLocation: { lat: 45.54, lng: -122.65 } }
+    });
+    const dispatchId = JSON.parse(dispatchRes.body).dispatch.id as string;
+    await app.inject({ method: 'POST', url: `/api/admin/transport/${dispatchId}/assign`, headers: adminHeaders(), payload: { providerActorId: towActorId } });
+    return caseId;
+  }
+
   it('is registered, computes a deterministic action, and records/retrieves the decision', async () => {
     const demandRes = await app.inject({
       method: 'POST', url: '/api/demands', headers: actorHeaders('customer', customerActorId),
@@ -254,5 +270,145 @@ describe('field service on-site assessment', () => {
     });
     expect(authorizeRes.statusCode).toBe(200);
     expect(JSON.parse(authorizeRes.body).decision.status).toBe('authorized');
+  });
+
+  it('does not trust a self-declared parts claim: required parts with no supplier inventory force dispatch_field_technician', async () => {
+    const caseId = await createCaseWithTowRelation();
+    await app.inject({
+      method: 'PUT', url: `/api/admin/field-service/actors/${towActorId}/capabilities`, headers: adminHeaders(),
+      payload: { active: true, repairClasses: ['battery'] }
+    });
+
+    // No parts_inventory row exists anywhere for this sku. The operator asserts partsAvailable:true
+    // anyway -- the old client-declared boolean would have blindly trusted exactly this claim and
+    // produced field_repair; Core must verify against real inventory instead and refuse it.
+    const assessRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/assess`, headers: actorHeaders('tow', towActorId),
+      payload: {
+        operatorActorId: towActorId, summary: 'Dead battery, on-site swap possible',
+        repairClass: 'battery', drivability: 'drivable', confidence: 0.9, safety: {},
+        customerAuthorizationRequired: false, partsAvailable: true,
+        requiredParts: [{ sku: `no-stock-sku-${caseId}`, quantity: 1 }]
+      }
+    });
+    expect(assessRes.statusCode).toBe(201);
+    const decision = JSON.parse(assessRes.body).decision;
+    expect(decision.action).toBe('dispatch_field_technician');
+    expect(decision.metadata.fulfillingSupplierActorId).toBeUndefined();
+  });
+
+  it('reserves against the supplier resolved at assessment on start, then consumes stock on a fixed completion', async () => {
+    const supplier = await app.inject({ method: 'POST', url: '/api/admin/actors', headers: adminHeaders(), payload: { actorType: 'parts' } });
+    const supplierActorId = JSON.parse(supplier.body).actor.id as string;
+    const sku = `brake-pad-${supplierActorId}`;
+    await app.inject({
+      method: 'PUT', url: '/api/parts/inventory', headers: adminHeaders(),
+      payload: { supplierActorId, sku, quantityOnHand: 5, unitPrice: 20, currency: 'USD' }
+    });
+
+    const caseId = await createCaseWithTowRelation();
+    await app.inject({
+      method: 'PUT', url: `/api/admin/field-service/actors/${towActorId}/capabilities`, headers: adminHeaders(),
+      payload: { active: true, repairClasses: ['battery'] }
+    });
+
+    const assessRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/assess`, headers: actorHeaders('tow', towActorId),
+      payload: {
+        operatorActorId: towActorId, summary: 'Dead battery, brake pad replacement possible on site',
+        repairClass: 'battery', drivability: 'drivable', confidence: 0.9, safety: {},
+        customerAuthorizationRequired: false,
+        requiredParts: [{ sku, quantity: 2 }]
+      }
+    });
+    expect(assessRes.statusCode).toBe(201);
+    const decision = JSON.parse(assessRes.body).decision;
+    expect(decision.action).toBe('field_repair');
+    expect(decision.metadata.fulfillingSupplierActorId).toBe(supplierActorId);
+
+    const startRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/${decision.id}/start`, headers: actorHeaders('tow', towActorId)
+    });
+    expect(startRes.statusCode).toBe(200);
+    const reservedInv = await pool.query('select quantity_on_hand,quantity_reserved from parts_inventory where supplier_actor_id=$1 and sku=$2', [supplierActorId, sku]);
+    expect(reservedInv.rows[0].quantity_on_hand).toBe(5);
+    expect(reservedInv.rows[0].quantity_reserved).toBe(2);
+
+    const completeRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/${decision.id}/complete`, headers: actorHeaders('tow', towActorId),
+      payload: { outcome: 'fixed' }
+    });
+    expect(completeRes.statusCode).toBe(200);
+    // Completion consumes the reservation: on-hand stock drops along with it.
+    const consumedInv = await pool.query('select quantity_on_hand,quantity_reserved from parts_inventory where supplier_actor_id=$1 and sku=$2', [supplierActorId, sku]);
+    expect(consumedInv.rows[0].quantity_on_hand).toBe(3);
+    expect(consumedInv.rows[0].quantity_reserved).toBe(0);
+  });
+
+  it('releases (not consumes) the reservation when the job is not completed, and rejects start once stock can no longer cover it', async () => {
+    const supplier = await app.inject({ method: 'POST', url: '/api/admin/actors', headers: adminHeaders(), payload: { actorType: 'parts' } });
+    const supplierActorId = JSON.parse(supplier.body).actor.id as string;
+    const sku = `ignition-coil-${supplierActorId}`;
+    await app.inject({
+      method: 'PUT', url: '/api/parts/inventory', headers: adminHeaders(),
+      payload: { supplierActorId, sku, quantityOnHand: 1, unitPrice: 40, currency: 'USD' }
+    });
+    await app.inject({
+      method: 'PUT', url: `/api/admin/field-service/actors/${towActorId}/capabilities`, headers: adminHeaders(),
+      payload: { active: true, repairClasses: ['ignition'] }
+    });
+
+    async function assessAndReturnDecision() {
+      const caseId = await createCaseWithTowRelation();
+      const assessRes = await app.inject({
+        method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/assess`, headers: actorHeaders('tow', towActorId),
+        payload: {
+          operatorActorId: towActorId, summary: 'Ignition coil failure, on-site swap possible',
+          repairClass: 'ignition', drivability: 'drivable', confidence: 0.9, safety: {},
+          customerAuthorizationRequired: false,
+          requiredParts: [{ sku, quantity: 1 }]
+        }
+      });
+      expect(assessRes.statusCode).toBe(201);
+      const decision = JSON.parse(assessRes.body).decision;
+      expect(decision.action).toBe('field_repair');
+      return { caseId, decision };
+    }
+
+    // Both jobs are assessed while the only unit of stock is still free, so both resolve the
+    // same fulfilling supplier and both land on field_repair.
+    const first = await assessAndReturnDecision();
+    const second = await assessAndReturnDecision();
+
+    const firstStartRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${first.caseId}/field-service/${first.decision.id}/start`, headers: actorHeaders('tow', towActorId)
+    });
+    expect(firstStartRes.statusCode).toBe(200);
+
+    // The second decision's assessment is now stale: the first job's start already reserved the
+    // only unit -- Core must reject rather than let unsupported work begin, even though the
+    // assessment itself succeeded.
+    const secondStartRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${second.caseId}/field-service/${second.decision.id}/start`, headers: actorHeaders('tow', towActorId)
+    });
+    expect(secondStartRes.statusCode).toBe(409);
+    expect(JSON.parse(secondStartRes.body).error).toBe('field_service_parts_unavailable');
+
+    // The first job fails on site rather than fixing the vehicle -- its reservation releases the
+    // part back to available stock instead of consuming it, since nothing was actually installed.
+    const failRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${first.caseId}/field-service/${first.decision.id}/complete`, headers: actorHeaders('tow', towActorId),
+      payload: { outcome: 'failed' }
+    });
+    expect(failRes.statusCode).toBe(200);
+    const releasedInv = await pool.query('select quantity_on_hand,quantity_reserved from parts_inventory where supplier_actor_id=$1 and sku=$2', [supplierActorId, sku]);
+    expect(releasedInv.rows[0].quantity_on_hand).toBe(1);
+    expect(releasedInv.rows[0].quantity_reserved).toBe(0);
+
+    // Now that the part is free again, the second job's start succeeds.
+    const secondStartRetryRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${second.caseId}/field-service/${second.decision.id}/start`, headers: actorHeaders('tow', towActorId)
+    });
+    expect(secondStartRetryRes.statusCode).toBe(200);
   });
 });
