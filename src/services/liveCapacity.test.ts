@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeCapacitySignal } from './liveCapacity';
+import { normalizeCapacitySignal } from './liveCapacity.js';
 
 describe('normalizeCapacitySignal', () => {
   it('normalizes native integration signals as integrated current capacity', () => {
