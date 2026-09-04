@@ -28,6 +28,11 @@ on:
         description: 'Optional operation/provider name stored on the actor'
         required: false
         default: ''
+      enable_field_service:
+        description: 'Verify this Diagnostic/Tow actor for controlled on-site field-service demos'
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -54,9 +59,14 @@ jobs:
             partner|diagnostic|parts|tow) ;;
             *) echo "Unsupported portal role"; exit 1 ;;
           esac
+          if [ "$ENABLE_FIELD_SERVICE" = "true" ] && [ "$PORTAL_ROLE" != "diagnostic" ] && [ "$PORTAL_ROLE" != "tow" ]; then
+            echo "Field-service verification is only supported for diagnostic or tow actors."
+            exit 1
+          fi
         env:
           ACCOUNT_PASSWORD: ${{ inputs.account_password }}
           PORTAL_ROLE: ${{ inputs.portal_role }}
+          ENABLE_FIELD_SERVICE: ${{ inputs.enable_field_service }}
 
       - name: Authenticate production admin
         id: admin_login
@@ -123,6 +133,24 @@ jobs:
           PORTAL_ROLE: ${{ inputs.portal_role }}
           ACTOR_ID: ${{ steps.actor.outputs.actor_id }}
 
+      - name: Verify field-service capability profile
+        if: ${{ inputs.enable_field_service }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload='{"active":true,"repairClasses":["battery","tire","ignition","electrical_minor","fluid_service","minor_mechanical"],"capabilities":[],"tools":[],"maxEstimatedMinutes":180,"maxEstimatedCost":1000,"metadata":{"provisionedFor":"controlled_demo"}}'
+          response="$(curl --fail-with-body --silent --show-error \
+            --request PUT "$API_BASE/api/admin/field-service/actors/$ACTOR_ID/capabilities" \
+            --header "authorization: Bearer $ADMIN_TOKEN" \
+            --header 'content-type: application/json' \
+            --data "$payload")"
+          test "$(jq -r '.capability.active // false' <<< "$response")" = "true"
+          test -n "$(jq -r '.capability.verified_at // empty' <<< "$response")"
+          echo "Verified controlled-demo field-service profile for actor $ACTOR_ID."
+        env:
+          ADMIN_TOKEN: ${{ steps.admin_login.outputs.token }}
+          ACTOR_ID: ${{ steps.actor.outputs.actor_id }}
+
       - name: Verify role login
         shell: bash
         run: |
@@ -131,11 +159,21 @@ jobs:
             --request POST "$API_BASE/api/auth/login" \
             --header 'content-type: application/json' \
             --data "$(jq -nc --arg email "$ACCOUNT_EMAIL" --arg password "$ACCOUNT_PASSWORD" '{email:$email,password:$password}')")"
+          token="$(jq -r '.accessToken // empty' <<< "$response")"
           test "$(jq -r '.principal.role // empty' <<< "$response")" = "$PORTAL_ROLE"
           test "$(jq -r '.principal.actorId // empty' <<< "$response")" = "$ACTOR_ID"
+          test -n "$token"
+          if [ "$ENABLE_FIELD_SERVICE" = "true" ]; then
+            profile="$(curl --fail-with-body --silent --show-error \
+              "$API_BASE/api/field-service/me/capabilities" \
+              --header "authorization: Bearer $token")"
+            test "$(jq -r '.capability.active // false' <<< "$profile")" = "true"
+            test -n "$(jq -r '.capability.verified_at // empty' <<< "$profile")"
+          fi
           echo "Verified actor-scoped $PORTAL_ROLE login."
         env:
           ACCOUNT_EMAIL: ${{ inputs.account_email }}
           ACCOUNT_PASSWORD: ${{ inputs.account_password }}
           PORTAL_ROLE: ${{ inputs.portal_role }}
           ACTOR_ID: ${{ steps.actor.outputs.actor_id }}
+          ENABLE_FIELD_SERVICE: ${{ inputs.enable_field_service }}
