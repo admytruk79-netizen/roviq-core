@@ -12,6 +12,10 @@ type Candidate = {
 
 type RoutingPolicy = { id:string; version:number; configuration:{ weights?:Record<string,number>; defaults?:Record<string,number>; limits?:Record<string,number>; coordination?:{enabled?:boolean;maxAdjustment?:number;continuityBoost?:number;balanceBoost?:number;spatialBoost?:number;reliabilityBoost?:number;} } };
 
+export function routingIntentForSelectionMode(selectionMode:string|null|undefined):ServiceabilityIntent{
+  return selectionMode==='auto_dispatch'?'confirm':'route';
+}
+
 export async function routeMaintenanceDemand(demandId: string) {
   const demandResult = await pool.query(
     `select d.*, dom.id as domain_id, dom.code as domain_code,
@@ -26,7 +30,7 @@ export async function routeMaintenanceDemand(demandId: string) {
   if (demand.domain_code !== 'maintenance') throw new Error('unsupported_domain');
 
   const { capability:requestedCapability, intelligence } = await resolveRequestedCapabilityForDemand(demandId);
-  const routingIntent:ServiceabilityIntent=demand.selection_mode==='auto_dispatch'?'confirm':'route';
+  const routingIntent=routingIntentForSelectionMode(demand.selection_mode);
 
   const spatial = demand.case_id
     ? await pool.query('select route_context from case_spatial_context where case_id=$1',[demand.case_id])
