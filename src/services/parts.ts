@@ -6,6 +6,62 @@ import { queueNotification, setCustomerSnapshot } from './operations.js';
 
 type PartItemInput = { sku:string; partNumber?:string; description?:string; quantity:number; attributes?:Record<string,unknown> };
 
+function stringArray(value:unknown):string[]{
+  return Array.isArray(value)?value.filter((v):v is string=>typeof v==='string'):[];
+}
+function includesAll(have:string[],need:string[]){
+  const set=new Set(have);
+  return need.every((value)=>set.has(value));
+}
+
+async function resumeLinkedFieldService(principal:Principal,order:any){
+  const attributes=order.attributes??{};
+  const decisionId=typeof attributes.fieldServiceDecisionId==='string'?attributes.fieldServiceDecisionId:null;
+  if(attributes.source!=='field_service_required_parts'||!decisionId)return false;
+  try{
+    const d=await pool.query('select * from field_service_decisions where id=$1 and case_id=$2',[decisionId,order.case_id]);
+    if(!d.rowCount)return false;
+    const decision=d.rows[0];
+    if(decision.status!=='proposed'||decision.action!=='dispatch_field_technician')return false;
+    const unsafe=decision.safety_flags&&typeof decision.safety_flags==='object'&&Object.values(decision.safety_flags).some(Boolean);
+    if(unsafe||decision.drivability==='non_drivable'||Number(decision.confidence)<0.75||decision.repair_class==='unknown')return false;
+    const operatorActorId=decision.operator_context?.operatorActorId as string|undefined;
+    if(!operatorActorId)return false;
+    const p=await pool.query('select * from field_service_actor_capabilities where actor_id=$1',[operatorActorId]);
+    const profile=p.rows[0];
+    if(!profile?.active||!profile?.verified_at)return false;
+    if(!stringArray(profile.repair_classes).includes(decision.repair_class))return false;
+    if(!includesAll(stringArray(profile.capabilities),stringArray(decision.required_capabilities)))return false;
+    if(!includesAll(stringArray(profile.tools),stringArray(decision.required_tools)))return false;
+    if(decision.estimated_minutes!=null&&profile.max_estimated_minutes!=null&&Number(decision.estimated_minutes)>Number(profile.max_estimated_minutes))return false;
+    if(decision.estimated_cost!=null&&profile.max_estimated_cost!=null&&Number(decision.estimated_cost)>Number(profile.max_estimated_cost))return false;
+    const nextStatus=decision.customer_authorization_required?'authorization_required':'proposed';
+    const r=await pool.query(
+      `update field_service_decisions
+       set action='field_repair',status=$1,metadata=metadata||$2::jsonb,updated_at=now()
+       where id=$3 and case_id=$4 and status='proposed' and action='dispatch_field_technician'
+       returning *`,
+      [nextStatus,JSON.stringify({fulfilledPartsOrderId:order.id,partsFulfilledAt:new Date().toISOString()}),decisionId,order.case_id]
+    );
+    if(!r.rowCount)return false;
+    const sideEffects=await Promise.allSettled([
+      appendCaseEvent(order.case_id,'FIELD_SERVICE_PARTS_READY',principal,{decisionId,orderId:order.id,action:'field_repair',status:nextStatus}),
+      setCustomerSnapshot(
+        order.case_id,
+        nextStatus==='authorization_required'?'field_service_approval_required':'field_service_ready',
+        'Required parts have arrived and the on-site repair is ready.',
+        nextStatus==='authorization_required'?'Approval required':'Field operator may begin approved work'
+      )
+    ]);
+    const failed=sideEffects.filter((result)=>result.status==='rejected');
+    if(failed.length)console.warn('field_service_parts_ready_side_effect_failed',{decisionId,orderId:order.id,failedCount:failed.length});
+    return true;
+  }catch(error){
+    console.warn('field_service_parts_resume_failed',{decisionId,orderId:order.id,error:error instanceof Error?error.message:'unknown_error'});
+    return false;
+  }
+}
+
 export async function createPartsOrder(principal: Principal, input:{ caseId:string; deliveryLocationId?:string; neededBy?:string; items:PartItemInput[]; attributes?:Record<string,unknown> }) {
   const c = await pool.query('select * from service_cases where id=$1',[input.caseId]);
   if (!c.rowCount) throw new Error('case_not_found');
@@ -127,9 +183,15 @@ export async function markPartsOrderStatus(principal: Principal, orderId:string,
     await client.query('commit');
     await appendCaseEvent(order.case_id,`PARTS_${status.toUpperCase()}`,principal,{ orderId,...metadata });
     if (status === 'delivered') {
-      const c = await pool.query('select state from service_cases where id=$1',[order.case_id]);
-      if (c.rowCount && c.rows[0].state === 'parts_pending') await transitionCase(principal,order.case_id,'repair_in_progress',{ orderId });
-      await setCustomerSnapshot(order.case_id,'repair_resumed','Required parts have arrived and repair can continue.','Repair in progress');
+      const linkedFieldService=order.attributes?.source==='field_service_required_parts'&&typeof order.attributes?.fieldServiceDecisionId==='string';
+      if(linkedFieldService){
+        const resumed=await resumeLinkedFieldService(principal,{...order,...r.rows[0],id:orderId});
+        if(!resumed)await setCustomerSnapshot(order.case_id,'field_service_parts_ready_review','Required parts have arrived.','ROVIQ is reviewing field-service eligibility');
+      }else{
+        const c = await pool.query('select state from service_cases where id=$1',[order.case_id]);
+        if (c.rowCount && c.rows[0].state === 'parts_pending') await transitionCase(principal,order.case_id,'repair_in_progress',{ orderId });
+        await setCustomerSnapshot(order.case_id,'repair_resumed','Required parts have arrived and repair can continue.','Repair in progress');
+      }
     } else if (status === 'failed') {
       await createDeadline(order.case_id,'parts_recovery',new Date(Date.now()+15*60*1000).toISOString(),'reassign_parts_supplier',{ orderId });
     }
