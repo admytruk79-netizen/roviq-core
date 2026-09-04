@@ -2,7 +2,7 @@ import { pool } from '../db/pool.js';
 import { COORDINATION_ENGINE_VERSION, rankCoordinationCandidates } from './coordination-engine.js';
 import { resolveRequestedCapabilityForDemand } from './case-intelligence.js';
 import { recordRecommendation } from './selection-authority.js';
-import { evaluateActorServiceability, serviceabilityAllows } from './serviceability-gate.js';
+import { evaluateActorServiceability, serviceabilityAllows, type ServiceabilityIntent } from './serviceability-gate.js';
 
 type Candidate = {
   actor_id: string; actor_type: string; routing_enabled: boolean; service_radius_miles: number | null;
@@ -26,6 +26,7 @@ export async function routeMaintenanceDemand(demandId: string) {
   if (demand.domain_code !== 'maintenance') throw new Error('unsupported_domain');
 
   const { capability:requestedCapability, intelligence } = await resolveRequestedCapabilityForDemand(demandId);
+  const routingIntent:ServiceabilityIntent=demand.selection_mode==='auto_dispatch'?'confirm':'route';
 
   const spatial = demand.case_id
     ? await pool.query('select route_context from case_spatial_context where case_id=$1',[demand.case_id])
@@ -52,11 +53,11 @@ export async function routeMaintenanceDemand(demandId: string) {
     if(excluded.includes(demand.demand_type)){rejected.push({actorId:c.actor_id,reason:'job_type_excluded'});continue;}
     if(accepted.length&&!accepted.includes(demand.demand_type)){rejected.push({actorId:c.actor_id,reason:'job_type_not_accepted'});continue;}
 
-    const serviceability=await evaluateActorServiceability(demand.case_id,c.actor_id,requestedCapability,'route');
-    if(!serviceabilityAllows('route',serviceability.decision)){
+    const serviceability=await evaluateActorServiceability(demand.case_id,c.actor_id,requestedCapability,routingIntent);
+    if(!serviceabilityAllows(routingIntent,serviceability.decision)){
       rejected.push({
         actorId:c.actor_id,
-        reason:'serviceability_blocked',
+        reason:routingIntent==='confirm'?'not_confirmable_for_auto_dispatch':'serviceability_blocked',
         serviceabilityReasons:serviceability.decision.reasons,
         capacitySource:serviceability.source
       });
