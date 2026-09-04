@@ -46,6 +46,21 @@ describe('maintenance case end-to-end lifecycle', () => {
       `insert into actor_capabilities(actor_id, capability_id) select $1, id from capabilities where capability_code = 'repair'`,
       [partnerActorId]
     );
+
+    // Production routing now treats canonical capacity as authoritative. Seed a
+    // live repair window for this provider rather than depending on a legacy
+    // capacity snapshot in an end-to-end test of the current architecture.
+    const scope = await pool.query(
+      `select organization_id,location_id from actors where id=$1`,
+      [partnerActorId]
+    );
+    await pool.query(
+      `insert into capacity_windows(
+         organization_id,location_id,service_category,window_start,window_end,
+         capacity_state,capacity_units,confidence,sync_state
+       ) values($1,$2,'repair',now()-interval '5 minutes',now()+interval '2 hours','available',4,'roviq_native','current')`,
+      [scope.rows[0]?.organization_id ?? null,scope.rows[0]?.location_id ?? null]
+    );
   });
 
   afterAll(async () => {
@@ -62,11 +77,8 @@ describe('maintenance case end-to-end lifecycle', () => {
     expect(openedCase.state).toBe('triage');
     const caseId = openedCase.id;
 
-    // This scenario specifically verifies Core-authorized auto-dispatch. Customer intake
-    // defaults to customer_choice, so the test opts this case into auto-dispatch explicitly.
     await pool.query("update service_cases set selection_mode='auto_dispatch' where id=$1", [caseId]);
 
-    // Only the transitions actually valid from the current state (and role) are offered.
     const adminTransitionsRes = await app.inject({ method: 'GET', url: `/api/maintenance/cases/${caseId}/transitions`, headers: adminHeaders() });
     expect(adminTransitionsRes.statusCode).toBe(200);
     const adminTransitions = JSON.parse(adminTransitionsRes.body).transitions.map((t: { toState: string }) => t.toState).sort();
@@ -114,7 +126,6 @@ describe('maintenance case end-to-end lifecycle', () => {
     expect(toPaymentRes.statusCode).toBe(200);
     expect(JSON.parse(toPaymentRes.body).case.state).toBe('payment_pending');
 
-    // No unapproved charge may enter the bill: payment creation is rejected until the customer approves the quote.
     const prematurePaymentRes = await app.inject({
       method: 'POST', url: '/api/admin/payments', headers: adminHeaders(),
       payload: { caseId, amount: 249.99, currency: 'USD', description: 'Front brake pad replacement' }
@@ -171,7 +182,6 @@ describe('maintenance case end-to-end lifecycle', () => {
     const forbiddenRes = await app.inject({ method: 'GET', url: `/api/maintenance/cases/${caseId}`, headers: actorHeaders('customer', strangerId) });
     expect(forbiddenRes.statusCode).toBe(403);
 
-    // A customer can list their own cases, scoped to only their own.
     const myCasesRes = await app.inject({ method: 'GET', url: '/api/customers/me/cases', headers: actorHeaders('customer', customerActorId) });
     expect(myCasesRes.statusCode).toBe(200);
     const myCases = JSON.parse(myCasesRes.body).cases;
@@ -179,7 +189,6 @@ describe('maintenance case end-to-end lifecycle', () => {
     const strangerCasesRes = await app.inject({ method: 'GET', url: '/api/customers/me/cases', headers: actorHeaders('customer', strangerId) });
     expect(JSON.parse(strangerCasesRes.body).cases.some((c: { id: string }) => c.id === caseId)).toBe(false);
 
-    // An admin can list all cases, unscoped, and filter by state.
     const adminAllRes = await app.inject({ method: 'GET', url: '/api/admin/cases', headers: adminHeaders() });
     expect(adminAllRes.statusCode).toBe(200);
     const adminAllCases = JSON.parse(adminAllRes.body).cases;
@@ -213,9 +222,6 @@ describe('maintenance case end-to-end lifecycle', () => {
     expect(rev1Res.statusCode).toBe(201);
     const rev1ApprovalId = JSON.parse(rev1Res.body).plan.pendingApproval.id as string;
 
-    // Revising again before the customer decides on revision 1's approval leaves that approval
-    // row 'pending' (reviseServicePlan doesn't invalidate superseded approvals), but the plan
-    // itself has already moved on to different terms.
     const rev2Res = await app.inject({
       method: 'POST', url: `/api/admin/maintenance/cases/${caseId}/service-plan/revisions`, headers: adminHeaders(),
       payload: { changeReason: 'Found additional wear', estimatedTotalMinor: 18000, currency: 'usd' }
