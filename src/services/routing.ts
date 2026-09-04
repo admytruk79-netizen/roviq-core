@@ -2,6 +2,7 @@ import { pool } from '../db/pool.js';
 import { COORDINATION_ENGINE_VERSION, rankCoordinationCandidates } from './coordination-engine.js';
 import { capabilityFromCaseIntelligence, loadCaseIntelligenceForDemand } from './case-intelligence.js';
 import { recordRecommendation } from './selection-authority.js';
+import { evaluateActorServiceability, serviceabilityAllows } from './serviceability-gate.js';
 
 type Candidate = {
   actor_id: string; actor_type: string; routing_enabled: boolean; service_radius_miles: number | null;
@@ -53,11 +54,27 @@ export async function routeMaintenanceDemand(demandId: string) {
     if(excluded.includes(demand.demand_type)){rejected.push({actorId:c.actor_id,reason:'job_type_excluded'});continue;}
     if(accepted.length&&!accepted.includes(demand.demand_type)){rejected.push({actorId:c.actor_id,reason:'job_type_not_accepted'});continue;}
     if(c.active_capacity<=0&&c.earliest_available_at&&new Date(c.earliest_available_at)>new Date()){rejected.push({actorId:c.actor_id,reason:'no_current_capacity'});continue;}
+
+    const serviceability=await evaluateActorServiceability(demand.case_id,c.actor_id,requestedCapability,'route');
+    if(!serviceabilityAllows('route',serviceability.decision)){
+      rejected.push({
+        actorId:c.actor_id,
+        reason:'serviceability_blocked',
+        serviceabilityReasons:serviceability.decision.reasons,
+        capacitySource:serviceability.source
+      });
+      continue;
+    }
+
     const continuity = [demand.originating_actor_id,demand.relationship_owner_actor_id,demand.current_owner_actor_id].filter(Boolean).includes(c.actor_id) ? 1 : 0;
     const route = routeCandidates?.[c.actor_id] ?? {};
     eligible.push({actorId:c.actor_id,signals:{
       capacity:c.active_capacity,rating:c.avg_rating,onTime:c.on_time_rate,
       distanceMiles:finiteOrNull(route.distanceMiles),etaMinutes:finiteOrNull(route.etaMinutes),continuity
+    },serviceability:{
+      capacitySource:serviceability.source,
+      capacityWindowId:serviceability.capacityWindowId,
+      reasons:serviceability.decision.reasons
     }});
   }
 
@@ -75,7 +92,7 @@ export async function routeMaintenanceDemand(demandId: string) {
   const decision=await pool.query(
     `insert into routing_decisions(demand_id,eligible_actor_ids,rejected_candidates,ranking_trace,selected_actor_id,recommended_actor_id,selection_mode,decision_basis,policy_id,policy_version,rule_version)
      values($1,$2,$3,$4,null,$5,$6,$7,$8,$9,$9) returning *`,
-    [demandId,JSON.stringify(eligible.map(x=>x.actorId)),JSON.stringify(rejected),JSON.stringify(rankedForDecision),recommended,demand.selection_mode??'customer_choice',recommended?`coordination_engine:${COORDINATION_ENGINE_VERSION}:${requestedCapability}${intelligenceBasis}`:`no_eligible_actor:${requestedCapability}${intelligenceBasis}`,policy.id,policy.version]
+    [demandId,JSON.stringify(eligible.map(x=>x.actorId)),JSON.stringify(rejected),JSON.stringify(rankedForDecision),recommended,demand.selection_mode??'customer_choice',recommended?`coordination_engine:${COORDINATION_ENGINE_VERSION}:${requestedCapability}:serviceability_gated${intelligenceBasis}`:`no_eligible_actor:${requestedCapability}:serviceability_gated${intelligenceBasis}`,policy.id,policy.version]
   );
   if(demand.case_id) await recordRecommendation(demand.case_id,recommended,decision.rows[0].id);
   return {decision:decision.rows[0],ranked:rankedForDecision,recommendedActorId:recommended,rejected,policyRequired:false,engineVersion:COORDINATION_ENGINE_VERSION,intelligence,selectionMode:demand.selection_mode??'customer_choice'};
