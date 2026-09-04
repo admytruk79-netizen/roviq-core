@@ -21,7 +21,7 @@ export type ActorServiceability = {
   capacityUnits: number;
 };
 
-type CanonicalWindowRow = {
+export type CanonicalWindowRow = {
   id:string;
   capacity_state:CapacityState;
   confidence:CapacityConfidence;
@@ -76,7 +76,7 @@ export async function evaluateActorServiceability(
     [a.location_id ?? null,a.organization_id ?? null,serviceCategory ?? null]
   );
 
-  const canonicalEvaluation=evaluateCanonicalWindows(canonical.rows,constraints,intent,now);
+  const canonicalEvaluation=evaluateCanonicalWindows(canonical.rows,constraints,intent,serviceCategory ?? null,now);
   if(canonicalEvaluation) return canonicalEvaluation;
 
   if (!a.has_connection) {
@@ -102,12 +102,15 @@ export function evaluateCanonicalWindows(
   rows:CanonicalWindowRow[],
   constraints:ServiceabilityConstraint[],
   intent:ServiceabilityIntent,
+  serviceCategory:string|null=null,
   now=new Date()
 ):ActorServiceability|null {
-  if(!rows.length) return null;
   let firstRejected:ActorServiceability|null=null;
+  let sawRelevant=false;
 
   for(const row of rows){
+    if(serviceCategory && row.service_category && row.service_category!==serviceCategory) continue;
+    sawRelevant=true;
     const syncState=deriveCanonicalSyncState(row,now);
     const confidence=deriveEffectiveConfidence(row.confidence,syncState);
     const capacityUnits=Number(row.capacity_units);
@@ -131,7 +134,7 @@ export function evaluateCanonicalWindows(
     if(serviceabilityAllows(intent,decision)) return result;
     if(!firstRejected) firstRejected=result;
   }
-  return firstRejected;
+  return sawRelevant?firstRejected:null;
 }
 
 export function deriveCanonicalSyncState(row:CanonicalWindowRow,now=new Date()):SyncState {
