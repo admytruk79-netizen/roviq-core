@@ -45,11 +45,34 @@ export async function publishIntegrationEvent(input:{aggregateType:string;aggreg
     [input.aggregateType,input.aggregateId ?? null,input.eventType,input.actorId ?? null,JSON.stringify(input.payload ?? {})]
   );
   const e = event.rows[0];
+  // A webhook_subscriptions row is scoped to one actor, but nothing here previously checked that
+  // actor actually has any relationship to the case the event is about -- an event-type filter
+  // with an empty event_types array (or one that just lists this eventType) would fan every
+  // matching event, for every case on the platform, out to that one subscriber. Restrict delivery
+  // to subscribers with a genuine relation to the event's case, mirroring the same relation set
+  // loadCaseForPrincipal already uses to gate reads of the same data. Only enforced when a real
+  // aggregateId is supplied -- a service_case event published without one (as generic pub/sub
+  // mechanics tests do) has no case to scope against, so it falls back to the event-type filter.
   await pool.query(
     `insert into webhook_deliveries(subscription_id,integration_event_id)
      select s.id,$1 from webhook_subscriptions s
      where s.status='active' and (cardinality(s.event_types)=0 or $2 = any(s.event_types))
-     on conflict do nothing`,[e.id,input.eventType]
+       and (
+         $3::text is distinct from 'service_case' or $4::uuid is null
+         or exists (
+           select 1 from service_cases c
+           where c.id=$4::uuid
+             and (
+               c.customer_actor_id=s.actor_id
+               or c.current_owner_actor_id=s.actor_id
+               or exists(select 1 from matches_offers mo where mo.case_id=c.id and mo.actor_id=s.actor_id)
+               or exists(select 1 from transport_dispatches td where td.case_id=c.id and td.provider_actor_id=s.actor_id)
+               or exists(select 1 from parts_orders po where po.case_id=c.id and po.supplier_actor_id=s.actor_id)
+               or exists(select 1 from mobility_allocations ma where ma.case_id=c.id and ma.provider_actor_id=s.actor_id)
+             )
+         )
+       )
+     on conflict do nothing`,[e.id,input.eventType,input.aggregateType,input.aggregateId ?? null]
   );
   return e;
 }

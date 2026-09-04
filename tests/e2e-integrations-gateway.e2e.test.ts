@@ -179,4 +179,51 @@ describe('integrations gateway end-to-end lifecycle', () => {
     expect(deadRow.rows[0].state).toBe('dead');
     expect(deadRow.rows[0].attempt_count).toBe(8);
   });
+
+  it('scopes real case-lifecycle webhook fan-out to subscribers with a genuine relation to that case', async () => {
+    const customerRes = await app.inject({ method: 'POST', url: '/api/admin/actors', headers: adminHeaders(), payload: { actorType: 'customer' } });
+    const customerActorId = JSON.parse(customerRes.body).actor.id;
+    const outsiderRes = await app.inject({ method: 'POST', url: '/api/admin/actors', headers: adminHeaders(), payload: { actorType: 'partner', domain: 'maintenance' } });
+    const outsiderActorId = JSON.parse(outsiderRes.body).actor.id;
+
+    // Both subscriptions are wildcard (empty event_types), so only the case-relation check
+    // distinguishes them: the customer is a party to the case that's about to be created, the
+    // outsider has no relationship to it at all.
+    const relatedSubRes = await app.inject({
+      method: 'POST', url: '/api/admin/integrations/webhooks', headers: adminHeaders(),
+      payload: { actorId: customerActorId, endpointUrl: `${receiverBaseUrl}/hook`, eventTypes: [] }
+    });
+    const { subscription: relatedSub } = JSON.parse(relatedSubRes.body);
+    const outsiderSubRes = await app.inject({
+      method: 'POST', url: '/api/admin/integrations/webhooks', headers: adminHeaders(),
+      payload: { actorId: outsiderActorId, endpointUrl: `${receiverBaseUrl}/hook`, eventTypes: [] }
+    });
+    const { subscription: outsiderSub } = JSON.parse(outsiderSubRes.body);
+
+    const demandRes = await app.inject({
+      method: 'POST', url: '/api/demands', headers: actorHeaders('customer', customerActorId),
+      payload: { domain: 'maintenance', demandType: 'brake_repair', urgency: 'normal' }
+    });
+    expect(demandRes.statusCode).toBe(201);
+    const caseId = JSON.parse(demandRes.body).case.id;
+
+    const caseEvents = await pool.query(
+      `select id from integration_events where aggregate_type='service_case' and aggregate_id=$1 and event_type in ('CASE_CREATED','CASE_TRIAGE')`,
+      [caseId]
+    );
+    expect(caseEvents.rowCount).toBe(2);
+    const eventIds = caseEvents.rows.map((r) => r.id);
+
+    const relatedDeliveries = await pool.query(
+      `select 1 from webhook_deliveries where subscription_id=$1 and integration_event_id=any($2::uuid[])`,
+      [relatedSub.id, eventIds]
+    );
+    expect(relatedDeliveries.rowCount).toBe(2);
+
+    const outsiderDeliveries = await pool.query(
+      `select 1 from webhook_deliveries where subscription_id=$1 and integration_event_id=any($2::uuid[])`,
+      [outsiderSub.id, eventIds]
+    );
+    expect(outsiderDeliveries.rowCount).toBe(0);
+  });
 });
