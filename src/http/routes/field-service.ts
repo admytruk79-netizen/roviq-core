@@ -6,6 +6,7 @@ import { loadCaseForPrincipal } from '../../services/case-access.js';
 import { audit } from '../../services/audit.js';
 import { appendCaseEvent } from '../../services/orchestration.js';
 import { setCustomerSnapshot } from '../../services/operations.js';
+import { createPartsOrder } from '../../services/parts.js';
 
 const executableRepairClass = z.enum(['battery','tire','ignition','electrical_minor','fluid_service','minor_mechanical']);
 const repairClass = z.enum(['battery','tire','ignition','electrical_minor','fluid_service','minor_mechanical','unknown']);
@@ -40,13 +41,20 @@ const assessmentSchema = z.object({
 
 type Assessment = z.infer<typeof assessmentSchema>;
 type CapabilityProfile={actor_id:string;active:boolean;repair_classes:unknown;capabilities:unknown;tools:unknown;max_estimated_minutes:number|null;max_estimated_cost:string|number|null;verified_at:string|null};
-// Mirrors the full action set in migrations/020_field_service_decisions.sql's check constraint.
-// decide() below only ever returns 4 of these 6 today; 'temporary_stabilization' and 'route_to_shop'
-// are reserved outcomes with no decision criteria defined yet (see docs/FIELD_SERVICE_ONSITE_REPAIR_ARCHITECTURE.md).
 type FieldServiceAction='field_repair'|'temporary_stabilization'|'dispatch_field_technician'|'route_to_shop'|'tow_required'|'remote_review';
+type PartsOrderItem={sku:string;partNumber?:string;description?:string;quantity:number;attributes?:Record<string,unknown>};
 
 function stringArray(value:unknown):string[]{return Array.isArray(value)?value.filter((v):v is string=>typeof v==='string'):[]}
 function includesAll(have:string[],need:string[]){const set=new Set(have);return need.every(v=>set.has(v))}
+function normalizeRequiredPart(value:Record<string,unknown>):PartsOrderItem|null{
+  const sku=typeof value.sku==='string'&&value.sku.trim()?value.sku.trim():typeof value.partNumber==='string'&&value.partNumber.trim()?value.partNumber.trim():typeof value.part_number==='string'&&value.part_number.trim()?value.part_number.trim():null;
+  if(!sku)return null;
+  const partNumber=typeof value.partNumber==='string'&&value.partNumber.trim()?value.partNumber.trim():typeof value.part_number==='string'&&value.part_number.trim()?value.part_number.trim():undefined;
+  const description=typeof value.description==='string'&&value.description.trim()?value.description.trim():typeof value.name==='string'&&value.name.trim()?value.name.trim():undefined;
+  const quantity=typeof value.quantity==='number'&&Number.isInteger(value.quantity)&&value.quantity>0?value.quantity:1;
+  const attributes=Object.fromEntries(Object.entries(value).filter(([key])=>!['sku','partNumber','part_number','description','name','quantity'].includes(key)));
+  return{sku,partNumber,description,quantity,attributes:Object.keys(attributes).length?attributes:undefined};
+}
 function operatorEligible(a:Assessment,p:CapabilityProfile|null){
   if(!p||!p.active||!p.verified_at)return false;
   if(!stringArray(p.repair_classes).includes(a.repairClass))return false;
@@ -124,10 +132,23 @@ export async function fieldServiceRoutes(app:FastifyInstance){
        values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) returning *`,
       [id,b.demandId??c.demand_id??null,b.diagnosticFindingId??null,req.principal.actorId??null,action,status,b.repairClass,b.drivability,b.confidence,b.summary,JSON.stringify(b.safety),JSON.stringify(b.requiredCapabilities),JSON.stringify(b.requiredTools),JSON.stringify(b.requiredParts),JSON.stringify({operatorActorId,verifiedProfile:Boolean(profile?.verified_at),repairClasses:stringArray(profile?.repair_classes),capabilities:stringArray(profile?.capabilities),tools:stringArray(profile?.tools),partsAvailable:b.partsAvailable,role:req.principal.role}),JSON.stringify(b.evidence),b.estimatedMinutes??null,b.estimatedCost??null,b.customerAuthorizationRequired,JSON.stringify(b.metadata)]
     );
-    await appendCaseEvent(id,'FIELD_SERVICE_DECISION_PROPOSED',req.principal,{decisionId:r.rows[0].id,action,status,operatorActorId});
-    await setCustomerSnapshot(id,'field_service_assessment',action==='tow_required'?'On-site assessment requires vehicle transport.':action==='field_repair'?'An on-site repair is available.':'The on-site assessment is being reviewed.',authorizationRequired?'Approval required':'ROVIQ is coordinating the next action');
-    await audit(req.principal,'create_field_service_decision','service_case',id,action,{decisionId:r.rows[0].id,status,operatorActorId});
-    return reply.code(201).send({decision:r.rows[0]});
+    let partsOrder=null;
+    if(b.requiredParts.length>0&&!b.partsAvailable){
+      const items=b.requiredParts.map(normalizeRequiredPart).filter((item):item is PartsOrderItem=>Boolean(item));
+      if(items.length===b.requiredParts.length){
+        try{
+          partsOrder=await createPartsOrder(req.principal,{caseId:id,items,attributes:{source:'field_service_required_parts',fieldServiceDecisionId:r.rows[0].id,repairClass:b.repairClass}});
+        }catch(error){
+          console.warn('field_service_parts_order_failed',{caseId:id,decisionId:r.rows[0].id,error:error instanceof Error?error.message:'unknown_error'});
+        }
+      }else{
+        console.warn('field_service_parts_order_skipped',{caseId:id,decisionId:r.rows[0].id,reason:'required_part_identifier_missing'});
+      }
+    }
+    await appendCaseEvent(id,'FIELD_SERVICE_DECISION_PROPOSED',req.principal,{decisionId:r.rows[0].id,action,status,operatorActorId,partsOrderId:(partsOrder as any)?.order?.id??null});
+    await setCustomerSnapshot(id,'field_service_assessment',action==='tow_required'?'On-site assessment requires vehicle transport.':action==='field_repair'?'An on-site repair is available.':b.requiredParts.length>0&&!b.partsAvailable?'Required parts are being sourced for the on-site repair.':'The on-site assessment is being reviewed.',authorizationRequired?'Approval required':b.requiredParts.length>0&&!b.partsAvailable?'Waiting for parts availability':'ROVIQ is coordinating the next action');
+    await audit(req.principal,'create_field_service_decision','service_case',id,action,{decisionId:r.rows[0].id,status,operatorActorId,partsOrderId:(partsOrder as any)?.order?.id??null});
+    return reply.code(201).send({decision:r.rows[0],partsOrder});
   });
 
   app.post('/api/maintenance/cases/:id/field-service/:decisionId/authorize',{preHandler:requireRole('customer','admin')},async(req,reply)=>{
@@ -141,10 +162,6 @@ export async function fieldServiceRoutes(app:FastifyInstance){
     const status=b.approved?'authorized':'declined';
     const r=await pool.query(`update field_service_decisions set status=$1,authorized_by_actor_id=$2,customer_authorized_at=case when $3 then now() else customer_authorized_at end,updated_at=now() where id=$4 and status='authorization_required' returning *`,[status,req.principal.actorId??null,b.approved,decisionId]);
     if(!r.rowCount)return reply.code(409).send({error:'field_service_not_awaiting_authorization'});
-    // Best-effort once the exact-state-guarded update above has committed: a thrown error here must
-    // not turn a persisted transition into a 500, since the decision's status has already moved past
-    // 'authorization_required' and every retry would then be rejected by that same guard with a 409,
-    // permanently losing the event/snapshot with no way to recover it (Devin review finding on this PR).
     const sideEffects=await Promise.allSettled([
       appendCaseEvent(id,b.approved?'FIELD_SERVICE_AUTHORIZED':'FIELD_SERVICE_DECLINED',req.principal,{decisionId,action:r.rows[0].action}),
       setCustomerSnapshot(id,b.approved?'field_service_authorized':'field_service_declined',b.approved?'On-site work has been authorized.':'On-site work was declined.',b.approved?'Field operator may begin approved work':'ROVIQ will arrange another service path')
@@ -162,9 +179,6 @@ export async function fieldServiceRoutes(app:FastifyInstance){
     if(!c)return reply.code(404).send({error:'case_not_found'});
     const d=await pool.query('select * from field_service_decisions where id=$1 and case_id=$2',[decisionId,id]);if(!d.rowCount)return reply.code(404).send({error:'field_service_decision_not_found'});
     const decision=d.rows[0];
-    // Source state must match exactly: when authorization is waived, only a fresh 'proposed'
-    // decision may start; otherwise a completed/escalated/in-progress decision (status != 'proposed'
-    // or 'authorized') would restart and clobber its own terminal outcome.
     const startableStatus=decision.customer_authorization_required?'authorized':'proposed';
     if(decision.status!==startableStatus)return reply.code(409).send({error:'field_service_not_startable'});
     if(!['field_repair','temporary_stabilization'].includes(decision.action))return reply.code(409).send({error:'field_service_action_not_executable'});
@@ -174,8 +188,6 @@ export async function fieldServiceRoutes(app:FastifyInstance){
     if(!profile.rows[0]?.active||!profile.rows[0]?.verified_at)return reply.code(409).send({error:'field_service_operator_not_verified'});
     const r=await pool.query(`update field_service_decisions set status='in_progress',started_at=now(),updated_at=now() where id=$1 and status=$2 returning *`,[decisionId,startableStatus]);
     if(!r.rowCount)return reply.code(409).send({error:'field_service_not_startable'});
-    // Best-effort, same reasoning as authorize: the transition already committed, so a failure here
-    // must not 500 -- a retry would otherwise be rejected forever by the exact-state guard above.
     await appendCaseEvent(id,'FIELD_SERVICE_STARTED',req.principal,{decisionId,action:r.rows[0].action,operatorActorId}).catch(e=>console.warn('field_service_start_side_effect_failed',{decisionId,caseId:id,error:e instanceof Error?e.message:e}));
     return{decision:r.rows[0]};
   });
@@ -194,8 +206,6 @@ export async function fieldServiceRoutes(app:FastifyInstance){
     const status=b.outcome==='failed'||b.outcome==='escalated'?'escalated':'completed';
     const r=await pool.query(`update field_service_decisions set status=$1,outcome=$2,completed_at=now(),evidence=evidence || $3::jsonb,metadata=metadata || $4::jsonb,updated_at=now() where id=$5 and case_id=$6 and status='in_progress' returning *`,[status,b.outcome,JSON.stringify(b.evidence??{}),JSON.stringify(b.notes?{completionNotes:b.notes}:{}),decisionId,id]);
     if(!r.rowCount)return reply.code(409).send({error:'field_service_not_in_progress'});
-    // Best-effort, same reasoning as authorize/start: the transition already committed, so a
-    // failure here must not 500 -- a retry would otherwise be rejected forever by the 'in_progress' guard above.
     const sideEffects=await Promise.allSettled([
       appendCaseEvent(id,'FIELD_SERVICE_COMPLETED',req.principal,{decisionId,outcome:b.outcome}),
       setCustomerSnapshot(id,b.outcome==='fixed'?'field_service_fixed':b.outcome==='stabilized'?'field_service_stabilized':'field_service_escalated',b.outcome==='fixed'?'Vehicle repaired on site.':b.outcome==='stabilized'?'Vehicle stabilized on site.':'On-site work could not be completed safely.',b.outcome==='fixed'?'Confirm resolution':b.outcome==='stabilized'?'Continue with approved next step':'ROVIQ will arrange towing or specialist service')
