@@ -13,6 +13,23 @@ export async function syncOperationalConstraints(caseId:string,db:Queryable):Pro
   await syncMobilityConstraint(caseId,db);
 }
 
+export function derivePartsConstraint(counts:Record<string,number>):{status:ConstraintStatus;total:number;ready:number}{
+  const total=Object.values(counts).reduce((sum,value)=>sum+Number(value),0);
+  const ready=counts.ready??0;
+  const status:ConstraintStatus=(counts.unavailable??0)>0?'blocked':ready===total?'satisfied':'required';
+  return {status,total,ready};
+}
+
+export function deriveMobilityConstraint(states:string[]):{status:ConstraintStatus;currentState:string|null;history:Record<string,number>}{
+  const history:Record<string,number>={};
+  for(const state of states) history[state]=(history[state]??0)+1;
+  const currentState=states[0]??null;
+  if(!currentState) return {status:'required',currentState,history};
+  if(['reserved','assigned','active','return_pending','completed'].includes(currentState)) return {status:'satisfied',currentState,history};
+  if(['failed','declined'].includes(currentState)) return {status:'blocked',currentState,history};
+  return {status:'required',currentState,history};
+}
+
 async function syncPartsConstraint(caseId:string,db:Queryable){
   const result=await db.query(
     `select readiness_status,count(*)::int as count
@@ -26,29 +43,25 @@ async function syncPartsConstraint(caseId:string,db:Queryable){
     return;
   }
   const counts=Object.fromEntries(result.rows.map((row:any)=>[String(row.readiness_status),Number(row.count)]));
-  const total=Object.values(counts).reduce((sum:number,value:any)=>sum+Number(value),0);
-  const ready=(counts.ready??0)+(counts.received??0);
-  const status:ConstraintStatus=(counts.unavailable??0)>0?'blocked':ready===total?'satisfied':'required';
+  const {status,total,ready}=derivePartsConstraint(counts);
   await upsertProjection(caseId,'parts','parts-readiness',status,{counts,total,ready},db);
 }
 
 async function syncMobilityConstraint(caseId:string,db:Queryable){
   const result=await db.query(
-    `select state,count(*)::int as count
+    `select state,created_at
        from mobility_allocations
       where case_id=$1 and state<>'cancelled'
-      group by state`,
+      order by created_at desc,id desc`,
     [caseId]
   );
   if(!result.rowCount){
     await deleteProjection(caseId,'mobility-allocation',db);
     return;
   }
-  const counts=Object.fromEntries(result.rows.map((row:any)=>[String(row.state),Number(row.count)]));
-  const blocked=(counts.failed??0)+(counts.declined??0);
-  const satisfied=(counts.reserved??0)+(counts.assigned??0)+(counts.active??0)+(counts.return_pending??0)+(counts.completed??0);
-  const status:ConstraintStatus=blocked>0?'blocked':satisfied>0?'satisfied':'required';
-  await upsertProjection(caseId,'mobility','mobility-allocation',status,{counts},db);
+  const states=result.rows.map((row:any)=>String(row.state));
+  const {status,currentState,history}=deriveMobilityConstraint(states);
+  await upsertProjection(caseId,'mobility','mobility-allocation',status,{currentState,history},db);
 }
 
 async function upsertProjection(
