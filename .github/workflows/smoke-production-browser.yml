@@ -16,6 +16,7 @@ on:
       - 'tow/**'
       - 'ops/**'
       - 'portals/**'
+      - 'docs/PARTNER_DEMO_RUNBOOK.md'
       - '.github/workflows/smoke-production-browser.yml'
 
 permissions:
