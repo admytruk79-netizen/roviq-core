@@ -104,6 +104,14 @@ export async function decideApproval(principal:Principal, caseId:string, approva
     const approval = current.rows[0];
     if (approval.state !== 'pending') throw new Error('approval_already_decided');
     if (principal.role !== 'admin' && approval.requested_from_actor_id !== principal.actorId) throw new Error('forbidden');
+    // reviseServicePlan leaves an older revision's approval row 'pending' rather than invalidating
+    // it when it creates a new one, so a decision here could otherwise land on terms the plan has
+    // already moved past. Lock the same service_plans row reviseServicePlan locks (by id, matching
+    // its own by-case_id lock) so a concurrent revision can't race this decision, and require the
+    // approval still match the plan's current terms.
+    const plan = await client.query('select current_revision from service_plans where id=$1 for update',[approval.service_plan_id]);
+    if (!plan.rowCount) throw new Error('service_plan_not_found');
+    if (Number(plan.rows[0].current_revision) !== Number(approval.revision)) throw new Error('approval_revision_stale');
     const updated = await client.query(
       `update case_approvals set state=$1,decision_by_actor_id=$2,decision_reason=$3,decided_at=now() where id=$4 returning *`,
       [decision,principal.actorId ?? null,reason ?? null,approvalId]

@@ -61,7 +61,7 @@ export async function servicePlanRoutes(app:FastifyInstance) {
       const message = error instanceof Error ? error.message : 'approval_decision_failed';
       if (message === 'case_not_found' || message === 'approval_not_found') return reply.code(404).send({error:message});
       if (message === 'forbidden') return reply.code(403).send({error:message});
-      if (message === 'approval_already_decided') return reply.code(409).send({error:message});
+      if (message === 'approval_already_decided' || message === 'approval_revision_stale') return reply.code(409).send({error:message});
       throw error;
     }
   });

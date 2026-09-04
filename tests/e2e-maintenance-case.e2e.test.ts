@@ -198,4 +198,43 @@ describe('maintenance case end-to-end lifecycle', () => {
     const nonAdminRes = await app.inject({ method: 'GET', url: '/api/admin/cases', headers: actorHeaders('customer', customerActorId) });
     expect(nonAdminRes.statusCode).toBe(403);
   });
+
+  it('rejects a decision on an approval once its plan has moved to a newer revision', async () => {
+    const demandRes = await app.inject({
+      method: 'POST', url: '/api/demands', headers: actorHeaders('customer', customerActorId),
+      payload: { domain: 'maintenance', demandType: 'wont_start', urgency: 'normal' }
+    });
+    const caseId = JSON.parse(demandRes.body).case.id as string;
+
+    const rev1Res = await app.inject({
+      method: 'POST', url: `/api/admin/maintenance/cases/${caseId}/service-plan/revisions`, headers: adminHeaders(),
+      payload: { changeReason: 'Initial estimate', estimatedTotalMinor: 10000, currency: 'usd' }
+    });
+    expect(rev1Res.statusCode).toBe(201);
+    const rev1ApprovalId = JSON.parse(rev1Res.body).plan.pendingApproval.id as string;
+
+    // Revising again before the customer decides on revision 1's approval leaves that approval
+    // row 'pending' (reviseServicePlan doesn't invalidate superseded approvals), but the plan
+    // itself has already moved on to different terms.
+    const rev2Res = await app.inject({
+      method: 'POST', url: `/api/admin/maintenance/cases/${caseId}/service-plan/revisions`, headers: adminHeaders(),
+      payload: { changeReason: 'Found additional wear', estimatedTotalMinor: 18000, currency: 'usd' }
+    });
+    expect(rev2Res.statusCode).toBe(201);
+    const rev2ApprovalId = JSON.parse(rev2Res.body).plan.pendingApproval.id as string;
+
+    const staleDecisionRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/approvals/${rev1ApprovalId}/decision`, headers: actorHeaders('customer', customerActorId),
+      payload: { decision: 'approved' }
+    });
+    expect(staleDecisionRes.statusCode).toBe(409);
+    expect(JSON.parse(staleDecisionRes.body).error).toBe('approval_revision_stale');
+
+    const currentDecisionRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/approvals/${rev2ApprovalId}/decision`, headers: actorHeaders('customer', customerActorId),
+      payload: { decision: 'approved' }
+    });
+    expect(currentDecisionRes.statusCode).toBe(200);
+    expect(JSON.parse(currentDecisionRes.body).approval.state).toBe('approved');
+  });
 });
