@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   deriveCanonicalSyncState,
+  evaluateActorServiceability,
   evaluateCanonicalWindows,
   type CanonicalWindowRow
 } from './serviceability-gate.js';
@@ -69,5 +70,30 @@ describe('canonical serviceability gate',()=>{
     expect(result?.source).toBe('canonical_capacity');
     expect(result?.capacityUnits).toBe(4);
     expect(result?.decision.eligible).toBe(true);
+  });
+
+  it('allows a location actor to use organization-global canonical capacity',async()=>{
+    const queries:string[]=[];
+    const db:any={query:async(sql:string)=>{
+      queries.push(sql);
+      if(queries.length===1) return {rowCount:1,rows:[{organization_id:'22222222-2222-2222-2222-222222222222',location_id:'33333333-3333-3333-3333-333333333333',has_connection_model:true}]};
+      return {rowCount:1,rows:[row({id:'org-global',capacity_units:3})]};
+    }};
+    const result=await evaluateActorServiceability(null,'44444444-4444-4444-4444-444444444444','repair','confirm',db,new Date('2026-09-04T23:00:00Z'));
+    expect(result.capacityWindowId).toBe('org-global');
+    expect(result.capacityUnits).toBe(3);
+    expect(queries[0]).toContain('psc.organization_id=a.organization_id and psc.location_id is null');
+    expect(queries[1]).toContain('cw.organization_id=$2 and cw.location_id is null');
+  });
+
+  it('does not fall back to legacy capacity after an actor has entered the canonical connection model',async()=>{
+    const db:any={query:async(sql:string)=>{
+      if(sql.includes('from actors')) return {rowCount:1,rows:[{organization_id:'22222222-2222-2222-2222-222222222222',location_id:'33333333-3333-3333-3333-333333333333',has_connection_model:true}]};
+      if(sql.includes('from capacity_windows')) return {rowCount:0,rows:[]};
+      throw new Error('legacy capacity should not be queried');
+    }};
+    const result=await evaluateActorServiceability(null,'44444444-4444-4444-4444-444444444444','repair','route',db,new Date('2026-09-04T23:00:00Z'));
+    expect(result.source).toBe('missing');
+    expect(result.decision.eligible).toBe(false);
   });
 });
