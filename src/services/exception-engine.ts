@@ -48,10 +48,10 @@ export async function updateExceptionState(principal: Principal, exceptionId: st
        where id=$5 returning *`,
       [input.state,input.resolutionCode ?? null,JSON.stringify([historyEntry]),principal.actorId ?? null,exceptionId]
     );
-    await client.query('commit');
     await appendCaseEvent(row.case_id,'CASE_EXCEPTION_UPDATED',principal,{
       exceptionId,exceptionCode:row.exception_code,from:row.state,to:input.state,resolutionCode:input.resolutionCode ?? null
-    });
+    },client);
+    await client.query('commit');
     return updated.rows[0];
   } catch (error) {
     await client.query('rollback');
@@ -61,15 +61,29 @@ export async function updateExceptionState(principal: Principal, exceptionId: st
 
 export async function assignException(principal: Principal, exceptionId: string, input:{ ownerActorId?:string|null; dueAt?:string|null }) {
   if (principal.role !== 'admin') throw new Error('exception_admin_only');
-  const current=await pool.query('select case_id from case_exceptions where id=$1',[exceptionId]);
-  if(!current.rowCount) throw new Error('exception_not_found');
-  await assertCaseAccess(principal,current.rows[0].case_id);
-  const updated=await pool.query(
-    `update case_exceptions set owner_actor_id=$1,due_at=$2 where id=$3 returning *`,
-    [input.ownerActorId ?? null,input.dueAt ?? null,exceptionId]
-  );
-  await appendCaseEvent(current.rows[0].case_id,'CASE_EXCEPTION_ASSIGNED',principal,{exceptionId,...input});
-  return updated.rows[0];
+  const client = await pool.connect();
+  try {
+    await client.query('begin');
+    const current=await client.query('select * from case_exceptions where id=$1 for update',[exceptionId]);
+    if(!current.rowCount) throw new Error('exception_not_found');
+    const row=current.rows[0];
+    await assertCaseAccess(principal,row.case_id,client);
+    const updated=await client.query(
+      `update case_exceptions set owner_actor_id=$1,due_at=$2 where id=$3 returning *`,
+      [input.ownerActorId ?? null,input.dueAt ?? null,exceptionId]
+    );
+    await appendCaseEvent(row.case_id,'CASE_EXCEPTION_ASSIGNED',principal,{
+      exceptionId,
+      exceptionCode:row.exception_code,
+      ownerActorId:input.ownerActorId ?? null,
+      dueAt:input.dueAt ?? null
+    },client);
+    await client.query('commit');
+    return updated.rows[0];
+  } catch(error) {
+    await client.query('rollback');
+    throw error;
+  } finally { client.release(); }
 }
 
 export async function getExceptionQueue(input:{ state?:ExceptionState; severity?:string; limit?:number }={}) {
