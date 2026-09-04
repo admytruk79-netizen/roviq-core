@@ -33,6 +33,7 @@ export type CanonicalWindowRow = {
   connection_status:string|null;
   connection_last_success_at:string|Date|null;
   service_category:string|null;
+  scope_rank?:number|string;
 };
 
 export async function evaluateActorServiceability(
@@ -48,9 +49,11 @@ export async function evaluateActorServiceability(
     `select a.organization_id,a.location_id,
             exists(
               select 1 from partner_system_connections psc
-              where (psc.location_id=a.location_id or (a.location_id is null and psc.organization_id=a.organization_id))
-                and psc.connection_status in ('active','degraded','failed')
-            ) as has_connection
+              where (
+                (a.location_id is not null and psc.location_id=a.location_id)
+                or (a.organization_id is not null and psc.organization_id=a.organization_id and psc.location_id is null)
+              )
+            ) as has_connection_model
      from actors a where a.id=$1`,
     [actorId]
   );
@@ -65,23 +68,24 @@ export async function evaluateActorServiceability(
   const canonical = await db.query<CanonicalWindowRow>(
     `select cw.id,cw.capacity_state,cw.confidence,cw.sync_state,cw.capacity_units,cw.updated_at,
             cw.source_connection_id,cw.service_category,
-            psc.mode as connection_mode,psc.connection_status,psc.last_success_at as connection_last_success_at
+            psc.mode as connection_mode,psc.connection_status,psc.last_success_at as connection_last_success_at,
+            case when $1::uuid is not null and cw.location_id=$1 then 0 else 1 end as scope_rank
        from capacity_windows cw
        left join partner_system_connections psc on psc.id=cw.source_connection_id
       where cw.window_start<=now() and cw.window_end>now()
         and (
           ($1::uuid is not null and cw.location_id=$1)
-          or ($1::uuid is null and $2::uuid is not null and cw.organization_id=$2)
+          or ($2::uuid is not null and cw.organization_id=$2 and cw.location_id is null)
         )
         and ($3::text is null or cw.service_category is null or cw.service_category=$3)
-      order by (cw.service_category=$3) desc nulls last,cw.updated_at desc,cw.capacity_units desc`,
+      order by scope_rank asc,(cw.service_category=$3) desc nulls last,cw.updated_at desc,cw.capacity_units desc`,
     [a.location_id ?? null,a.organization_id ?? null,serviceCategory ?? null]
   );
 
   const canonicalEvaluation=evaluateCanonicalWindows(canonical.rows,constraints,intent,serviceCategory ?? null,now);
   if(canonicalEvaluation) return canonicalEvaluation;
 
-  if (!a.has_connection) {
+  if (!a.has_connection_model) {
     const legacy=await db.query(
       `select coalesce(sum(quantity),0)::float as units
        from capacity_snapshots where actor_id=$1 and start_at<=now() and end_at>now()`,
@@ -141,7 +145,7 @@ export function evaluateCanonicalWindows(
 
 export function deriveCanonicalSyncState(row:CanonicalWindowRow,now=new Date()):SyncState {
   if(row.connection_status==='failed'||row.connection_status==='revoked') return 'failed';
-  if(row.connection_status==='degraded'||row.connection_status==='paused') return 'degraded';
+  if(row.connection_status==='degraded'||row.connection_status==='paused'||row.connection_status==='planned') return 'degraded';
 
   if(row.connection_mode==='roviq_native') {
     return row.sync_state==='failed'?'failed':row.sync_state==='manual'?'manual':'current';
