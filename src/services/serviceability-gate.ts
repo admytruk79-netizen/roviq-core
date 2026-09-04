@@ -1,5 +1,4 @@
 import type { PoolClient } from 'pg';
-import { pool } from '../db/pool.js';
 import {
   CAPACITY_CURRENT_MAX_AGE_MS,
   CAPACITY_STALE_MAX_AGE_MS,
@@ -40,10 +39,11 @@ export async function evaluateActorServiceability(
   actorId: string,
   serviceCategory: string | null | undefined,
   intent: ServiceabilityIntent,
-  queryable: Queryable = pool,
+  queryable?: Queryable,
   now = new Date()
 ): Promise<ActorServiceability> {
-  const actor = await queryable.query(
+  const db = queryable ?? (await import('../db/pool.js')).pool;
+  const actor = await db.query(
     `select a.organization_id,a.location_id,
             exists(
               select 1 from partner_system_connections psc
@@ -59,8 +59,8 @@ export async function evaluateActorServiceability(
   }
 
   const a = actor.rows[0];
-  const constraints = caseId ? await loadConstraints(caseId,queryable) : [];
-  const canonical = await queryable.query<CanonicalWindowRow>(
+  const constraints = caseId ? await loadConstraints(caseId,db) : [];
+  const canonical = await db.query<CanonicalWindowRow>(
     `select cw.id,cw.capacity_state,cw.confidence,cw.sync_state,cw.capacity_units,cw.updated_at,
             cw.source_connection_id,cw.service_category,
             psc.mode as connection_mode,psc.connection_status,psc.last_success_at as connection_last_success_at
@@ -80,7 +80,7 @@ export async function evaluateActorServiceability(
   if(canonicalEvaluation) return canonicalEvaluation;
 
   if (!a.has_connection) {
-    const legacy=await queryable.query(
+    const legacy=await db.query(
       `select coalesce(sum(quantity),0)::float as units
        from capacity_snapshots where actor_id=$1 and start_at<=now() and end_at>now()`,
       [actorId]
