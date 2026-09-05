@@ -93,6 +93,28 @@ describe('cross-role maintenance case lifecycle', () => {
     expect(findingRes.statusCode).toBe(201);
     expect(JSON.parse(findingRes.body).case.state).toBe('tow_pending');
 
+    // Case-scoped read of the same finding, gated by the shared case access service rather than
+    // the demand-scoped route's own matches_offers check -- the diagnostic who recorded it and the
+    // case's customer can both read it, an actor with no relation to the case yet cannot.
+    const findingsRes = await app.inject({
+      method: 'GET', url: `/api/maintenance/cases/${caseId}/diagnostic-findings`, headers: actorHeaders('diagnostic', diagnosticId)
+    });
+    expect(findingsRes.statusCode).toBe(200);
+    const findings = JSON.parse(findingsRes.body).findings;
+    expect(findings).toHaveLength(1);
+    expect(findings[0].disposition).toBe('route_to_tow');
+    expect(findings[0].drivability).toBe('non_drivable');
+
+    const customerFindingsRes = await app.inject({
+      method: 'GET', url: `/api/maintenance/cases/${caseId}/diagnostic-findings`, headers: actorHeaders('customer', customerId)
+    });
+    expect(customerFindingsRes.statusCode).toBe(200);
+
+    const unrelatedFindingsRes = await app.inject({
+      method: 'GET', url: `/api/maintenance/cases/${caseId}/diagnostic-findings`, headers: actorHeaders('tow', towId)
+    });
+    expect(unrelatedFindingsRes.statusCode).toBe(403);
+
     const dispatchRes = await app.inject({
       method: 'POST', url: '/api/admin/transport', headers: adminHeaders(),
       payload: {

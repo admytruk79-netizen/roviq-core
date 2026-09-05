@@ -7,6 +7,8 @@ import type {
   ActorSummary,
   CaseTransition,
   CustomerSnapshot,
+  DiagnosticFinding,
+  FieldServiceDecision,
   PaymentIntent,
   RoutingCandidate,
   ServiceCase,
@@ -33,6 +35,8 @@ export function CaseDetail() {
   const [transitions, setTransitions] = useState<CaseTransition[]>([]);
   const [actors, setActors] = useState<ActorSummary[]>([]);
   const [dispatches, setDispatches] = useState<TransportDispatch[]>([]);
+  const [findings, setFindings] = useState<DiagnosticFinding[]>([]);
+  const [fieldServiceDecisions, setFieldServiceDecisions] = useState<FieldServiceDecision[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const [quoteReason, setQuoteReason] = useState('');
@@ -65,6 +69,8 @@ export function CaseDetail() {
   const diagnostics = actors.filter((actor) => actor.actor_type === 'diagnostic');
   const towProviders = actors.filter((actor) => actor.actor_type === 'tow');
   const latestTowDispatch = dispatches.find((dispatch) => dispatch.transport_type === 'tow' && dispatch.status !== 'cancelled') ?? null;
+  const latestFinding = findings[0] ?? null;
+  const latestFieldServiceDecision = fieldServiceDecisions[0] ?? null;
   const repairCandidates = routingCandidates
     .map((candidate) => ({ candidate, actor: actors.find((actor) => actor.id === candidate.actorId) }))
     .filter((entry): entry is { candidate: RoutingCandidate; actor: ActorSummary } => Boolean(entry.actor));
@@ -73,14 +79,16 @@ export function CaseDetail() {
     if (!id) return;
     setError(null);
     try {
-      const [caseRes, planRes, paymentsRes, timelineRes, transitionsRes, actorsRes, dispatchRes] = await Promise.all([
+      const [caseRes, planRes, paymentsRes, timelineRes, transitionsRes, actorsRes, dispatchRes, findingsRes, fieldServiceRes] = await Promise.all([
         api.get<{ case: ServiceCase; customerSnapshot: CustomerSnapshot }>(`/api/maintenance/cases/${id}`),
         api.get<ServicePlanResponse>(`/api/maintenance/cases/${id}/service-plan`).catch(() => null),
         api.get<{ payments: PaymentIntent[] }>(`/api/maintenance/cases/${id}/payments`),
         api.get<{ timeline: TimelineEvent[] }>(`/api/maintenance/cases/${id}/timeline`),
         api.get<{ transitions: CaseTransition[] }>(`/api/maintenance/cases/${id}/transitions`),
         api.get<{ actors: ActorSummary[] }>('/api/admin/actors?status=active'),
-        api.get<{ dispatches: TransportDispatch[] }>(`/api/admin/transport?caseId=${id}`).catch(() => ({ dispatches: [] }))
+        api.get<{ dispatches: TransportDispatch[] }>(`/api/admin/transport?caseId=${id}`).catch(() => ({ dispatches: [] })),
+        api.get<{ findings: DiagnosticFinding[] }>(`/api/maintenance/cases/${id}/diagnostic-findings`).catch(() => ({ findings: [] })),
+        api.get<{ decisions: FieldServiceDecision[] }>(`/api/maintenance/cases/${id}/field-service`).catch(() => ({ decisions: [] }))
       ]);
       setCaseData(caseRes.case);
       setSnapshot(caseRes.customerSnapshot);
@@ -90,6 +98,8 @@ export function CaseDetail() {
       setTransitions(transitionsRes.transitions);
       setActors(actorsRes.actors);
       setDispatches(dispatchRes.dispatches);
+      setFindings(findingsRes.findings);
+      setFieldServiceDecisions(fieldServiceRes.decisions);
       setDiagnosticActorId((current) => current && actorsRes.actors.some((actor) => actor.id === current && actor.actor_type === 'diagnostic') ? current : '');
       setTowActorId((current) => current && actorsRes.actors.some((actor) => actor.id === current && actor.actor_type === 'tow') ? current : '');
       if (caseRes.case.state !== 'provider_selection') {
@@ -349,6 +359,39 @@ export function CaseDetail() {
           )}
           {diagnosticDispatchError && <p className="mt-2 text-sm text-red-600">{diagnosticDispatchError}</p>}
           {diagnosticDispatchSuccess && <p className="mt-2 text-sm text-emerald-700">{diagnosticDispatchSuccess}</p>}
+        </section>
+      )}
+
+      {(latestFinding || latestFieldServiceDecision) && (
+        <section className="rounded-lg border border-slate-200 bg-white p-4">
+          <h2 className="text-sm font-semibold text-slate-700">Latest diagnostic finding</h2>
+          {latestFinding && (
+            <div className="mt-2 space-y-1">
+              <p className="text-sm text-slate-700">{latestFinding.summary}</p>
+              <p className="text-xs text-slate-500">
+                Drivability {humanizeToken(latestFinding.drivability)} · Disposition {humanizeToken(latestFinding.disposition)}
+                {latestFinding.confidence != null ? ` · Confidence ${Math.round(latestFinding.confidence * 100)}%` : ''}
+                {' · '}{formatDateTime(latestFinding.created_at)}
+              </p>
+            </div>
+          )}
+          {latestFieldServiceDecision && (
+            <div className={latestFinding ? 'mt-4 border-t border-slate-100 pt-4' : 'mt-2'}>
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-400">Field service decision</p>
+              <p className="mt-1 text-sm text-slate-700">{latestFieldServiceDecision.summary}</p>
+              <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                <span className="font-medium text-slate-700">{humanizeToken(latestFieldServiceDecision.action)}</span>
+                <StatusBadge state={latestFieldServiceDecision.status} />
+                {latestFieldServiceDecision.customer_authorization_required && (
+                  <span>
+                    {latestFieldServiceDecision.customer_authorized_at
+                      ? `Customer authorized ${formatDateTime(latestFieldServiceDecision.customer_authorized_at)}`
+                      : 'Awaiting customer authorization'}
+                  </span>
+                )}
+              </p>
+            </div>
+          )}
         </section>
       )}
 

@@ -128,6 +128,32 @@ export type CaseException = {
 
 export type CaseTransition = { toState: string; terminal: boolean };
 
+export type DiagnosticFinding = {
+  id: string;
+  demand_id: string;
+  case_id: string | null;
+  finding_code: string | null;
+  summary: string;
+  drivability: 'drivable' | 'limited' | 'non_drivable' | 'unknown';
+  disposition: 'diagnose_only' | 'diagnose_and_fix' | 'route_to_shop' | 'route_to_tow';
+  confidence: number | null;
+  created_at: string;
+};
+
+export type FieldServiceDecision = {
+  id: string;
+  case_id: string;
+  action: 'field_repair' | 'temporary_stabilization' | 'dispatch_field_technician' | 'route_to_shop' | 'tow_required' | 'remote_review';
+  status: 'proposed' | 'authorization_required' | 'authorized' | 'in_progress' | 'completed' | 'declined' | 'escalated' | 'cancelled';
+  summary: string;
+  repair_class: string;
+  drivability: 'drivable' | 'limited' | 'non_drivable' | 'unknown' | null;
+  confidence: string | null;
+  customer_authorization_required: boolean;
+  customer_authorized_at: string | null;
+  created_at: string;
+};
+
 export const CASE_STATES = [
   'intake',
   'triage',
