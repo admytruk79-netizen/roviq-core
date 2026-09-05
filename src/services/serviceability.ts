@@ -3,7 +3,7 @@ import type { CapacityConfidence, CapacityState, SyncState } from './liveCapacit
 export type ConstraintStatus = 'required' | 'satisfied' | 'waived' | 'blocked' | 'unknown';
 
 export type ServiceabilityConstraint = {
-  type: 'customer_time' | 'resource' | 'capability' | 'parts' | 'mobility' | 'approval' | 'other';
+  type: 'customer_time' | 'resource' | 'capability' | 'parts' | 'mobility' | 'approval' | 'transport' | 'other';
   status: ConstraintStatus;
   required?: boolean;
   details?: Record<string, unknown>;
