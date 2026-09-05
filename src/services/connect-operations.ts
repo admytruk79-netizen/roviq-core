@@ -50,7 +50,7 @@ export function deriveConnectHealth(input:{
 
 export async function listConnectConnections(){
   const r=await pool.query(`
-    select c.*,o.name as organization_name,l.name as location_name,
+    select c.*,o.display_name as organization_name,l.name as location_name,
       (select count(*)::int from integration_sync_events e where e.connection_id=c.id and e.status='failed' and e.created_at>now()-interval '24 hours') as failures_24h,
       (select max(e.created_at) from integration_sync_events e where e.connection_id=c.id) as latest_event_at
     from partner_system_connections c
