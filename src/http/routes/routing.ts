@@ -14,12 +14,26 @@ export async function routingRoutes(app:FastifyInstance){
    const result=await routeMaintenanceDemand(id);
    const caseResult=await pool.query('select * from service_cases where demand_id=$1 order by created_at desc limit 1',[id]);
    let serviceCase=caseResult.rows[0]??null;
-   if(serviceCase&&['triage','diagnostic_in_progress'].includes(serviceCase.state))serviceCase=await transitionCase(req.principal,serviceCase.id,'provider_selection',{source:'routing_engine'});
    let offer=null; let selection:null|{caseId:string;selectedActorId:string;selectionMode:'auto_dispatch'}=null;
    const recommended=result.recommendedActorId??null;
+
+   // For auto-dispatch, reserve/commit capacity before moving the case into the
+   // provider-selection handoff. If capacity changes after ranking, the case stays
+   // in its prior state and the caller receives a normal routing conflict.
    if(serviceCase&&recommended&&serviceCase.selection_mode==='auto_dispatch'){
-    selection=await autoDispatchCase(serviceCase.id,recommended,result.decision?.id??null,{source:'routing_engine'});
+    try{
+     selection=await autoDispatchCase(serviceCase.id,recommended,result.decision?.id??null,{source:'routing_engine'});
+    }catch(error){
+     if(error instanceof Error&&error.message==='actor_not_serviceable'){
+      await raiseException(serviceCase.id,'PROVIDER_CAPACITY_CHANGED','Recommended provider capacity changed before auto-dispatch could commit.','warning',{demandId:id,recommendedActorId:recommended});
+      return reply.code(409).send({error:'provider_capacity_changed',recommendedActorId:recommended,retryable:true});
+     }
+     throw error;
+    }
    }
+
+   if(serviceCase&&['triage','diagnostic_in_progress'].includes(serviceCase.state))serviceCase=await transitionCase(req.principal,serviceCase.id,'provider_selection',{source:'routing_engine'});
+
    // An offer is an invitation, not a provider selection. For customer/dealer choice,
    // the recommendation remains visible until the authorized selector chooses.
    if(body.createOffer&&recommended&&serviceCase?.selection_mode==='auto_dispatch'){

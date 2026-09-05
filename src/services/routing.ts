@@ -1,7 +1,8 @@
 import { pool } from '../db/pool.js';
 import { COORDINATION_ENGINE_VERSION, rankCoordinationCandidates } from './coordination-engine.js';
-import { capabilityFromCaseIntelligence, loadCaseIntelligenceForDemand } from './case-intelligence.js';
+import { resolveRequestedCapabilityForDemand } from './case-intelligence.js';
 import { recordRecommendation } from './selection-authority.js';
+import { evaluateActorServiceability, serviceabilityAllows, type ServiceabilityIntent } from './serviceability-gate.js';
 
 type Candidate = {
   actor_id: string; actor_type: string; routing_enabled: boolean; service_radius_miles: number | null;
@@ -10,6 +11,10 @@ type Candidate = {
 };
 
 type RoutingPolicy = { id:string; version:number; configuration:{ weights?:Record<string,number>; defaults?:Record<string,number>; limits?:Record<string,number>; coordination?:{enabled?:boolean;maxAdjustment?:number;continuityBoost?:number;balanceBoost?:number;spatialBoost?:number;reliabilityBoost?:number;} } };
+
+export function routingIntentForSelectionMode(selectionMode:string|null|undefined):ServiceabilityIntent{
+  return selectionMode==='auto_dispatch'?'confirm':'route';
+}
 
 export async function routeMaintenanceDemand(demandId: string) {
   const demandResult = await pool.query(
@@ -24,9 +29,8 @@ export async function routeMaintenanceDemand(demandId: string) {
   const demand = demandResult.rows[0];
   if (demand.domain_code !== 'maintenance') throw new Error('unsupported_domain');
 
-  const intelligence = await loadCaseIntelligenceForDemand(demandId);
-  const aiCapability = capabilityFromCaseIntelligence(intelligence);
-  const requestedCapability = demand.attributes?.requiredCapability ?? aiCapability ?? capabilityForDemand(demand.demand_type,demand.attributes);
+  const { capability:requestedCapability, intelligence } = await resolveRequestedCapabilityForDemand(demandId);
+  const routingIntent=routingIntentForSelectionMode(demand.selection_mode);
 
   const spatial = demand.case_id
     ? await pool.query('select route_context from case_spatial_context where case_id=$1',[demand.case_id])
@@ -52,12 +56,33 @@ export async function routeMaintenanceDemand(demandId: string) {
     if(!c.routing_enabled){rejected.push({actorId:c.actor_id,reason:'routing_disabled'});continue;}
     if(excluded.includes(demand.demand_type)){rejected.push({actorId:c.actor_id,reason:'job_type_excluded'});continue;}
     if(accepted.length&&!accepted.includes(demand.demand_type)){rejected.push({actorId:c.actor_id,reason:'job_type_not_accepted'});continue;}
-    if(c.active_capacity<=0&&c.earliest_available_at&&new Date(c.earliest_available_at)>new Date()){rejected.push({actorId:c.actor_id,reason:'no_current_capacity'});continue;}
+
+    const serviceability=await evaluateActorServiceability(demand.case_id,c.actor_id,requestedCapability,routingIntent);
+    if(!serviceabilityAllows(routingIntent,serviceability.decision)){
+      rejected.push({
+        actorId:c.actor_id,
+        reason:routingIntent==='confirm'?'not_confirmable_for_auto_dispatch':'serviceability_blocked',
+        serviceabilityReasons:serviceability.decision.reasons,
+        capacitySource:serviceability.source
+      });
+      continue;
+    }
+
+    if(serviceability.source==='legacy_capacity'&&serviceability.capacityUnits<=0&&c.earliest_available_at&&new Date(c.earliest_available_at)>new Date()){
+      rejected.push({actorId:c.actor_id,reason:'no_current_capacity'});
+      continue;
+    }
+
     const continuity = [demand.originating_actor_id,demand.relationship_owner_actor_id,demand.current_owner_actor_id].filter(Boolean).includes(c.actor_id) ? 1 : 0;
     const route = routeCandidates?.[c.actor_id] ?? {};
     eligible.push({actorId:c.actor_id,signals:{
-      capacity:c.active_capacity,rating:c.avg_rating,onTime:c.on_time_rate,
+      capacity:serviceability.capacityUnits,rating:c.avg_rating,onTime:c.on_time_rate,
       distanceMiles:finiteOrNull(route.distanceMiles),etaMinutes:finiteOrNull(route.etaMinutes),continuity
+    },serviceability:{
+      capacitySource:serviceability.source,
+      capacityWindowId:serviceability.capacityWindowId,
+      capacityUnits:serviceability.capacityUnits,
+      reasons:serviceability.decision.reasons
     }});
   }
 
@@ -75,13 +100,12 @@ export async function routeMaintenanceDemand(demandId: string) {
   const decision=await pool.query(
     `insert into routing_decisions(demand_id,eligible_actor_ids,rejected_candidates,ranking_trace,selected_actor_id,recommended_actor_id,selection_mode,decision_basis,policy_id,policy_version,rule_version)
      values($1,$2,$3,$4,null,$5,$6,$7,$8,$9,$9) returning *`,
-    [demandId,JSON.stringify(eligible.map(x=>x.actorId)),JSON.stringify(rejected),JSON.stringify(rankedForDecision),recommended,demand.selection_mode??'customer_choice',recommended?`coordination_engine:${COORDINATION_ENGINE_VERSION}:${requestedCapability}${intelligenceBasis}`:`no_eligible_actor:${requestedCapability}${intelligenceBasis}`,policy.id,policy.version]
+    [demandId,JSON.stringify(eligible.map(x=>x.actorId)),JSON.stringify(rejected),JSON.stringify(rankedForDecision),recommended,demand.selection_mode??'customer_choice',recommended?`coordination_engine:${COORDINATION_ENGINE_VERSION}:${requestedCapability}:serviceability_gated${intelligenceBasis}`:`no_eligible_actor:${requestedCapability}:serviceability_gated${intelligenceBasis}`,policy.id,policy.version]
   );
   if(demand.case_id) await recordRecommendation(demand.case_id,recommended,decision.rows[0].id);
   return {decision:decision.rows[0],ranked:rankedForDecision,recommendedActorId:recommended,rejected,policyRequired:false,engineVersion:COORDINATION_ENGINE_VERSION,intelligence,selectionMode:demand.selection_mode??'customer_choice'};
 }
 
 async function getActivePolicy(domainId:string,policyKey:string):Promise<RoutingPolicy|null>{const r=await pool.query<RoutingPolicy>(`select id,version,configuration from routing_policies where domain_id=$1 and policy_key=$2 and active=true order by version desc limit 1`,[domainId,policyKey]);return r.rows[0]??null;}
-function capabilityForDemand(demandType:string,attributes:any):string{if(attributes?.drivability==='non_drivable')return'tow';if(demandType.includes('diagnostic')||attributes?.requiresDiagnostic===true)return'diagnostics';if(demandType.includes('tow'))return'tow';if(demandType.includes('part'))return'parts_supply';return'repair';}
 function positiveInteger(value:unknown){return typeof value==='number'&&Number.isInteger(value)&&value>0?value:null;}
 function finiteOrNull(value:unknown){return typeof value==='number'&&Number.isFinite(value)?value:null;}

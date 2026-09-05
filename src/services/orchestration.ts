@@ -5,6 +5,7 @@ import type { Principal } from '../types/principal.js';
 import { audit } from './audit.js';
 import { assertCaseAccess } from './case-access.js';
 import { publishIntegrationEvent } from './integration-gateway.js';
+import { consumeCaseCapacity, releaseCaseCapacity } from './capacity-reservation.js';
 
 export type CaseState =
   | 'intake' | 'triage' | 'diagnostic_pending' | 'diagnostic_in_progress'
@@ -12,6 +13,8 @@ export type CaseState =
   | 'repair_in_progress' | 'parts_pending' | 'payment_pending' | 'completed' | 'cancelled';
 
 export type SelectionMode = 'customer_choice' | 'dealer_controlled' | 'auto_dispatch' | 'ops_override';
+
+type Queryable = Pick<PoolClient, 'query'>;
 
 export async function createServiceCase(principal: Principal, input: {
   demandId?: string; marketId?: string; locationId?: string; priority?: string;
@@ -97,6 +100,8 @@ export async function transitionCase(principal: Principal, caseId: string, toSta
       `update service_cases set state=$1, version=version+1, updated_at=now() ${terminalSql} where id=$2 returning *`,
       [toState,caseId]
     );
+    if(toState==='cancelled') await releaseCaseCapacity(caseId,client);
+    if(toState==='completed') await consumeCaseCapacity(caseId,client);
     await client.query(
       `insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload)
        values('service_case',$1,$2,$3,$4)`,
@@ -123,8 +128,8 @@ export async function transitionCase(principal: Principal, caseId: string, toSta
   } finally { client.release(); }
 }
 
-export async function appendCaseEvent(caseId: string, eventType: string, principal: Principal, payload: Record<string, unknown> = {}) {
-  await pool.query(
+export async function appendCaseEvent(caseId: string, eventType: string, principal: Principal, payload: Record<string, unknown> = {}, queryable: Queryable = pool) {
+  await queryable.query(
     `insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload)
      values('service_case',$1,$2,$3,$4)`,
     [caseId,eventType,principal.actorId ?? null,JSON.stringify(payload)]
