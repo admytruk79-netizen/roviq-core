@@ -289,7 +289,7 @@ export async function hmacSha256Hex(secret, message) {
 
 // Mirrors src/services/integration-gateway.ts's deliverWebhookBatch (same claim/retry/backoff
 // shape as processNotificationBatchNative above), reimplemented against the Neon HTTP driver's
-// single-statement tagged-template calls -- that Fastify code uses a pg Pool transaction and
+// single-statement tagged-template calls -- that Node service code uses a pg Pool transaction and
 // node:crypto, neither of which this native Worker uses -- so this is what actually runs delivery
 // in production. The admin-triggered POST /api/admin/integrations/deliver route stays for local/
 // manual use, but until this existed, production webhook delivery only ever ran when an admin
