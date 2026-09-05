@@ -280,6 +280,77 @@ async function processNotificationBatchNative(sql, workerId = 'cloudflare-cron',
   return results;
 }
 
+export async function hmacSha256Hex(secret, message) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const signature = await crypto.subtle.sign('HMAC', key, enc.encode(message));
+  return [...new Uint8Array(signature)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Mirrors src/services/integration-gateway.ts's deliverWebhookBatch (same claim/retry/backoff
+// shape as processNotificationBatchNative above), reimplemented against the Neon HTTP driver's
+// single-statement tagged-template calls -- that Fastify code uses a pg Pool transaction and
+// node:crypto, neither of which this native Worker uses -- so this is what actually runs delivery
+// in production. The admin-triggered POST /api/admin/integrations/deliver route stays for local/
+// manual use, but until this existed, production webhook delivery only ever ran when an admin
+// called that route by hand; nothing drove it on its own.
+export async function processWebhookOutboxNative(sql, limit = 100) {
+  const claimed = await sql`
+    with candidates as (
+      select d.id, d.subscription_id, d.integration_event_id, d.attempt_count,
+             s.endpoint_url, s.secret, e.event_type, e.aggregate_type, e.aggregate_id, e.actor_id, e.payload, e.occurred_at
+      from webhook_deliveries d
+      join webhook_subscriptions s on s.id=d.subscription_id
+      join integration_events e on e.id=d.integration_event_id
+      where d.state in ('pending','retry') and d.available_at<=now()
+      order by d.created_at asc
+      for update of d skip locked
+      limit ${limit}
+    )
+    update webhook_deliveries d set state='processing'
+    from candidates c
+    where d.id=c.id
+    returning c.*
+  `;
+
+  const results = [];
+  for (const d of claimed) {
+    const body = JSON.stringify({ id: d.integration_event_id, type: d.event_type, aggregate: { type: d.aggregate_type, id: d.aggregate_id }, actorId: d.actor_id, payload: d.payload, occurredAt: d.occurred_at });
+    const ts = Math.floor(Date.now() / 1000).toString();
+    const sig = await hmacSha256Hex(d.secret, `${ts}.${body}`);
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10_000);
+      let resp;
+      try {
+        resp = await fetch(d.endpoint_url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-roviq-event-id': d.integration_event_id, 'x-roviq-timestamp': ts, 'x-roviq-signature': `v1=${sig}` },
+          body,
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
+      if (!resp.ok) throw new Error(`http_${resp.status}`);
+      await sql`update webhook_deliveries set state='delivered',attempt_count=attempt_count+1,response_code=${resp.status},delivered_at=now() where id=${d.id}`;
+      results.push({ id: d.id, state: 'delivered' });
+    } catch (error) {
+      const attempt = Number(d.attempt_count || 0) + 1;
+      const dead = attempt >= 8;
+      const delaySeconds = Math.min(3600, Math.pow(2, attempt) * 15);
+      await sql`
+        update webhook_deliveries
+        set state=${dead ? 'dead' : 'retry'},attempt_count=${attempt},last_error=${String(error?.message || error)},
+            available_at=now()+(${String(delaySeconds)} || ' seconds')::interval
+        where id=${d.id}
+      `;
+      results.push({ id: d.id, state: dead ? 'dead' : 'retry' });
+    }
+  }
+  return results;
+}
+
 export async function pingCore(env) {
   // Render's free tier spins Core down after ~15 minutes with no HTTP traffic, and takes 30-60s to
   // wake back up on the next request -- long enough that a real user's portal request gives up and
@@ -302,13 +373,14 @@ export async function pingCore(env) {
 
 async function runScheduledOperations(env) {
   const sql = await sqlFor(env);
-  const [deadlines, notifications, corePing] = await Promise.all([
+  const [deadlines, notifications, webhooks, corePing] = await Promise.all([
     sweepExpiredDeadlinesNative(sql, 200),
     processNotificationBatchNative(sql, 'cloudflare-cron', 200),
+    processWebhookOutboxNative(sql, 100),
     pingCore(env)
   ]);
-  console.log(JSON.stringify({ event: 'scheduled_operations_complete', deadlines: deadlines.length, notifications: notifications.length, corePing }));
-  return { deadlines, notifications, corePing };
+  console.log(JSON.stringify({ event: 'scheduled_operations_complete', deadlines: deadlines.length, notifications: notifications.length, webhooks: webhooks.length, corePing }));
+  return { deadlines, notifications, webhooks, corePing };
 }
 
 export default {
