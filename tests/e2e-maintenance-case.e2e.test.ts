@@ -30,9 +30,6 @@ describe('maintenance case end-to-end lifecycle', () => {
     const customer = await app.inject({ method: 'POST', url: '/api/admin/actors', headers: adminHeaders(), payload: { actorType: 'customer' } });
     customerActorId = JSON.parse(customer.body).actor.id;
 
-    // Give this scenario's provider a deterministic routing advantage so other
-    // E2E files can create repair-capable shops in the shared CI database
-    // without making this lifecycle test order-dependent.
     const partner = await app.inject({
       method: 'POST',
       url: '/api/admin/actors',
@@ -41,15 +38,17 @@ describe('maintenance case end-to-end lifecycle', () => {
     });
     partnerActorId = JSON.parse(partner.body).actor.id;
 
-    // No admin endpoint grants capabilities yet, so this is seeded directly.
     await pool.query(
       `insert into actor_capabilities(actor_id, capability_id) select $1, id from capabilities where capability_code = 'repair'`,
       [partnerActorId]
     );
 
-    // Production routing now treats canonical capacity as authoritative. Seed a
-    // live repair window for this provider rather than depending on a legacy
-    // capacity snapshot in an end-to-end test of the current architecture.
+    // Canonical capacity is organization/location scoped. Give the E2E provider
+    // an explicit canonical organization before seeding its repair window.
+    const organization = await pool.query(
+      `insert into organizations(organization_type,display_name) values('shop','Maintenance E2E Shop') returning id`
+    );
+    await pool.query(`update actors set organization_id=$2 where id=$1`, [partnerActorId, organization.rows[0].id]);
     const scope = await pool.query(
       `select organization_id,location_id from actors where id=$1`,
       [partnerActorId]
