@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 
 type Queryable = Pick<PoolClient,'query'>;
 type ConstraintStatus = 'required'|'satisfied'|'waived'|'blocked'|'unknown';
+type ProjectionType = 'parts'|'mobility'|'customer_time'|'approval'|'transport';
 
 /**
  * Projects authoritative operating-layer state into case_constraints.
@@ -11,6 +12,9 @@ type ConstraintStatus = 'required'|'satisfied'|'waived'|'blocked'|'unknown';
 export async function syncOperationalConstraints(caseId:string,db:Queryable):Promise<void>{
   await syncPartsConstraint(caseId,db);
   await syncMobilityConstraint(caseId,db);
+  await syncCustomerTimeConstraint(caseId,db);
+  await syncApprovalConstraint(caseId,db);
+  await syncTransportConstraint(caseId,db);
 }
 
 export function derivePartsConstraint(counts:Record<string,number>):{status:ConstraintStatus;total:number;ready:number}{
@@ -28,6 +32,44 @@ export function deriveMobilityConstraint(states:string[]):{status:ConstraintStat
   if(['reserved','assigned','active','return_pending','completed'].includes(currentState)) return {status:'satisfied',currentState,history};
   if(['failed','declined'].includes(currentState)) return {status:'blocked',currentState,history};
   return {status:'required',currentState,history};
+}
+
+export function deriveCustomerTimeConstraint(
+  appointmentStatus:string,
+  startsAt:string|Date,
+  endsAt:string|Date,
+  now=new Date()
+):{status:ConstraintStatus;appointmentStatus:string;expired:boolean}{
+  const startMs=new Date(startsAt).getTime();
+  const endMs=new Date(endsAt).getTime();
+  const expired=Number.isFinite(endMs)&&endMs<=now.getTime();
+  if(['cancelled','released'].includes(appointmentStatus)) return {status:'required',appointmentStatus,expired};
+  if(['held','confirmed'].includes(appointmentStatus) && expired) return {status:'required',appointmentStatus,expired:true};
+  if(['held','confirmed','in_progress','completed'].includes(appointmentStatus)) return {status:'satisfied',appointmentStatus,expired};
+  if(!Number.isFinite(startMs)||!Number.isFinite(endMs)) return {status:'unknown',appointmentStatus,expired};
+  return {status:'required',appointmentStatus,expired};
+}
+
+export function deriveApprovalConstraint(states:string[]):{status:ConstraintStatus;states:string[]}{
+  if(!states.length) return {status:'required',states};
+  if(states.some((state)=>['rejected','expired','revoked'].includes(state))) return {status:'blocked',states};
+  if(states.every((state)=>state==='approved')) return {status:'satisfied',states};
+  if(states.some((state)=>state==='pending')) return {status:'required',states};
+  return {status:'unknown',states};
+}
+
+export function deriveTransportConstraint(
+  transportStatus:string,
+  dropoffLocation:unknown
+):{status:ConstraintStatus;transportStatus:string;destinationReady:boolean}{
+  const destinationReady=!!dropoffLocation && typeof dropoffLocation==='object' && Object.keys(dropoffLocation as Record<string,unknown>).length>0;
+  if(['declined','failed'].includes(transportStatus)) return {status:'blocked',transportStatus,destinationReady};
+  if(!destinationReady) return {status:'required',transportStatus,destinationReady:false};
+  if(['accepted','en_route','arrived','vehicle_loaded','in_transit','delivered'].includes(transportStatus)) {
+    return {status:'satisfied',transportStatus,destinationReady:true};
+  }
+  if(['requested','assigned'].includes(transportStatus)) return {status:'required',transportStatus,destinationReady:true};
+  return {status:'unknown',transportStatus,destinationReady};
 }
 
 async function syncPartsConstraint(caseId:string,db:Queryable){
@@ -64,9 +106,81 @@ async function syncMobilityConstraint(caseId:string,db:Queryable){
   await upsertProjection(caseId,'mobility','mobility-allocation',status,{currentState,history},db);
 }
 
+async function syncCustomerTimeConstraint(caseId:string,db:Queryable){
+  const result=await db.query(
+    `select id,appointment_status,starts_at,ends_at
+       from roviq_appointments
+      where service_case_id=$1 and appointment_status not in ('cancelled','released')
+      order by updated_at desc,id desc
+      limit 1`,
+    [caseId]
+  );
+  if(!result.rowCount){
+    await deleteProjection(caseId,'customer-time',db);
+    return;
+  }
+  const row=result.rows[0];
+  const derived=deriveCustomerTimeConstraint(String(row.appointment_status),row.starts_at,row.ends_at);
+  await upsertProjection(caseId,'customer_time','customer-time',derived.status,{
+    appointmentId:row.id,
+    appointmentStatus:derived.appointmentStatus,
+    startsAt:row.starts_at,
+    endsAt:row.ends_at,
+    expired:derived.expired
+  },db);
+}
+
+async function syncApprovalConstraint(caseId:string,db:Queryable){
+  const result=await db.query(
+    `select ca.id,ca.state,ca.revision,sp.current_revision
+       from case_approvals ca
+       left join service_plans sp on sp.id=ca.service_plan_id
+      where ca.case_id=$1
+        and (ca.service_plan_id is null or ca.revision is null or ca.revision=sp.current_revision)
+      order by ca.created_at desc,ca.id desc`,
+    [caseId]
+  );
+  if(!result.rowCount){
+    await deleteProjection(caseId,'approval-state',db);
+    return;
+  }
+  const states=result.rows.map((row:any)=>String(row.state));
+  const derived=deriveApprovalConstraint(states);
+  await upsertProjection(caseId,'approval','approval-state',derived.status,{
+    states:derived.states,
+    approvalIds:result.rows.map((row:any)=>row.id),
+    currentRevision:result.rows.find((row:any)=>row.current_revision!=null)?.current_revision ?? null
+  },db);
+}
+
+async function syncTransportConstraint(caseId:string,db:Queryable){
+  const result=await db.query(
+    `select id,transport_type,status,dropoff_location,provider_actor_id,eta_at,updated_at
+       from transport_dispatches
+      where case_id=$1 and status<>'cancelled'
+      order by updated_at desc,id desc
+      limit 1`,
+    [caseId]
+  );
+  if(!result.rowCount){
+    await deleteProjection(caseId,'transport-readiness',db);
+    return;
+  }
+  const row=result.rows[0];
+  const derived=deriveTransportConstraint(String(row.status),row.dropoff_location);
+  await upsertProjection(caseId,'transport','transport-readiness',derived.status,{
+    dispatchId:row.id,
+    transportType:row.transport_type,
+    transportStatus:derived.transportStatus,
+    destinationReady:derived.destinationReady,
+    providerActorId:row.provider_actor_id ?? null,
+    etaAt:row.eta_at ?? null
+  },db);
+}
+
 async function upsertProjection(
   caseId:string,
-  type:'parts'|'mobility',
+  type:ProjectionType,
   projectionKey:string,
   status:ConstraintStatus,
   details:Record<string,unknown>,
