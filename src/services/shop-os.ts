@@ -1,6 +1,7 @@
 import type { PoolClient } from 'pg';
 import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
+import { assertCaseAccess } from './case-access.js';
 
 type Queryable=Pick<PoolClient,'query'>;
 export type ShopOsAppointmentStatus='held'|'confirmed'|'in_progress'|'completed'|'cancelled'|'no_show'|'released';
@@ -31,6 +32,12 @@ function httpError(message:string,statusCode:number){
   return error;
 }
 
+function assertInterval(startsAt:string|Date,endsAt:string|Date){
+  const startMs=new Date(startsAt).getTime();
+  const endMs=new Date(endsAt).getTime();
+  if(!Number.isFinite(startMs)||!Number.isFinite(endMs)||endMs<=startMs) throw httpError('appointment_interval_invalid',400);
+}
+
 async function loadManageableResource(principal:Principal,resourceId:string,db:Queryable){
   const resource=await db.query(`
     select r.*,c.id as shop_os_connection_id,c.connection_status
@@ -55,6 +62,76 @@ async function loadManageableResource(principal:Principal,resourceId:string,db:Q
   if(!scope.organization_id || scope.organization_id!==row.organization_id) throw httpError('forbidden',403);
   if(scope.location_id && scope.location_id!==row.location_id) throw httpError('forbidden',403);
   return row;
+}
+
+async function assertManageableServiceCase(principal:Principal,serviceCaseId:string|null|undefined,db:Queryable){
+  if(!serviceCaseId)return;
+  try{
+    await assertCaseAccess(principal,serviceCaseId,db);
+  }catch(error){
+    if(error instanceof Error&&error.message==='case_not_found') throw httpError('service_case_not_found',404);
+    if(error instanceof Error&&error.message==='forbidden') throw httpError('forbidden',403);
+    throw error;
+  }
+}
+
+async function assertUsableShopOsCapacity(input:{
+  resourceId:string;
+  sourceConnectionId:string;
+  startsAt:string|Date;
+  endsAt:string|Date;
+  serviceCategory?:string|null;
+  excludeAppointmentId?:string|null;
+},db:Queryable){
+  assertInterval(input.startsAt,input.endsAt);
+
+  // Serialize all capacity consumption for this resource in the caller's
+  // transaction. Concurrent creates/reschedules cannot both observe the same
+  // unit as available.
+  const locked=await db.query(`select id from service_resources where id=$1 for update`,[input.resourceId]);
+  if(!locked.rowCount) throw httpError('shop_os_resource_not_found',404);
+
+  const windows=await db.query(`
+    select cw.id,cw.nominal_capacity_units,cw.service_category,cw.window_start,cw.window_end
+    from capacity_windows cw
+    join partner_system_connections c
+      on c.id=cw.source_connection_id
+     and c.mode='roviq_native'
+     and c.connection_status='active'
+    where cw.resource_id=$1
+      and cw.source_connection_id=$2
+      and cw.window_start<=$3::timestamptz
+      and cw.window_end>=$4::timestamptz
+      and cw.sync_state='current'
+      and cw.confidence='roviq_native'
+      and cw.capacity_state not in ('blocked','unknown')
+      and (
+        cw.service_category is null
+        or ($5::text is not null and cw.service_category=$5)
+      )
+    order by (cw.service_category=$5) desc nulls last,cw.window_start desc,cw.window_end asc
+    for update`,[
+    input.resourceId,input.sourceConnectionId,input.startsAt,input.endsAt,input.serviceCategory??null
+  ]);
+  if(!windows.rowCount) throw httpError('shop_os_capacity_unavailable',409);
+
+  for(const window of windows.rows){
+    const nominal=Number(window.nominal_capacity_units??0);
+    if(!Number.isFinite(nominal)||nominal<=0) continue;
+    const occupied=await db.query(`
+      select count(*)::int as units
+      from roviq_appointments
+      where resource_id=$1
+        and appointment_status in ('held','confirmed','in_progress')
+        and starts_at<$3::timestamptz
+        and ends_at>$2::timestamptz
+        and ($4::uuid is null or id<>$4::uuid)`,[
+      input.resourceId,input.startsAt,input.endsAt,input.excludeAppointmentId??null
+    ]);
+    const used=Number(occupied.rows[0]?.units??0);
+    if(Number.isFinite(used)&&used<nominal) return window;
+  }
+  throw httpError('shop_os_capacity_unavailable',409);
 }
 
 export async function rebuildShopOsCapacity(resourceId:string,db:Queryable){
@@ -111,7 +188,16 @@ export async function createShopOsAppointment(principal:Principal,input:{
   const client=await pool.connect();
   try{
     await client.query('begin');
+    assertInterval(input.startsAt,input.endsAt);
     const resource=await loadManageableResource(principal,input.resourceId,client);
+    await assertManageableServiceCase(principal,input.serviceCaseId,client);
+    await assertUsableShopOsCapacity({
+      resourceId:input.resourceId,
+      sourceConnectionId:resource.shop_os_connection_id,
+      startsAt:input.startsAt,
+      endsAt:input.endsAt,
+      serviceCategory:input.serviceCategory??null
+    },client);
     const created=await client.query(`insert into roviq_appointments(
       service_case_id,organization_id,location_id,resource_id,source_connection_id,appointment_status,
       starts_at,ends_at,service_category,customer_visible_summary,internal_notes,created_by_actor_id
@@ -137,6 +223,7 @@ export async function updateShopOsAppointment(principal:Principal,appointmentId:
     if(!current.rowCount) throw httpError('appointment_not_found',404);
     const existing=current.rows[0];
     await loadManageableResource(principal,existing.resource_id,client);
+    await assertManageableServiceCase(principal,existing.service_case_id,client);
     const nextStatus=nextShopOsAppointmentStatus(existing.appointment_status,input.action);
     const nextResourceId=input.resourceId??existing.resource_id;
     const nextResource=nextResourceId===existing.resource_id
@@ -144,7 +231,20 @@ export async function updateShopOsAppointment(principal:Principal,appointmentId:
       : await loadManageableResource(principal,nextResourceId,client);
     const nextStarts=input.startsAt??existing.starts_at;
     const nextEnds=input.endsAt??existing.ends_at;
+    assertInterval(nextStarts,nextEnds);
     if(input.action==='reschedule' && (!input.startsAt&&!input.endsAt&&!input.resourceId)) throw httpError('reschedule_change_required',400);
+
+    if(input.action==='reschedule'||input.action==='confirm'){
+      await assertUsableShopOsCapacity({
+        resourceId:nextResourceId,
+        sourceConnectionId:nextResource.shop_os_connection_id,
+        startsAt:nextStarts,
+        endsAt:nextEnds,
+        serviceCategory:existing.service_category??null,
+        excludeAppointmentId:appointmentId
+      },client);
+    }
+
     const updated=await client.query(`update roviq_appointments
       set resource_id=$1,organization_id=$2,location_id=$3,source_connection_id=$4,appointment_status=$5,
           starts_at=$6,ends_at=$7,released_reason=case when $5 in ('released','cancelled','no_show') then $8 else released_reason end,
