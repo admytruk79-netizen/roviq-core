@@ -317,7 +317,7 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === '/' || url.pathname === '/health' || url.pathname === '/edge-health') {
-      return json({ ok: true, service: 'roviq-core', runtime: 'cloudflare-worker', database: 'neon', aiTriage: 'shadow', engine: 'native-worker-v3', local: '/api/local', scheduledOperations: 'cloudflare-cron' });
+      return json({ ok: true, service: 'roviq-core', runtime: 'cloudflare-worker', database: 'neon', aiTriage: env.TRIAGE_DEPLOYMENT_MODE || 'shadow', engine: 'native-worker-v3', local: '/api/local', scheduledOperations: 'cloudflare-cron' });
     }
 
     try {
