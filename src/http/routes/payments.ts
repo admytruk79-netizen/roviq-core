@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { pool } from '../../db/pool.js';
 import { requireRole } from '../middleware/principal.js';
 import { createPaymentIntent, createPayout, refundPayment, updatePaymentState, updatePayoutState } from '../../services/payments.js';
+import { loadCaseForPrincipal } from '../../services/case-access.js';
 
 export async function paymentRoutes(app: FastifyInstance) {
   app.post('/api/admin/payments', { preHandler: requireRole('admin') }, async (req, reply) => {
@@ -17,11 +18,17 @@ export async function paymentRoutes(app: FastifyInstance) {
 
   app.get('/api/maintenance/cases/:id/payments', async (req, reply) => {
     const { id } = req.params as { id:string };
-    const c = await pool.query('select customer_actor_id,current_owner_actor_id from service_cases where id=$1',[id]);
-    if (!c.rowCount) return reply.code(404).send({ error:'case_not_found' });
-    const row = c.rows[0];
-    if (req.principal.role === 'customer' && row.customer_actor_id !== req.principal.actorId) return reply.code(403).send({ error:'forbidden' });
-    if (!['admin','customer'].includes(req.principal.role) && row.current_owner_actor_id !== req.principal.actorId) return reply.code(403).send({ error:'forbidden' });
+    try {
+      // Route through the shared access service (also used by cases.ts/mobility.ts) instead of a
+      // second, narrower ad hoc check -- the previous version only recognized the customer or the
+      // case's current owner, so a provider with a real relation to this case (an accepted offer,
+      // an assigned dispatch, a parts order, a mobility allocation) was wrongly denied.
+      const c = await loadCaseForPrincipal(req.principal,id);
+      if (!c) return reply.code(404).send({ error:'case_not_found' });
+    } catch (e) {
+      if (e instanceof Error && e.message === 'forbidden') return reply.code(403).send({ error:'forbidden' });
+      throw e;
+    }
     const r = await pool.query('select id,case_id,amount,currency,state,description,created_at,updated_at,authorized_at,captured_at from payment_intents where case_id=$1 order by created_at desc',[id]);
     return { payments:r.rows };
   });

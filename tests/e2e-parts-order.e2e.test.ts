@@ -159,6 +159,20 @@ describe('parts order end-to-end lifecycle', () => {
     expect(ownerRes.statusCode).toBe(200);
     expect(JSON.parse(ownerRes.body).order.status).toBe('delivered');
 
+    // A provider with a real relation to this case -- an assigned transport dispatch, in this
+    // case -- must also be able to see its parts orders, even though it is neither the customer
+    // nor this order's own assigned supplier. This is what distinguishes unrelatedTowActorId
+    // (403 above, no relation at all) from a genuinely related provider.
+    const relatedTow = await app.inject({ method: 'POST', url: '/api/admin/actors', headers: adminHeaders(), payload: { actorType: 'tow' } });
+    const relatedTowActorId = JSON.parse(relatedTow.body).actor.id;
+    await pool.query(
+      `insert into transport_dispatches(case_id,transport_type,provider_actor_id,status) values($1,'tow',$2,'accepted')`,
+      [caseId, relatedTowActorId]
+    );
+    const relatedProviderRes = await app.inject({ method: 'GET', url: `/api/maintenance/parts-orders/${orderId}`, headers: actorHeaders('tow', relatedTowActorId) });
+    expect(relatedProviderRes.statusCode).toBe(200);
+    expect(JSON.parse(relatedProviderRes.body).order.status).toBe('delivered');
+
     const meOrdersRes = await app.inject({ method: 'GET', url: '/api/parts/me/orders', headers: actorHeaders('parts', supplierActorId) });
     expect(meOrdersRes.statusCode).toBe(200);
     expect(JSON.parse(meOrdersRes.body).orders.some((o: { id: string }) => o.id === orderId)).toBe(true);
