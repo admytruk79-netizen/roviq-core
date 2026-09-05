@@ -59,15 +59,24 @@ export async function evaluateActorServiceability(
   );
 
   if (!actor.rowCount) {
-    return { decision:evaluateServiceability({capacity:null}), source:'missing', capacityWindowId:null, capacityUnits:0 };
+    return { decision:evaluateServiceability({capacity:null,requirementsProjected:false}), source:'missing', capacityWindowId:null, capacityUnits:0 };
   }
 
   const a = actor.rows[0];
   if(caseId) await syncOperationalConstraints(caseId,db);
   const constraints = caseId ? await loadConstraints(caseId,db) : [];
+  const requirementsProjected=Boolean(caseId && serviceCategory);
   const canonical = await db.query<CanonicalWindowRow>(
-    `select cw.id,cw.capacity_state,cw.confidence,cw.sync_state,cw.capacity_units,cw.updated_at,
-            cw.source_connection_id,cw.service_category,
+    `select cw.id,cw.capacity_state,cw.confidence,cw.sync_state,
+            greatest(cw.capacity_units-coalesce((
+              select sum(cr.units)
+                from capacity_reservations cr
+               where cr.capacity_window_id=cw.id
+                 and cr.state='held'
+                 and cr.expires_at>now()
+                 and ($4::uuid is null or cr.service_case_id<>$4)
+            ),0),0)::int as capacity_units,
+            cw.updated_at,cw.source_connection_id,cw.service_category,
             psc.mode as connection_mode,psc.connection_status,psc.last_success_at as connection_last_success_at,
             case when $1::uuid is not null and cw.location_id=$1 then 0 else 1 end as scope_rank
        from capacity_windows cw
@@ -79,10 +88,10 @@ export async function evaluateActorServiceability(
         )
         and ($3::text is null or cw.service_category is null or cw.service_category=$3)
       order by scope_rank asc,(cw.service_category=$3) desc nulls last,cw.updated_at desc,cw.capacity_units desc`,
-    [a.location_id ?? null,a.organization_id ?? null,serviceCategory ?? null]
+    [a.location_id ?? null,a.organization_id ?? null,serviceCategory ?? null,caseId ?? null]
   );
 
-  const canonicalEvaluation=evaluateCanonicalWindows(canonical.rows,constraints,intent,serviceCategory ?? null,now);
+  const canonicalEvaluation=evaluateCanonicalWindows(canonical.rows,constraints,intent,serviceCategory ?? null,now,requirementsProjected);
   if(canonicalEvaluation) return canonicalEvaluation;
 
   if (!a.has_connection_model) {
@@ -95,13 +104,14 @@ export async function evaluateActorServiceability(
     const decision=evaluateServiceability({
       capacity:{capacityState:units>0?'available':'full',confidence:'declared',syncState:'current',capacityUnits:units},
       constraints,
+      requirementsProjected,
       allowManualVerified:false,
       allowStaleHold:intent==='hold'
     });
     return {decision,source:'legacy_capacity',capacityWindowId:null,capacityUnits:units};
   }
 
-  return { decision:evaluateServiceability({capacity:null,constraints}), source:'missing', capacityWindowId:null, capacityUnits:0 };
+  return { decision:evaluateServiceability({capacity:null,constraints,requirementsProjected}), source:'missing', capacityWindowId:null, capacityUnits:0 };
 }
 
 export function evaluateCanonicalWindows(
@@ -109,7 +119,8 @@ export function evaluateCanonicalWindows(
   constraints:ServiceabilityConstraint[],
   intent:ServiceabilityIntent,
   serviceCategory:string|null=null,
-  now=new Date()
+  now=new Date(),
+  requirementsProjected=true
 ):ActorServiceability|null {
   let firstRejected:ActorServiceability|null=null;
   let sawRelevant=false;
@@ -128,6 +139,7 @@ export function evaluateCanonicalWindows(
         capacityUnits:Number.isFinite(capacityUnits)?capacityUnits:0
       },
       constraints,
+      requirementsProjected,
       allowManualVerified:false,
       allowStaleHold:intent==='hold'
     });
