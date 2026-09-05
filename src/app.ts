@@ -24,6 +24,7 @@ import { triageEvaluationRoutes } from './http/routes/triage-evaluation.js';
 import { servicePlanRoutes } from './http/routes/service-plans.js';
 import { quoteRoutes } from './http/routes/quotes.js';
 import { analyticsRoutes } from './http/routes/analytics.js';
+import { commerceRoutes } from './http/routes/commerce.js';
 import { coherenceRoutes } from './http/routes/coherence.js';
 import { fieldServiceRoutes } from './http/routes/field-service.js';
 
@@ -81,6 +82,7 @@ export async function buildApp() {
   await app.register(servicePlanRoutes);
   await app.register(quoteRoutes);
   await app.register(analyticsRoutes);
+  await app.register(commerceRoutes);
   await app.register(partnerRoutes);
   await app.register(adminRoutes);
   await app.register(routingRoutes);
