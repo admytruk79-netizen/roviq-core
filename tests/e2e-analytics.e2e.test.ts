@@ -126,6 +126,24 @@ describe('case metrics analytics', () => {
       [caseC, plan.rows[0].id]
     );
 
+    // contributionMargin: a quote with 4 lines exercising every case --
+    // gross keeps its full amount, net-with-cost keeps the difference, net-without-cost is
+    // excluded (not assumed), pass_through contributes nothing.
+    const planA = await pool.query('select id from service_plans where case_id=$1',[caseA]);
+    const marginQuote = await pool.query(
+      `insert into service_quotes(case_id,service_plan_id,revision,status) values($1,$2,1,'draft') returning id`,
+      [caseA, planA.rows[0].id]
+    );
+    await pool.query(
+      `insert into service_quote_lines(quote_id,line_type,description,quantity,unit_amount_minor,line_amount_minor,revenue_recognition,merchant_cost_minor)
+       values
+         ($1,'coordination','Case fee',1,3900,3900,'gross',null),
+         ($1,'part','Brake pad',1,3000,3000,'net',2000),
+         ($1,'diagnostic','Visit fee',1,5000,5000,'net',null),
+         ($1,'labor','Labor',1,8000,8000,'pass_through',null)`,
+      [marginQuote.rows[0].id]
+    );
+
     const windowEnd = new Date(Date.now() + 5 * 60 * 1000);
     const metrics = await getMetrics(windowStart.toISOString(), windowEnd.toISOString());
 
@@ -152,11 +170,10 @@ describe('case metrics analytics', () => {
     expect(metrics.customerResponseTimeMinutes.blendedCount).toBe(3);
     expect(metrics.customerResponseTimeMinutes.blendedMinutes).toBeCloseTo(20, 0); // (10+20+30)/3
 
-    // Contribution margin is explicitly not fabricated: the schema has no per-line cost split to
-    // compute a real dollar figure from, so this stays null with an explanatory note rather than
-    // guessing a take-rate.
-    expect(metrics.contributionMargin).toBeNull();
-    expect(typeof metrics.contributionMarginNote).toBe('string');
+    // Contribution margin: 3900 (gross, full) + 1000 (net, 3000-2000) + 0 (net missing cost,
+    // excluded not assumed) + 0 (pass_through, by definition) = 4900. The missing-cost net line
+    // is disclosed via netLinesMissingCost/complete rather than silently folded into the total.
+    expect(metrics.contributionMargin).toEqual({ marginMinor: 4900, netLinesMissingCost: 1, netLinesTotal: 2, complete: false });
   });
 
   it('reports null rates (not zero, not a crash) for a window with no matching data', async () => {
@@ -168,5 +185,6 @@ describe('case metrics analytics', () => {
     expect(metrics.diagnosticConversion).toEqual({ rate: null, converted: 0, total: 0 });
     expect(metrics.fieldRepairEligibility).toEqual({ rate: null, eligible: 0, total: 0 });
     expect(metrics.exceptionRate).toEqual({ rate: null, exceptions: 0, cases: 0 });
+    expect(metrics.contributionMargin).toEqual({ marginMinor: 0, netLinesMissingCost: 0, netLinesTotal: 0, complete: true });
   });
 });

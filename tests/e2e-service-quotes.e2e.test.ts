@@ -109,6 +109,26 @@ describe('service quotes (case-level quote creation and merchant-of-record alloc
     expect(JSON.parse(overrideRes.body).lines[0].revenue_recognition).toBe('gross');
   });
 
+  it('records a net line\'s merchant cost for contribution-margin reporting, and rejects it on non-net lines', async () => {
+    const caseId = await createCase();
+
+    const wrongRecognitionRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/quotes`, headers: adminHeaders(),
+      payload: { lines: [{ lineType: 'labor', description: 'Labor', unitAmountMinor: 5000, merchantActorId: shopActorId, merchantCostMinor: 1000 }] }
+    });
+    expect(wrongRecognitionRes.statusCode).toBe(400);
+    expect(JSON.parse(wrongRecognitionRes.body).error).toBe('merchant_cost_only_valid_for_net_recognition');
+
+    const netWithCostRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/quotes`, headers: adminHeaders(),
+      payload: { lines: [{ lineType: 'part', description: 'Brake pad', unitAmountMinor: 3000, merchantActorId: partsVendorActorId, merchantCostMinor: 2000 }] }
+    });
+    expect(netWithCostRes.statusCode).toBe(201);
+    const line = JSON.parse(netWithCostRes.body).lines[0];
+    expect(line.revenue_recognition).toBe('net');
+    expect(Number(line.merchant_cost_minor)).toBe(2000);
+  });
+
   it('supersedes the prior open quote on a new revision, and only the current quote can be decided', async () => {
     const caseId = await createCase();
     const quote1Res = await app.inject({
