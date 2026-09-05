@@ -4,6 +4,7 @@ import type { Principal } from '../types/principal.js';
 import { appendCaseEvent } from './orchestration.js';
 import { resolveRequestedCapabilityForDemand } from './case-intelligence.js';
 import { evaluateActorServiceability, serviceabilityAllows } from './serviceability-gate.js';
+import { reserveCanonicalCapacity } from './capacity-reservation.js';
 
 export type SelectionMode = 'customer_choice' | 'dealer_controlled' | 'auto_dispatch' | 'ops_override';
 
@@ -27,6 +28,11 @@ export async function recordRecommendation(caseId: string, actorId: string | nul
       [caseId,JSON.stringify({actorId,routingDecisionId:routingDecisionId ?? null})]
     );
   }
+}
+
+async function reserveSelectionCapacity(caseId:string,serviceability:{source:string;capacityWindowId:string|null},client:PoolClient){
+  if(serviceability.source!=='canonical_capacity'||!serviceability.capacityWindowId) return;
+  await reserveCanonicalCapacity(caseId,serviceability.capacityWindowId,client,1);
 }
 
 export async function selectCaseActor(principal: Principal, caseId: string, actorId: string, rationale: Record<string,unknown> = {}) {
@@ -60,6 +66,17 @@ export async function selectCaseActor(principal: Principal, caseId: string, acto
       throw error;
     }
 
+    try {
+      await reserveSelectionCapacity(caseId,serviceability,client);
+    } catch(error){
+      if(error instanceof Error && error.message==='capacity_no_longer_available'){
+        const conflict=new Error('actor_not_serviceable');
+        (conflict as Error & {reasons?:string[]}).reasons=['capacity_exhausted'];
+        throw conflict;
+      }
+      throw error;
+    }
+
     await client.query(
       `update service_cases set selected_actor_id=$1,selection_source=$2,selected_at=now(),updated_at=now() where id=$3`,
       [actorId,mode,caseId]
@@ -90,6 +107,13 @@ export async function autoDispatchCase(caseId: string, actorId: string, routingD
     const {capability}=await resolveRequestedCapabilityForDemand(c.rows[0].demand_id,client);
     const serviceability=await evaluateActorServiceability(caseId,actorId,capability,'confirm',client);
     if(!serviceabilityAllows('confirm',serviceability.decision)) throw new Error('actor_not_serviceable');
+
+    try {
+      await reserveSelectionCapacity(caseId,serviceability,client);
+    } catch(error){
+      if(error instanceof Error && error.message==='capacity_no_longer_available') throw new Error('actor_not_serviceable');
+      throw error;
+    }
 
     await client.query(
       `update service_cases set selected_actor_id=$1,selection_source='auto_dispatch',selected_at=now(),updated_at=now() where id=$2`,
