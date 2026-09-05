@@ -1,5 +1,5 @@
 import { describe,expect,it } from 'vitest';
-import { deriveConnectHealth } from './connect-operations.js';
+import { deriveConnectHealth } from './connect-health.js';
 
 describe('ROVIQ Connect operational health',()=>{
   it('reports a current authorized native integration as healthy',()=>{
