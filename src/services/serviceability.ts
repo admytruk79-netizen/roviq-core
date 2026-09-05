@@ -19,6 +19,8 @@ export type ServiceabilityCapacity = {
 export type ServiceabilityInput = {
   capacity?: ServiceabilityCapacity | null;
   constraints?: ServiceabilityConstraint[];
+  /** Caller asserts it has projected/checked the requirements applicable to this case. */
+  requirementsProjected?: boolean;
   allowManualVerified?: boolean;
   allowStaleHold?: boolean;
 };
@@ -41,10 +43,12 @@ export function evaluateServiceability(input: ServiceabilityInput): Serviceabili
   const capacity = input.capacity;
   const constraints = input.constraints ?? [];
 
+  if (input.requirementsProjected !== true) reasons.push('requirements_not_projected');
+
   if (!capacity) reasons.push('capacity_missing');
   else {
     if (capacity.capacityUnits <= 0) reasons.push('capacity_exhausted');
-    if (['blocked', 'full', 'unknown'].includes(capacity.capacityState)) reasons.push(`capacity_${capacity.capacityState}`);
+    if (['blocked', 'reserved', 'full', 'unknown'].includes(capacity.capacityState)) reasons.push(`capacity_${capacity.capacityState}`);
     if (['failed', 'degraded'].includes(capacity.syncState)) reasons.push(`sync_${capacity.syncState}`);
     if (capacity.syncState === 'stale') reasons.push('sync_stale');
     if (capacity.syncState === 'manual' && !input.allowManualVerified) reasons.push('manual_capacity_not_authorized');
@@ -61,9 +65,11 @@ export function evaluateServiceability(input: ServiceabilityInput): Serviceabili
   }
 
   const hardBlock = reasons.some((reason) =>
+    reason === 'requirements_not_projected' ||
     reason === 'capacity_missing' ||
     reason === 'capacity_exhausted' ||
     reason === 'capacity_blocked' ||
+    reason === 'capacity_reserved' ||
     reason === 'capacity_full' ||
     reason === 'capacity_unknown' ||
     reason === 'sync_failed' ||
