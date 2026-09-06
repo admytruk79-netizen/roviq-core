@@ -93,12 +93,15 @@ describe('Shop OS parts readiness, deferred service and reconciliation',()=>{
     await updateRepairOrder(admin,shop.repairOrderId,{action:'complete'});
     const first=await reconcileRepairOrder(admin,shop.repairOrderId);
     expect(first.revenue).toBe(300);
-    expect(first.directCost).toBe(100);
-    expect(first.laborCost).toBe(0);
+    expect(first.directCost).toBe(60);
+    expect(first.laborCost).toBe(40);
+    expect(first.laborCostSource).toBe('repair_order_line_estimate');
     expect(first.contribution).toBe(200);
     expect(first.ledgerEntries).toHaveLength(3);
+    const firstDates=first.ledgerEntries.map((entry)=>new Date(entry.occurred_at).toISOString());
     const second=await reconcileRepairOrder(admin,shop.repairOrderId);
     expect(second.ledgerEntries).toHaveLength(3);
+    expect(second.ledgerEntries.map((entry)=>new Date(entry.occurred_at).toISOString())).toEqual(firstDates);
     const count=await pool.query(`select count(*)::int as n from ledger_entries where repair_order_id=$1 and reconciliation_key is not null`,[shop.repairOrderId]);
     expect(Number(count.rows[0].n)).toBe(3);
   });
