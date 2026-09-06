@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
 import { syncOperationalConstraints } from './case-constraint-projection.js';
+import { resolveShopPrincipalScope } from './shop-os-scope.js';
 
 type Queryable=Pick<PoolClient,'query'>;
 type PartReadiness='identified'|'sourcing'|'ordered'|'eta_known'|'received'|'ready'|'unavailable'|'cancelled';
@@ -14,18 +15,7 @@ function httpError(message:string,statusCode:number){
 }
 
 async function resolveScope(principal:Principal,input:{organizationId?:string;locationId?:string},db:Queryable){
-  if(principal.role==='admin'){
-    if(!input.organizationId) throw httpError('organization_id_required',400);
-    return {organizationId:input.organizationId,locationId:input.locationId??null};
-  }
-  if(principal.role!=='partner'||!principal.actorId) throw httpError('forbidden',403);
-  const actor=await db.query(`select organization_id,location_id from actors where id=$1 and status='active'`,[principal.actorId]);
-  if(!actor.rowCount||!actor.rows[0].organization_id) throw httpError('forbidden',403);
-  const organizationId=actor.rows[0].organization_id as string;
-  const actorLocationId=actor.rows[0].location_id as string|null;
-  if(input.organizationId&&input.organizationId!==organizationId) throw httpError('forbidden',403);
-  if(actorLocationId&&input.locationId&&actorLocationId!==input.locationId) throw httpError('forbidden',403);
-  return {organizationId,locationId:actorLocationId??input.locationId??null};
+  return resolveShopPrincipalScope(principal,input,db);
 }
 
 async function loadOrder(principal:Principal,repairOrderId:string,db:Queryable,forUpdate=false){
@@ -135,7 +125,8 @@ export async function deferRepairOrderLine(principal:Principal,input:{
     ) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
     on conflict(repair_order_line_id) do update set
       severity=excluded.severity,reason=excluded.reason,target_return_at=excluded.target_return_at,
-      next_follow_up_at=excluded.next_follow_up_at,updated_at=now()
+      next_follow_up_at=excluded.next_follow_up_at,
+      status='open',dismissed_at=null,completed_at=null,booked_appointment_id=null,updated_at=now()
     returning *`,[
       order.organization_id,order.location_id,order.service_case_id,input.repairOrderId,input.repairOrderLineId,order.customer_vehicle_id,
       input.severity??'recommended',input.reason??null,Number(line.rows[0].quantity)*Number(line.rows[0].unit_price),
@@ -236,11 +227,10 @@ export async function reconcileRepairOrder(principal:Principal,repairOrderId:str
       coalesce(sum(case when approval_status='approved' then quantity*unit_cost else 0 end),0)::numeric as direct_cost
       from shop_repair_order_lines where repair_order_id=$1`,[repairOrderId]);
     const labor=await client.query(`select coalesce(sum(
-      extract(epoch from (te.ended_at-te.started_at))/3600.0 * coalesce(sr.hourly_cost,0)
+      extract(epoch from (ended_at-started_at))/3600.0 * hourly_cost_snapshot
     ),0)::numeric as labor_cost
-      from shop_technician_time_entries te
-      left join service_resources sr on sr.id=te.technician_resource_id
-      where te.repair_order_id=$1 and te.ended_at is not null`,[repairOrderId]);
+      from shop_technician_time_entries
+      where repair_order_id=$1 and ended_at is not null`,[repairOrderId]);
     const revenue=Number(lineTotals.rows[0].revenue??0);
     const directCost=Number(lineTotals.rows[0].direct_cost??0);
     const laborCost=Number(labor.rows[0].labor_cost??0);
