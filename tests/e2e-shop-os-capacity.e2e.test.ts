@@ -38,9 +38,11 @@ async function createAdditionalResource(input:{orgId:string;connectionId:string;
   return resource.rows[0].id as string;
 }
 
-async function createCase(){
+async function createCase(orgId:string){
   const domain=await pool.query(`select id from domains where code='maintenance' limit 1`);
-  const created=await pool.query(`insert into service_cases(domain_id,case_type,state) values($1,'maintenance','provider_selection') returning id`,[domain.rows[0].id]);
+  const actor=await pool.query(`insert into actors(actor_type,status,organization_id) values('shop','active',$1) returning id`,[orgId]);
+  const created=await pool.query(`insert into service_cases(domain_id,case_type,state,selected_actor_id)
+    values($1,'maintenance','provider_pending',$2) returning id`,[domain.rows[0].id,actor.rows[0].id]);
   return created.rows[0].id as string;
 }
 
@@ -81,9 +83,9 @@ describe('ROVIQ-native Shop OS capacity',()=>{
   });
 
   it('consumes a same-case canonical hold while another case hold still blocks capacity',async()=>{
-    const {resourceId,windowId}=await setupNativeShop(1);
-    const caseA=await createCase();
-    const caseB=await createCase();
+    const {orgId,resourceId,windowId}=await setupNativeShop(1);
+    const caseA=await createCase(orgId);
+    const caseB=await createCase(orgId);
     const start=new Date(Date.now()+20*60_000).toISOString();
     const end=new Date(Date.now()+80*60_000).toISOString();
 
@@ -126,6 +128,33 @@ describe('ROVIQ-native Shop OS capacity',()=>{
 
     const replacement=await createShopOsAppointment(admin,{resourceId:resourceA,startsAt:start,endsAt:end,serviceCategory:'repair',status:'confirmed'});
     expect(replacement.id).toBeTruthy();
+  });
+
+  it('uses deterministic resource locking for concurrent opposite-direction swaps',async()=>{
+    const {orgId,connectionId,resourceId:resourceA}=await setupNativeShop(2);
+    const resourceB=await createAdditionalResource({orgId,connectionId,name:'Bay Swap',nominalCapacityUnits:2});
+    const start=new Date(Date.now()+35*60_000).toISOString();
+    const end=new Date(Date.now()+95*60_000).toISOString();
+    const appointmentA=await createShopOsAppointment(admin,{resourceId:resourceA,startsAt:start,endsAt:end,serviceCategory:'repair',status:'confirmed'});
+    const appointmentB=await createShopOsAppointment(admin,{resourceId:resourceB,startsAt:start,endsAt:end,serviceCategory:'repair',status:'confirmed'});
+
+    const [movedA,movedB]=await Promise.all([
+      updateShopOsAppointment(admin,appointmentA.id,{action:'reschedule',resourceId:resourceB}),
+      updateShopOsAppointment(admin,appointmentB.id,{action:'reschedule',resourceId:resourceA})
+    ]);
+    expect(movedA.resource_id).toBe(resourceB);
+    expect(movedB.resource_id).toBe(resourceA);
+  });
+
+  it('rejects attaching a case to a Shop OS resource from another organization',async()=>{
+    const tenantA=await setupNativeShop(1);
+    const tenantB=await setupNativeShop(1);
+    const caseA=await createCase(tenantA.orgId);
+    const start=new Date(Date.now()+40*60_000).toISOString();
+    const end=new Date(Date.now()+100*60_000).toISOString();
+
+    await expect(createShopOsAppointment(admin,{serviceCaseId:caseA,resourceId:tenantB.resourceId,startsAt:start,endsAt:end,serviceCategory:'repair',status:'confirmed'}))
+      .rejects.toMatchObject({message:'service_case_tenant_mismatch',statusCode:409});
   });
 
   it('fails closed when a partner actor tries to manage another organization resource',async()=>{
