@@ -1,6 +1,7 @@
 import type { PoolClient } from 'pg';
 import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
+import { resolveShopPrincipalScope } from './shop-os-scope.js';
 
 type Queryable=Pick<PoolClient,'query'>;
 export type ShopResourceType='bay'|'technician'|'advisor'|'equipment'|'mobile_unit'|'tow_unit'|'valet_driver'|'loaner_vehicle';
@@ -13,18 +14,7 @@ function httpError(message:string,statusCode:number){
 }
 
 async function resolveShopScope(principal:Principal,input:{organizationId?:string;locationId?:string},db:Queryable){
-  if(principal.role==='admin'){
-    if(!input.organizationId) throw httpError('organization_id_required',400);
-    return {organizationId:input.organizationId,locationId:input.locationId??null};
-  }
-  if(principal.role!=='partner'||!principal.actorId) throw httpError('forbidden',403);
-  const actor=await db.query(`select organization_id,location_id from actors where id=$1 and status='active'`,[principal.actorId]);
-  if(!actor.rowCount||!actor.rows[0].organization_id) throw httpError('forbidden',403);
-  const organizationId=actor.rows[0].organization_id as string;
-  const locationId=actor.rows[0].location_id as string|null;
-  if(input.organizationId&&input.organizationId!==organizationId) throw httpError('forbidden',403);
-  if(locationId&&input.locationId&&input.locationId!==locationId) throw httpError('forbidden',403);
-  return {organizationId,locationId:locationId??input.locationId??null};
+  return resolveShopPrincipalScope(principal,input,db);
 }
 
 async function loadNativeConnection(organizationId:string,locationId:string|null,db:Queryable){
