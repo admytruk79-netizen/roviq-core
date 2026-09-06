@@ -27,7 +27,7 @@ async function resolveScope(principal:Principal,input:{organizationId?:string;lo
   return {organizationId,locationId:actorLocationId??input.locationId??null};
 }
 
-async function assertCase(principal:Principal,serviceCaseId:string|null|undefined,db:Queryable){
+async function assertCase(principal:Principal,serviceCaseId:string|null|undefined,organizationId:string,db:Queryable){
   if(!serviceCaseId)return;
   try{ await assertCaseAccess(principal,serviceCaseId,db); }
   catch(error){
@@ -35,6 +35,20 @@ async function assertCase(principal:Principal,serviceCaseId:string|null|undefine
     if(error instanceof Error&&error.message==='forbidden') throw httpError('forbidden',403);
     throw error;
   }
+  const linked=await db.query(`
+    select (
+      exists(
+        select 1 from service_cases sc
+        join actors owner on owner.id=sc.current_owner_actor_id
+        where sc.id=$1 and owner.organization_id=$2
+      )
+      or exists(
+        select 1 from matches_offers mo
+        join actors provider on provider.id=mo.actor_id
+        where mo.case_id=$1 and provider.organization_id=$2
+      )
+    ) as linked`,[serviceCaseId,organizationId]);
+  if(!linked.rows[0]?.linked) throw httpError('service_case_tenant_mismatch',409);
 }
 
 export async function createShopWaitlistEntry(principal:Principal,input:{
@@ -53,7 +67,7 @@ export async function createShopWaitlistEntry(principal:Principal,input:{
   try{
     await client.query('begin');
     const scope=await resolveScope(principal,input,client);
-    await assertCase(principal,input.serviceCaseId,client);
+    await assertCase(principal,input.serviceCaseId,scope.organizationId,client);
     const created=await client.query(`insert into shop_waitlist_entries(
       organization_id,location_id,service_case_id,requested_service_category,requested_after,requested_before,
       estimated_duration_minutes,preferred_resource_types,priority,notes,created_by_actor_id
@@ -93,20 +107,33 @@ export async function updateShopWaitlistEntry(principal:Principal,entryId:string
     if(!current.rowCount) throw httpError('waitlist_entry_not_found',404);
     const row=current.rows[0];
     await resolveScope(principal,{organizationId:row.organization_id,locationId:row.location_id},client);
-    await assertCase(principal,row.service_case_id,client);
+    await assertCase(principal,row.service_case_id,row.organization_id,client);
 
     let nextState:string;
     if(input.action==='offer'){
       if(row.state!=='waiting') throw httpError('waitlist_transition_invalid',409);
       if(!input.offerExpiresAt) throw httpError('offer_expires_at_required',400);
+      const future=await client.query(`select $1::timestamptz>now() as future`,[input.offerExpiresAt]);
+      if(!future.rows[0]?.future) throw httpError('offer_expiry_invalid',400);
       nextState='offered';
     }else if(input.action==='book'){
       if(!['waiting','offered'].includes(row.state)) throw httpError('waitlist_transition_invalid',409);
       if(!input.appointmentId) throw httpError('appointment_id_required',400);
-      const appointment=await client.query(`select id,organization_id,location_id from roviq_appointments where id=$1`,[input.appointmentId]);
+      if(row.state==='offered'){
+        const active=await client.query(`select $1::timestamptz>now() as active`,[row.offer_expires_at]);
+        if(!active.rows[0]?.active) throw httpError('waitlist_offer_expired',409);
+      }
+      const appointment=await client.query(`
+        select id,organization_id,location_id,service_case_id,service_category,starts_at,ends_at
+        from roviq_appointments where id=$1`,[input.appointmentId]);
       if(!appointment.rowCount) throw httpError('appointment_not_found',404);
-      if(appointment.rows[0].organization_id!==row.organization_id) throw httpError('forbidden',403);
-      if(row.location_id&&appointment.rows[0].location_id!==row.location_id) throw httpError('forbidden',403);
+      const a=appointment.rows[0];
+      if(a.organization_id!==row.organization_id) throw httpError('forbidden',403);
+      if(row.location_id&&a.location_id!==row.location_id) throw httpError('forbidden',403);
+      if((a.service_case_id??null)!==(row.service_case_id??null)) throw httpError('waitlist_case_mismatch',409);
+      if(row.requested_service_category&&a.service_category!==row.requested_service_category) throw httpError('waitlist_service_category_mismatch',409);
+      if(row.requested_after&&new Date(a.starts_at).getTime()<new Date(row.requested_after).getTime()) throw httpError('waitlist_time_window_mismatch',409);
+      if(row.requested_before&&new Date(a.ends_at).getTime()>new Date(row.requested_before).getTime()) throw httpError('waitlist_time_window_mismatch',409);
       nextState='booked';
     }else if(input.action==='cancel'){
       if(!['waiting','offered'].includes(row.state)) throw httpError('waitlist_transition_invalid',409);
