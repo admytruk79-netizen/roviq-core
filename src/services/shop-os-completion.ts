@@ -222,23 +222,35 @@ export async function reconcileRepairOrder(principal:Principal,repairOrderId:str
     if(Number(openClocks.rows[0].n)>0) throw httpError('repair_order_time_open',409);
     const parts=await client.query(`select count(*)::int as n from case_parts_requirements where repair_order_id=$1 and readiness_status not in ('ready','cancelled')`,[repairOrderId]);
     if(Number(parts.rows[0].n)>0) throw httpError('repair_order_parts_unresolved',409);
+
     const lineTotals=await client.query(`select
       coalesce(sum(case when approval_status='approved' then quantity*unit_price else 0 end),0)::numeric as revenue,
-      coalesce(sum(case when approval_status='approved' and line_type<>'labor' then quantity*unit_cost else 0 end),0)::numeric as non_labor_direct_cost,
-      coalesce(sum(case when approval_status='approved' and line_type='labor' then quantity*unit_cost else 0 end),0)::numeric as estimated_labor_cost
+      coalesce(sum(case when approval_status='approved' and line_type<>'labor' then quantity*unit_cost else 0 end),0)::numeric as non_labor_direct_cost
       from shop_repair_order_lines where repair_order_id=$1`,[repairOrderId]);
-    const labor=await client.query(`select count(*)::int as tracked_entries,coalesce(sum(
-      extract(epoch from (ended_at-started_at))/3600.0 * hourly_cost_snapshot
-    ),0)::numeric as tracked_labor_cost
-      from shop_technician_time_entries
-      where repair_order_id=$1 and ended_at is not null`,[repairOrderId]);
+    const laborByLine=await client.query(`
+      select l.id,
+        (l.quantity*l.unit_cost)::numeric as estimated_cost,
+        count(te.id)::int as tracked_entries,
+        coalesce(sum(extract(epoch from (te.ended_at-te.started_at))/3600.0 * te.hourly_cost_snapshot),0)::numeric as tracked_cost
+      from shop_repair_order_lines l
+      left join shop_work_items wi on wi.repair_order_line_id=l.id
+      left join shop_technician_time_entries te on te.work_item_id=wi.id and te.ended_at is not null
+      where l.repair_order_id=$1 and l.line_type='labor' and l.approval_status='approved'
+      group by l.id,l.quantity,l.unit_cost`,[repairOrderId]);
+    const unattributed=await client.query(`
+      select coalesce(sum(extract(epoch from (te.ended_at-te.started_at))/3600.0 * te.hourly_cost_snapshot),0)::numeric as tracked_cost
+      from shop_technician_time_entries te
+      join shop_work_items wi on wi.id=te.work_item_id
+      left join shop_repair_order_lines l on l.id=wi.repair_order_line_id
+      where te.repair_order_id=$1 and te.ended_at is not null
+        and (l.id is null or l.line_type<>'labor' or l.approval_status<>'approved')`,[repairOrderId]);
+
     const revenue=Number(lineTotals.rows[0].revenue??0);
     const directCost=Number(lineTotals.rows[0].non_labor_direct_cost??0);
-    const trackedEntries=Number(labor.rows[0].tracked_entries??0);
-    const trackedLaborCost=Number(labor.rows[0].tracked_labor_cost??0);
-    const estimatedLaborCost=Number(lineTotals.rows[0].estimated_labor_cost??0);
-    const laborCost=trackedEntries>0?trackedLaborCost:estimatedLaborCost;
-    const laborCostSource=trackedEntries>0?'technician_time_snapshot':'repair_order_line_estimate';
+    const attributedLaborCost=laborByLine.rows.reduce((sum:number,row:any)=>sum+(Number(row.tracked_entries)>0?Number(row.tracked_cost??0):Number(row.estimated_cost??0)),0);
+    const unattributedLaborCost=Number(unattributed.rows[0]?.tracked_cost??0);
+    const laborCost=attributedLaborCost+unattributedLaborCost;
+    const laborCostSource='per_line_actual_with_estimate_fallback';
     const contribution=revenue-directCost-laborCost;
     const entries=[
       {key:'shop_os_revenue',entryType:'shop_os_revenue',account:'service_revenue',amount:revenue,costCategory:null},
@@ -253,7 +265,7 @@ export async function reconcileRepairOrder(principal:Principal,repairOrderId:str
       do update set amount=excluded.amount,state='posted',recognition_basis=excluded.recognition_basis,cost_category=excluded.cost_category,
         metadata=excluded.metadata`,[
         order.service_case_id,repairOrderId,entry.entryType,entry.account,entry.amount,entry.costCategory,entry.key,
-        JSON.stringify({repairOrderNumber:order.repair_order_number,revenue,directCost,laborCost,laborCostSource,contribution})
+        JSON.stringify({repairOrderNumber:order.repair_order_number,revenue,directCost,laborCost,laborCostSource,attributedLaborCost,unattributedLaborCost,contribution})
       ]);
     }
     await appendEvent(client,repairOrderId,'SHOP_OS_REPAIR_ORDER_RECONCILED',principal,{revenue,directCost,laborCost,laborCostSource,contribution});
