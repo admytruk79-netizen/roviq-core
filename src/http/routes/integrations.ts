@@ -4,12 +4,33 @@ import { pool } from '../../db/pool.js';
 import { createIntegrationClient, createWebhookSubscription, deliverWebhookBatch } from '../../services/integration-gateway.js';
 import { listConnectConnections, reportConnectionHealth, setConnectionControl } from '../../services/connect-operations.js';
 import { requireRole } from '../middleware/principal.js';
+import type { Principal } from '../../types/principal.js';
 
 function connectError(reply:any,error:unknown){
   if(error instanceof Error&&error.message==='connection_not_found') return reply.code(404).send({error:error.message});
   if(error instanceof Error&&error.message==='fallback_mode_required') return reply.code(400).send({error:error.message});
   if(error instanceof Error&&error.message==='connection_revoked_terminal') return reply.code(409).send({error:error.message});
   throw error;
+}
+
+function httpError(message:string,statusCode:number){
+  const error=new Error(message) as Error&{statusCode:number};
+  error.statusCode=statusCode;
+  return error;
+}
+
+async function assertAdminConnectionScope(principal:Principal,connectionId:string){
+  const connection=await pool.query(`select id,organization_id,location_id from partner_system_connections where id=$1`,[connectionId]);
+  if(!connection.rowCount) throw httpError('connection_not_found',404);
+  if(!principal.actorId) return connection.rows[0];
+
+  const actor=await pool.query(`select organization_id,location_id,status from actors where id=$1`,[principal.actorId]);
+  if(!actor.rowCount||actor.rows[0].status!=='active') throw httpError('forbidden',403);
+  const scope=actor.rows[0];
+  const row=connection.rows[0];
+  if(scope.organization_id&&scope.organization_id!==row.organization_id) throw httpError('forbidden',403);
+  if(scope.location_id&&scope.location_id!==row.location_id) throw httpError('forbidden',403);
+  return row;
 }
 
 export async function integrationRoutes(app:FastifyInstance) {
@@ -51,6 +72,7 @@ export async function integrationRoutes(app:FastifyInstance) {
 
   app.get('/api/admin/integrations/connections/:id/events',{preHandler:requireRole('admin')},async(req)=>{
     const {id}=z.object({id:z.string().uuid()}).parse(req.params);
+    await assertAdminConnectionScope(req.principal,id);
     const r=await pool.query(`select id,event_type,direction,status,correlation_id,external_entity_type,external_entity_id,roviq_entity_type,roviq_entity_id,error_message,created_at from integration_sync_events where connection_id=$1 order by created_at desc limit 250`,[id]);
     return {events:r.rows};
   });
