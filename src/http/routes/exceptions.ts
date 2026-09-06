@@ -13,7 +13,7 @@ export async function exceptionRoutes(app:FastifyInstance){
       severity:z.enum(['info','warning','critical']).optional(),
       limit:z.coerce.number().int().positive().max(500).default(200)
     }).parse(req.query??{});
-    return {exceptions:await getExceptionQueue(query)};
+    return {exceptions:await getExceptionQueue(req.principal,query)};
   });
 
   app.post('/api/admin/exceptions/:id/state',{preHandler:requireRole('admin')},async(req,reply)=>{
@@ -24,7 +24,7 @@ export async function exceptionRoutes(app:FastifyInstance){
     try{return {exception:await updateExceptionState(req.principal,id,body)};}
     catch(error){
       const message=error instanceof Error?error.message:'exception_update_failed';
-      if(message==='exception_not_found')return reply.code(404).send({error:message});
+      if(message==='exception_not_found'||message==='case_not_found')return reply.code(404).send({error:message});
       if(message==='invalid_exception_transition'||message==='resolution_code_required')return reply.code(409).send({error:message});
       if(message==='exception_admin_only'||message==='forbidden')return reply.code(403).send({error:message});
       throw error;
@@ -39,7 +39,8 @@ export async function exceptionRoutes(app:FastifyInstance){
     try{return {exception:await assignException(req.principal,id,body)};}
     catch(error){
       const message=error instanceof Error?error.message:'exception_assignment_failed';
-      if(message==='exception_not_found')return reply.code(404).send({error:message});
+      if(message==='exception_not_found'||message==='case_not_found')return reply.code(404).send({error:message});
+      if(message==='exception_owner_invalid'||message==='exception_owner_scope_mismatch')return reply.code(409).send({error:message});
       if(message==='exception_admin_only'||message==='forbidden')return reply.code(403).send({error:message});
       throw error;
     }
