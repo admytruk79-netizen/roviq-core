@@ -82,9 +82,16 @@ export async function buildApp() {
     // Protect every case-addressed admin route centrally so new exception, ledger, spatial,
     // milestone or diagnostic endpoints cannot silently bypass the same boundary.
     const routeUrl=req.routeOptions.url;
-    if(req.principal.role==='admin'&&req.principal.actorId&&routeUrl?.startsWith('/api/admin/cases/:id')){
-      const caseId=(req.params as {id?:string}|undefined)?.id;
-      if(caseId) await assertAdminCaseScope(req.principal,caseId,pool);
+    if(req.principal.role==='admin'&&req.principal.actorId){
+      if(routeUrl==='/api/admin/exceptions'){
+        const error=new Error('forbidden') as Error&{statusCode:number};
+        error.statusCode=403;
+        throw error;
+      }
+      if(routeUrl?.startsWith('/api/admin/cases/:id')){
+        const caseId=(req.params as {id?:string}|undefined)?.id;
+        if(caseId) await assertAdminCaseScope(req.principal,caseId,pool);
+      }
     }
   });
   await app.register(authRoutes);
