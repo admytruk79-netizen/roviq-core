@@ -247,11 +247,13 @@ export async function rebuildShopOsCapacity(resourceId:string,db:Queryable){
     update capacity_windows cw
        set capacity_units=r.available_units,
            capacity_state=case
+             when cw.capacity_state in ('blocked','unknown') then cw.capacity_state
+             when cw.sync_state<>'current' then cw.capacity_state
              when r.available_units<=0 then 'full'
              when r.available_units<r.nominal_capacity_units then 'limited'
              else 'available'
            end,
-           confidence='roviq_native',sync_state='current',updated_at=now()
+           updated_at=now()
       from recalculated r
      where cw.id=r.id`,[resourceId]);
 }
