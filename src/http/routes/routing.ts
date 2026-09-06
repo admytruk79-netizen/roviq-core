@@ -11,6 +11,16 @@ export async function routingRoutes(app:FastifyInstance){
  app.post('/api/admin/demands/:id/route',{preHandler:requireRole('admin')},async(req,reply)=>{
   const{id}=req.params as{id:string};const body=z.object({createOffer:z.boolean().default(true)}).parse(req.body??{});
   try{
+   // Auto-dispatch is only actionable when the selected provider receives an offer. Reject the
+   // unsupported combination before routing or case-state mutation so selection, reservation and
+   // provider visibility cannot diverge.
+   if(!body.createOffer){
+    const existingCase=await pool.query('select id,selection_mode from service_cases where demand_id=$1 order by created_at desc limit 1',[id]);
+    if(existingCase.rows[0]?.selection_mode==='auto_dispatch'){
+     return reply.code(400).send({error:'auto_dispatch_requires_offer'});
+    }
+   }
+
    const result=await routeMaintenanceDemand(id);
    const caseResult=await pool.query('select * from service_cases where demand_id=$1 order by created_at desc limit 1',[id]);
    let serviceCase=caseResult.rows[0]??null;
