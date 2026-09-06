@@ -8,6 +8,6 @@ alter table shop_technician_time_entries
 
 alter table shop_technician_time_entries
   add constraint shop_technician_time_entries_end_reason_check
-  check (end_reason is null or end_reason in ('pause','complete','switch','manual','cancel'));
+  check (end_reason is null or end_reason in ('pause','complete','switch','manual','cancel','order_cancelled'));
 
 commit;
