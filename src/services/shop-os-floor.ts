@@ -212,7 +212,7 @@ const workTransitions:Record<WorkItemAction,Record<string,string>>={
   cancel:{queued:'cancelled',assigned:'cancelled',in_progress:'cancelled',paused:'cancelled',waiting_parts:'cancelled',waiting_customer:'cancelled',quality_control:'cancelled'}
 };
 
-async function closeOpenTimeForWorkItem(workItemId:string,reason:'pause'|'complete'|'manual',db:Queryable){
+async function closeOpenTimeForWorkItem(workItemId:string,reason:'pause'|'complete'|'manual'|'cancel',db:Queryable){
   await db.query(`update shop_technician_time_entries set ended_at=now(),end_reason=$2
     where work_item_id=$1 and ended_at is null`,[workItemId,reason]);
 }
@@ -234,7 +234,8 @@ export async function updateWorkItem(principal:Principal,workItemId:string,input
     await assertResource(bayResourceId,'bay',item.organization_id,item.location_id,null,client);
     if(['assign','start','resume'].includes(input.action)&&!technicianActorId) throw httpError('technician_required',409);
     if(['pause','wait_parts','wait_customer','qc','complete','cancel'].includes(input.action)){
-      await closeOpenTimeForWorkItem(workItemId,input.action==='complete'?'complete':'pause',client);
+      const endReason=input.action==='complete'?'complete':input.action==='cancel'?'cancel':'pause';
+      await closeOpenTimeForWorkItem(workItemId,endReason,client);
     }
     const updated=await client.query(`update shop_work_items set
       status=$2,technician_actor_id=$3,technician_resource_id=$4,bay_resource_id=$5,
