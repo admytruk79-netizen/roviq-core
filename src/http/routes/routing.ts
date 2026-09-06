@@ -17,9 +17,10 @@ export async function routingRoutes(app:FastifyInstance){
    let offer=null; let selection:null|{caseId:string;selectedActorId:string;selectionMode:'auto_dispatch'}=null;
    const recommended=result.recommendedActorId??null;
 
-   // For auto-dispatch, reserve/commit capacity before moving the case into the
-   // provider-selection handoff. If capacity changes after ranking, the case stays
-   // in its prior state and the caller receives a normal routing conflict.
+   // Provider selection is an explicit state boundary. Move into that state first,
+   // then let autoDispatchCase lock and validate the case before reserving capacity.
+   if(serviceCase&&['triage','diagnostic_in_progress'].includes(serviceCase.state))serviceCase=await transitionCase(req.principal,serviceCase.id,'provider_selection',{source:'routing_engine'});
+
    if(serviceCase&&recommended&&serviceCase.selection_mode==='auto_dispatch'){
     try{
      selection=await autoDispatchCase(serviceCase.id,recommended,result.decision?.id??null,{source:'routing_engine'});
@@ -31,8 +32,6 @@ export async function routingRoutes(app:FastifyInstance){
      throw error;
     }
    }
-
-   if(serviceCase&&['triage','diagnostic_in_progress'].includes(serviceCase.state))serviceCase=await transitionCase(req.principal,serviceCase.id,'provider_selection',{source:'routing_engine'});
 
    // An offer is an invitation, not a provider selection. For customer/dealer choice,
    // the recommendation remains visible until the authorized selector chooses.
