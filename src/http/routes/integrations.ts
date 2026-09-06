@@ -10,6 +10,7 @@ function connectError(reply:any,error:unknown){
   if(error instanceof Error&&error.message==='connection_not_found') return reply.code(404).send({error:error.message});
   if(error instanceof Error&&error.message==='fallback_mode_required') return reply.code(400).send({error:error.message});
   if(error instanceof Error&&error.message==='connection_revoked_terminal') return reply.code(409).send({error:error.message});
+  if(error instanceof Error&&error.message==='forbidden') return reply.code(403).send({error:error.message});
   throw error;
 }
 
@@ -44,7 +45,9 @@ export async function integrationRoutes(app:FastifyInstance) {
     return {clients:r.rows};
   });
 
-  app.get('/api/admin/integrations/connections',{preHandler:requireRole('admin')},async()=>({connections:await listConnectConnections()}));
+  app.get('/api/admin/integrations/connections',{preHandler:requireRole('admin')},async(req,reply)=>{
+    try{return {connections:await listConnectConnections(req.principal)};}catch(error){return connectError(reply,error);}
+  });
 
   app.patch('/api/admin/integrations/connections/:id/control',{preHandler:requireRole('admin')},async(req,reply)=>{
     const {id}=z.object({id:z.string().uuid()}).parse(req.params);
