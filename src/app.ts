@@ -3,6 +3,7 @@ import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import { ZodError } from 'zod';
+import { pool } from './db/pool.js';
 import { principalMiddleware } from './http/middleware/principal.js';
 import { healthRoutes } from './http/routes/health.js';
 import { authRoutes } from './http/routes/auth.js';
@@ -29,6 +30,7 @@ import { fieldServiceRoutes } from './http/routes/field-service.js';
 import { exceptionRoutes } from './http/routes/exceptions.js';
 import { shopOsRoutes } from './http/routes/shop-os.js';
 import { shopOsFloorRoutes } from './http/routes/shop-os-floor.js';
+import { assertAdminCaseScope } from './services/admin-case-scope.js';
 
 export async function buildApp() {
   // Pino/Fastify logging currently triggers a Worker startup incompatibility.
@@ -74,6 +76,16 @@ export async function buildApp() {
     const routeConfig = req.routeOptions.config as { public?: boolean } | undefined;
     if (routeConfig?.public || req.url === '/health' || req.url === '/ready') return;
     await principalMiddleware(req, reply);
+    if(reply.sent)return;
+
+    // Service/global admins intentionally have no actor id. Actor-backed admins are tenant scoped.
+    // Protect every case-addressed admin route centrally so new exception, ledger, spatial,
+    // milestone or diagnostic endpoints cannot silently bypass the same boundary.
+    const routeUrl=req.routeOptions.url;
+    if(req.principal.role==='admin'&&req.principal.actorId&&routeUrl?.startsWith('/api/admin/cases/:id')){
+      const caseId=(req.params as {id?:string}|undefined)?.id;
+      if(caseId) await assertAdminCaseScope(req.principal,caseId,pool);
+    }
   });
   await app.register(authRoutes);
   await app.register(coreRoutes);
