@@ -4,6 +4,7 @@ import { requireRole } from '../middleware/principal.js';
 import { assignException, getExceptionQueue, updateExceptionState } from '../../services/exception-engine.js';
 
 const exceptionState=z.enum(['open','acknowledged','remediating','resolved','dismissed']);
+const exceptionIdParams=z.object({id:z.string().uuid()});
 
 export async function exceptionRoutes(app:FastifyInstance){
   app.get('/api/admin/exceptions/v2',{preHandler:requireRole('admin')},async(req)=>{
@@ -16,7 +17,9 @@ export async function exceptionRoutes(app:FastifyInstance){
   });
 
   app.post('/api/admin/exceptions/:id/state',{preHandler:requireRole('admin')},async(req,reply)=>{
-    const {id}=req.params as {id:string};
+    const parsed=exceptionIdParams.safeParse(req.params);
+    if(!parsed.success)return reply.code(400).send({error:'invalid_exception_id'});
+    const {id}=parsed.data;
     const body=z.object({state:exceptionState,resolutionCode:z.string().min(1).optional(),note:z.string().max(2000).optional()}).parse(req.body);
     try{return {exception:await updateExceptionState(req.principal,id,body)};}
     catch(error){
@@ -29,7 +32,9 @@ export async function exceptionRoutes(app:FastifyInstance){
   });
 
   app.put('/api/admin/exceptions/:id/assignment',{preHandler:requireRole('admin')},async(req,reply)=>{
-    const {id}=req.params as {id:string};
+    const parsed=exceptionIdParams.safeParse(req.params);
+    if(!parsed.success)return reply.code(400).send({error:'invalid_exception_id'});
+    const {id}=parsed.data;
     const body=z.object({ownerActorId:z.string().uuid().nullable().optional(),dueAt:z.string().datetime().nullable().optional()}).parse(req.body);
     try{return {exception:await assignException(req.principal,id,body)};}
     catch(error){
