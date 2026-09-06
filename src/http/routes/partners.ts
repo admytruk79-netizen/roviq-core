@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { pool } from '../../db/pool.js';
 import { audit } from '../../services/audit.js';
 import { raiseException, transitionCase } from '../../services/orchestration.js';
+import { releaseCaseCapacity } from '../../services/capacity-reservation.js';
 import { requireRole } from '../middleware/principal.js';
 
 const capacityBody = z.object({
@@ -81,6 +82,65 @@ export async function partnerRoutes(app: FastifyInstance) {
   app.post('/api/offers/:id/respond', { preHandler: requireRole('partner','diagnostic','tow','parts','fleet') }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = z.object({ outcome: z.enum(['accepted','declined']) }).parse(req.body);
+
+    // Decline, reservation release, selection clearing and state reset are one transaction.
+    // This prevents a provider_pending case from retaining selected_actor_id and becoming
+    // permanently unselectable after the offered provider declines.
+    if (body.outcome === 'declined') {
+      const client=await pool.connect();
+      try{
+        await client.query('begin');
+        const r=await client.query(
+          `update matches_offers set outcome='declined',responded_at=now()
+           where id=$1 and actor_id=$2 and outcome='offered' returning *`,
+          [id,req.principal.actorId]
+        );
+        if(!r.rowCount){
+          await client.query('rollback');
+          return reply.code(404).send({error:'offer_not_found_or_not_owned'});
+        }
+        const offer=r.rows[0];
+        let serviceCase=null;
+        if(offer.case_id){
+          const c=await client.query('select * from service_cases where id=$1 for update',[offer.case_id]);
+          serviceCase=c.rows[0]??null;
+          if(serviceCase&&serviceCase.state==='provider_pending'&&serviceCase.selected_actor_id===req.principal.actorId){
+            await releaseCaseCapacity(offer.case_id,client);
+            const updated=await client.query(`
+              update service_cases
+                 set state='provider_selection',
+                     selected_actor_id=null,
+                     selection_source=null,
+                     selected_at=null,
+                     version=version+1,
+                     updated_at=now()
+               where id=$1 and state='provider_pending' and selected_actor_id=$2
+               returning *`,[offer.case_id,req.principal.actorId]);
+            if(!updated.rowCount) throw new Error('case_not_selectable');
+            serviceCase=updated.rows[0];
+            await client.query(`insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload)
+              values('service_case',$1,'PROVIDER_DECLINED',$2,$3),
+                    ('service_case',$1,'CASE_PROVIDER_SELECTION',$2,$4)`,[
+              offer.case_id,req.principal.actorId,
+              JSON.stringify({offerId:id,actorId:req.principal.actorId,from:'provider_pending'}),
+              JSON.stringify({from:'provider_pending',to:'provider_selection',declinedOfferId:id,declinedActorId:req.principal.actorId})
+            ]);
+          }else{
+            await client.query(`insert into case_exceptions(case_id,exception_code,severity,summary,metadata)
+              values($1,'OFFER_DECLINED','warning',$2,$3)`,[
+              offer.case_id,`${req.principal.role} declined an assigned offer.`,JSON.stringify({offerId:id,actorId:req.principal.actorId})
+            ]);
+          }
+        }
+        await client.query('commit');
+        await audit(req.principal,'respond_offer','match_offer',id,'actor_scoped_offer',{outcome:'declined',caseId:offer.case_id??null});
+        return {offer,case:serviceCase};
+      }catch(error){
+        await client.query('rollback');
+        throw error;
+      }finally{client.release();}
+    }
+
     const r = await pool.query(
       `update matches_offers set outcome=$1, responded_at=now()
        where id=$2 and actor_id=$3 and outcome='offered' returning *`,
@@ -102,13 +162,6 @@ export async function partnerRoutes(app: FastifyInstance) {
           if (message !== 'invalid_case_transition' && message !== 'transition_forbidden') {
             console.error('offer_accept_transition_unexpected_error', { caseId: offer.case_id, target, message });
           }
-        }
-      }
-      if (serviceCase && body.outcome === 'declined') {
-        if (serviceCase.state === 'provider_pending' && req.principal.role === 'partner') {
-          serviceCase = await transitionCase(req.principal,offer.case_id,'provider_selection',{ declinedOfferId:id });
-        } else {
-          await raiseException(offer.case_id,'OFFER_DECLINED',`${req.principal.role} declined an assigned offer.`,'warning',{ offerId:id,actorId:req.principal.actorId });
         }
       }
     }
