@@ -65,9 +65,9 @@ describe('cross-role maintenance case lifecycle', () => {
     });
     expect(diagnosticPending.statusCode).toBe(200);
 
-    await pool.query(
-      `insert into matches_offers(demand_id,case_id,actor_id,rank,outcome,responded_at,rule_basis)
-       values($1,$2,$3,1,'accepted',now(),'cross_role_lifecycle_seed')`,
+    const diagnosticOffer = await pool.query(
+      `insert into matches_offers(demand_id,case_id,actor_id,rank,outcome,rule_basis)
+       values($1,$2,$3,1,'offered','cross_role_lifecycle_seed') returning id`,
       [demandId, caseId, diagnosticId]
     );
     await pool.query(
@@ -75,6 +75,15 @@ describe('cross-role maintenance case lifecycle', () => {
        values($1,$2,$3,2,'accepted',now(),'cross_role_lifecycle_seed')`,
       [demandId, caseId, partnerId]
     );
+
+    const acceptDiagnostic = await app.inject({
+      method:'POST', url:`/api/offers/${diagnosticOffer.rows[0].id}/respond`,
+      headers:actorHeaders('diagnostic',diagnosticId), payload:{outcome:'accepted'}
+    });
+    expect(acceptDiagnostic.statusCode).toBe(200);
+    expect(JSON.parse(acceptDiagnostic.body).case.state).toBe('diagnostic_in_progress');
+    const diagnosticOwner = await pool.query('select current_owner_role,current_owner_actor_id from service_cases where id=$1',[caseId]);
+    expect(diagnosticOwner.rows[0]).toMatchObject({current_owner_role:'diagnostic',current_owner_actor_id:diagnosticId});
 
     const diagnosticQueue = await app.inject({
       method: 'GET', url: '/api/diagnostics/me/queue', headers: actorHeaders('diagnostic', diagnosticId)
@@ -109,6 +118,8 @@ describe('cross-role maintenance case lifecycle', () => {
       payload: { providerActorId: towId }
     });
     expect(assignTow.statusCode).toBe(200);
+    const assignedTowOwner = await pool.query('select current_owner_role,current_owner_actor_id from service_cases where id=$1',[caseId]);
+    expect(assignedTowOwner.rows[0]).toMatchObject({current_owner_role:'tow',current_owner_actor_id:towId});
 
     const gpsRes = await app.inject({
       method: 'POST', url: `/api/transport/${dispatchId}/location`, headers: actorHeaders('tow', towId),
@@ -116,7 +127,15 @@ describe('cross-role maintenance case lifecycle', () => {
     });
     expect(gpsRes.statusCode).toBe(200);
 
-    for (const status of ['accepted','en_route','arrived','vehicle_loaded','in_transit','delivered']) {
+    const acceptedTow = await app.inject({
+      method:'POST', url:`/api/transport/${dispatchId}/status`, headers:actorHeaders('tow',towId),
+      payload:{status:'accepted'}
+    });
+    expect(acceptedTow.statusCode).toBe(200);
+    const acceptedTowOwner = await pool.query('select state,current_owner_role,current_owner_actor_id from service_cases where id=$1',[caseId]);
+    expect(acceptedTowOwner.rows[0]).toMatchObject({state:'tow_in_progress',current_owner_role:'tow',current_owner_actor_id:towId});
+
+    for (const status of ['en_route','arrived','vehicle_loaded','in_transit','delivered']) {
       const res = await app.inject({
         method: 'POST', url: `/api/transport/${dispatchId}/status`, headers: actorHeaders('tow', towId),
         payload: { status }
