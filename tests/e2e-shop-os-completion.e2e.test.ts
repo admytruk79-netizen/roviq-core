@@ -95,7 +95,7 @@ describe('Shop OS parts readiness, deferred service and reconciliation',()=>{
     expect(first.revenue).toBe(300);
     expect(first.directCost).toBe(60);
     expect(first.laborCost).toBe(40);
-    expect(first.laborCostSource).toBe('repair_order_line_estimate');
+    expect(first.laborCostSource).toBe('per_line_actual_with_estimate_fallback');
     expect(first.contribution).toBe(200);
     expect(first.ledgerEntries).toHaveLength(3);
     const firstDates=first.ledgerEntries.map((entry)=>new Date(entry.occurred_at).toISOString());
