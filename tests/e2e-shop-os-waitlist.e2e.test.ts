@@ -22,10 +22,17 @@ async function setupShop(){
   return {orgId:org.rows[0].id as string,resourceId:resource.rows[0].id as string,actorId:actor.rows[0].id as string};
 }
 
+async function createCaseForActor(actorId:string){
+  const domain=await pool.query(`select id from domains where code='maintenance' limit 1`);
+  const created=await pool.query(`insert into service_cases(domain_id,case_type,state,selected_actor_id)
+    values($1,'maintenance','provider_pending',$2) returning id`,[domain.rows[0].id,actorId]);
+  return created.rows[0].id as string;
+}
+
 describe('Shop OS waitlist',()=>{
   afterAll(async()=>{ await pool.end(); });
 
-  it('creates, offers and books a waitlist entry into a native appointment',async()=>{
+  it('creates, offers and books a case-less waitlist entry only into a case-less native appointment',async()=>{
     const shop=await setupShop();
     const partner={role:'partner',actorId:shop.actorId} as const;
     const entry=await createShopWaitlistEntry(partner,{requestedServiceCategory:'repair',priority:10,estimatedDurationMinutes:60});
@@ -50,6 +57,27 @@ describe('Shop OS waitlist',()=>{
     expect(bookedEntries.entries.find((item)=>item.id===entry.id)).toBeTruthy();
   });
 
+  it('rejects past and exactly-current offer deadlines and rejects booking an expired offered entry',async()=>{
+    const shop=await setupShop();
+    const partner={role:'partner',actorId:shop.actorId} as const;
+    const past=await createShopWaitlistEntry(partner,{requestedServiceCategory:'repair'});
+    await expect(updateShopWaitlistEntry(partner,past.id,{action:'offer',offerExpiresAt:new Date(Date.now()-1000).toISOString()}))
+      .rejects.toMatchObject({message:'offer_expiry_invalid',statusCode:400});
+
+    const exact=await createShopWaitlistEntry(partner,{requestedServiceCategory:'repair'});
+    await expect(updateShopWaitlistEntry(partner,exact.id,{action:'offer',offerExpiresAt:new Date().toISOString()}))
+      .rejects.toMatchObject({message:'offer_expiry_invalid',statusCode:400});
+
+    const expiring=await createShopWaitlistEntry(partner,{requestedServiceCategory:'repair'});
+    await updateShopWaitlistEntry(partner,expiring.id,{action:'offer',offerExpiresAt:new Date(Date.now()+30*60_000).toISOString()});
+    await pool.query(`update shop_waitlist_entries set offer_expires_at=now()-interval '1 second' where id=$1`,[expiring.id]);
+    const start=new Date(Date.now()+60*60_000).toISOString();
+    const end=new Date(Date.now()+120*60_000).toISOString();
+    const appointment=await createShopOsAppointment(partner,{resourceId:shop.resourceId,startsAt:start,endsAt:end,serviceCategory:'repair',status:'confirmed'});
+    await expect(updateShopWaitlistEntry(partner,expiring.id,{action:'book',appointmentId:appointment.id}))
+      .rejects.toMatchObject({message:'waitlist_offer_expired',statusCode:409});
+  });
+
   it('supports offer expiry and requeue without losing the waitlist record',async()=>{
     const shop=await setupShop();
     const partner={role:'partner',actorId:shop.actorId} as const;
@@ -60,6 +88,30 @@ describe('Shop OS waitlist',()=>{
     const requeued=await updateShopWaitlistEntry(partner,entry.id,{action:'requeue'});
     expect(requeued.state).toBe('waiting');
     expect(requeued.offer_expires_at).toBeNull();
+  });
+
+  it('rejects booking a waitlist entry into an appointment for a different case',async()=>{
+    const shop=await setupShop();
+    const partner={role:'partner',actorId:shop.actorId} as const;
+    const caseA=await createCaseForActor(shop.actorId);
+    const caseB=await createCaseForActor(shop.actorId);
+    const entry=await createShopWaitlistEntry(partner,{serviceCaseId:caseA,requestedServiceCategory:'repair'});
+    const start=new Date(Date.now()+90*60_000).toISOString();
+    const end=new Date(Date.now()+150*60_000).toISOString();
+    const appointment=await createShopOsAppointment(partner,{serviceCaseId:caseB,resourceId:shop.resourceId,startsAt:start,endsAt:end,serviceCategory:'repair',status:'confirmed'});
+
+    await expect(updateShopWaitlistEntry(partner,entry.id,{action:'book',appointmentId:appointment.id}))
+      .rejects.toMatchObject({message:'waitlist_case_mismatch',statusCode:409});
+  });
+
+  it('prevents tenant-crossing case links even for an admin-scoped waitlist write',async()=>{
+    const shopA=await setupShop();
+    const shopB=await setupShop();
+    const caseA=await createCaseForActor(shopA.actorId);
+    const admin={role:'admin'} as const;
+
+    await expect(createShopWaitlistEntry(admin,{organizationId:shopB.orgId,serviceCaseId:caseA,requestedServiceCategory:'repair'}))
+      .rejects.toMatchObject({message:'service_case_tenant_mismatch',statusCode:409});
   });
 
   it('prevents one partner tenant from reading or mutating another tenant waitlist',async()=>{
