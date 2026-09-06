@@ -77,9 +77,10 @@ describe('review hardening round two',()=>{
     expect(first.laborCost).toBeLessThan(81);
     expect(first.contribution).toBeGreaterThan(119);
     expect(first.contribution).toBeLessThan(121);
+    expect(first.laborCostSource).toBe('per_line_actual_with_estimate_fallback');
     const firstDates=await pool.query(`select reconciliation_key,occurred_at from ledger_entries where repair_order_id=$1 order by reconciliation_key`,[order.id]);
     const second=await reconcileRepairOrder(globalAdmin,order.id);
-    expect(second.laborCostSource).toBe('technician_time_snapshot');
+    expect(second.laborCostSource).toBe('per_line_actual_with_estimate_fallback');
     const secondDates=await pool.query(`select reconciliation_key,occurred_at from ledger_entries where repair_order_id=$1 order by reconciliation_key`,[order.id]);
     expect(secondDates.rows.map((row)=>row.occurred_at.toISOString())).toEqual(firstDates.rows.map((row)=>row.occurred_at.toISOString()));
   });
