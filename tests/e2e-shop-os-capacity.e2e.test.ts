@@ -24,10 +24,29 @@ async function setupNativeShop(nominalCapacityUnits=2){
   return {orgId:org.rows[0].id as string,connectionId:connection.rows[0].id as string,resourceId:resource.rows[0].id as string,windowId:window.rows[0].id as string};
 }
 
+async function createAdditionalResource(input:{orgId:string;connectionId:string;name:string;nominalCapacityUnits?:number}){
+  const resource=await pool.query(`insert into service_resources(
+      organization_id,resource_type,display_name,active,source_connection_id
+    ) values($1,'bay',$2,true,$3) returning id`,[input.orgId,input.name,input.connectionId]);
+  await pool.query(`insert into capacity_windows(
+      organization_id,source_connection_id,resource_id,service_category,window_start,window_end,
+      capacity_state,capacity_units,nominal_capacity_units,confidence,sync_state
+    ) values($1,$2,$3,'repair',now()-interval '1 hour',now()+interval '2 hours',
+      'available',$4,$4,'roviq_native','current')`,[
+    input.orgId,input.connectionId,resource.rows[0].id,input.nominalCapacityUnits??1
+  ]);
+  return resource.rows[0].id as string;
+}
+
 async function createCase(){
   const domain=await pool.query(`select id from domains where code='maintenance' limit 1`);
   const created=await pool.query(`insert into service_cases(domain_id,case_type,state) values($1,'maintenance','provider_selection') returning id`,[domain.rows[0].id]);
   return created.rows[0].id as string;
+}
+
+async function createPartnerActor(orgId:string){
+  const actor=await pool.query(`insert into actors(actor_type,status,organization_id) values('shop','active',$1) returning id`,[orgId]);
+  return actor.rows[0].id as string;
 }
 
 describe('ROVIQ-native Shop OS capacity',()=>{
@@ -81,5 +100,46 @@ describe('ROVIQ-native Shop OS capacity',()=>{
     const reservation=await pool.query(`select state,consumed_at from capacity_reservations where service_case_id=$1 and capacity_window_id=$2`,[caseA,windowId]);
     expect(reservation.rows[0].state).toBe('consumed');
     expect(reservation.rows[0].consumed_at).toBeTruthy();
+  });
+
+  it('rolls back a failed cross-resource reschedule and succeeds after destination capacity is released',async()=>{
+    const {orgId,connectionId,resourceId:resourceA}=await setupNativeShop(1);
+    const resourceB=await createAdditionalResource({orgId,connectionId,name:'Bay 2',nominalCapacityUnits:1});
+    const start=new Date(Date.now()+25*60_000).toISOString();
+    const end=new Date(Date.now()+85*60_000).toISOString();
+
+    const moving=await createShopOsAppointment(admin,{resourceId:resourceA,startsAt:start,endsAt:end,serviceCategory:'repair',status:'confirmed'});
+    const blocker=await createShopOsAppointment(admin,{resourceId:resourceB,startsAt:start,endsAt:end,serviceCategory:'repair',status:'confirmed'});
+
+    await expect(updateShopOsAppointment(admin,moving.id,{action:'reschedule',resourceId:resourceB}))
+      .rejects.toMatchObject({message:'shop_os_capacity_unavailable',statusCode:409});
+
+    const afterFailure=await pool.query(`select resource_id,appointment_status,lifecycle_version from roviq_appointments where id=$1`,[moving.id]);
+    expect(afterFailure.rows[0].resource_id).toBe(resourceA);
+    expect(afterFailure.rows[0].appointment_status).toBe('confirmed');
+    expect(Number(afterFailure.rows[0].lifecycle_version)).toBe(1);
+
+    await updateShopOsAppointment(admin,blocker.id,{action:'cancel',reason:'destination_released'});
+    const moved=await updateShopOsAppointment(admin,moving.id,{action:'reschedule',resourceId:resourceB});
+    expect(moved.resource_id).toBe(resourceB);
+    expect(moved.appointment_status).toBe('confirmed');
+
+    const replacement=await createShopOsAppointment(admin,{resourceId:resourceA,startsAt:start,endsAt:end,serviceCategory:'repair',status:'confirmed'});
+    expect(replacement.id).toBeTruthy();
+  });
+
+  it('fails closed when a partner actor tries to manage another organization resource',async()=>{
+    const tenantA=await setupNativeShop(1);
+    const tenantB=await setupNativeShop(1);
+    const partnerActorId=await createPartnerActor(tenantA.orgId);
+    const partner={role:'partner',actorId:partnerActorId} as const;
+    const start=new Date(Date.now()+30*60_000).toISOString();
+    const end=new Date(Date.now()+90*60_000).toISOString();
+
+    await expect(createShopOsAppointment(partner,{resourceId:tenantB.resourceId,startsAt:start,endsAt:end,serviceCategory:'repair',status:'confirmed'}))
+      .rejects.toMatchObject({message:'forbidden',statusCode:403});
+
+    const own=await createShopOsAppointment(partner,{resourceId:tenantA.resourceId,startsAt:start,endsAt:end,serviceCategory:'repair',status:'confirmed'});
+    expect(own.id).toBeTruthy();
   });
 });
