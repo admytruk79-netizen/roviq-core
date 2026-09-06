@@ -40,6 +40,17 @@ describe('canonical serviceability gate',()=>{
     expect(degraded?.decision.reasons).toContain('sync_degraded');
   });
 
+  it('preserves stale and degraded Shop OS sync states instead of upgrading them to current',()=>{
+    const now=new Date('2026-09-05T00:00:00Z');
+    const staleNative=row({connection_mode:'roviq_native',confidence:'roviq_native',sync_state:'stale',connection_last_success_at:null});
+    const degradedNative=row({id:'native-degraded',connection_mode:'roviq_native',confidence:'roviq_native',sync_state:'degraded',connection_last_success_at:null});
+
+    expect(deriveCanonicalSyncState(staleNative,now)).toBe('stale');
+    expect(deriveCanonicalSyncState(degradedNative,now)).toBe('degraded');
+    expect(evaluateCanonicalWindows([staleNative],[],'confirm','repair',now)?.decision.confirmable).toBe(false);
+    expect(evaluateCanonicalWindows([degradedNative],[],'confirm','repair',now)?.decision.confirmable).toBe(false);
+  });
+
   it('chooses a usable lower-unit window when a higher-unit overlapping window is blocked',()=>{
     const now=new Date('2026-09-04T23:00:00Z');
     const blocked=row({id:'blocked-10',capacity_state:'blocked',capacity_units:10});
