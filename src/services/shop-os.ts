@@ -60,7 +60,7 @@ async function loadManageableResource(principal:Principal,resourceId:string,db:Q
   return row;
 }
 
-async function assertManageableServiceCase(principal:Principal,serviceCaseId:string|null|undefined,db:Queryable){
+async function assertManageableServiceCase(principal:Principal,serviceCaseId:string|null|undefined,organizationId:string,db:Queryable){
   if(!serviceCaseId)return;
   try{
     await assertCaseAccess(principal,serviceCaseId,db);
@@ -69,6 +69,26 @@ async function assertManageableServiceCase(principal:Principal,serviceCaseId:str
     if(error instanceof Error&&error.message==='forbidden') throw httpError('forbidden',403);
     throw error;
   }
+  const linked=await db.query(`
+    select (
+      exists(
+        select 1 from service_cases sc
+        join actors owner on owner.id=sc.current_owner_actor_id
+        where sc.id=$1 and owner.organization_id=$2
+      )
+      or exists(
+        select 1 from matches_offers mo
+        join actors provider on provider.id=mo.actor_id
+        where mo.case_id=$1 and provider.organization_id=$2
+      )
+    ) as linked`,[serviceCaseId,organizationId]);
+  if(!linked.rows[0]?.linked) throw httpError('service_case_tenant_mismatch',409);
+}
+
+async function lockSchedulingResources(resourceIds:string[],db:Queryable){
+  const ids=[...new Set(resourceIds)].sort();
+  if(!ids.length)return;
+  await db.query(`select id from service_resources where id=any($1::uuid[]) order by id for update`,[ids]);
 }
 
 type CapacityMatch={id:string;nominal_capacity_units:number;service_category:string|null;window_start:string|Date;window_end:string|Date};
@@ -84,10 +104,6 @@ async function assertUsableShopOsCapacity(input:{
 },db:Queryable):Promise<CapacityMatch>{
   assertInterval(input.startsAt,input.endsAt);
 
-  // Serialize scheduling on the resource, then lock the authoritative capacity
-  // window before touching capacity_reservations. reserveCanonicalCapacity also
-  // locks the capacity window before reservation rows, so the shared ordering
-  // remains deterministic.
   const locked=await db.query(`select id from service_resources where id=$1 for update`,[input.resourceId]);
   if(!locked.rowCount) throw httpError('shop_os_resource_not_found',404);
 
@@ -215,7 +231,8 @@ export async function createShopOsAppointment(principal:Principal,input:{
     await client.query('begin');
     assertInterval(input.startsAt,input.endsAt);
     const resource=await loadManageableResource(principal,input.resourceId,client);
-    await assertManageableServiceCase(principal,input.serviceCaseId,client);
+    await assertManageableServiceCase(principal,input.serviceCaseId,resource.organization_id,client);
+    await lockSchedulingResources([input.resourceId],client);
     const capacity=await assertUsableShopOsCapacity({
       resourceId:input.resourceId,
       sourceConnectionId:resource.shop_os_connection_id,
@@ -249,17 +266,22 @@ export async function updateShopOsAppointment(principal:Principal,appointmentId:
     const current=await client.query(`select * from roviq_appointments where id=$1 for update`,[appointmentId]);
     if(!current.rowCount) throw httpError('appointment_not_found',404);
     const existing=current.rows[0];
-    await loadManageableResource(principal,existing.resource_id,client);
-    await assertManageableServiceCase(principal,existing.service_case_id,client);
+    const existingResource=await loadManageableResource(principal,existing.resource_id,client);
+    await assertManageableServiceCase(principal,existing.service_case_id,existingResource.organization_id,client);
     const nextStatus=nextShopOsAppointmentStatus(existing.appointment_status,input.action);
     const nextResourceId=input.resourceId??existing.resource_id;
     const nextResource=nextResourceId===existing.resource_id
-      ? await loadManageableResource(principal,existing.resource_id,client)
+      ? existingResource
       : await loadManageableResource(principal,nextResourceId,client);
+    if(existing.service_case_id) await assertManageableServiceCase(principal,existing.service_case_id,nextResource.organization_id,client);
     const nextStarts=input.startsAt??existing.starts_at;
     const nextEnds=input.endsAt??existing.ends_at;
     assertInterval(nextStarts,nextEnds);
     if(input.action==='reschedule' && (!input.startsAt&&!input.endsAt&&!input.resourceId)) throw httpError('reschedule_change_required',400);
+
+    if(input.action==='reschedule'||input.action==='confirm'){
+      await lockSchedulingResources([existing.resource_id,nextResourceId],client);
+    }
 
     let matchedCapacity:CapacityMatch|null=null;
     if(input.action==='reschedule'||input.action==='confirm'){
