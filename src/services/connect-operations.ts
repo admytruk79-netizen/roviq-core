@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
 import { audit } from './audit.js';
@@ -7,6 +8,7 @@ export type CredentialState = 'unknown'|'configured'|'valid'|'expiring'|'expired
 export type AccessState = 'unknown'|'authorized'|'limited'|'denied'|'revoked';
 export type ConnectionStatus = 'planned'|'active'|'paused'|'degraded'|'revoked'|'failed';
 export type FallbackMode = 'none'|'bridge'|'manual';
+type Queryable=Pick<PoolClient,'query'>;
 
 export function deriveConnectHealth(input:{
   connectionStatus:ConnectionStatus;
@@ -48,31 +50,52 @@ export function deriveConnectHealth(input:{
   return {health:'healthy',reasons:[],fallbackActive};
 }
 
-export async function listConnectConnections(){
-  const r=await pool.query(`
-    select c.*,o.display_name as organization_name,l.name as location_name,
-      (select count(*)::int from integration_sync_events e where e.connection_id=c.id and e.status='failed' and e.created_at>now()-interval '24 hours') as failures_24h,
-      (select max(e.created_at) from integration_sync_events e where e.connection_id=c.id) as latest_event_at
-    from partner_system_connections c
-    left join organizations o on o.id=c.organization_id
-    left join locations l on l.id=c.location_id
-    order by c.updated_at desc,c.created_at desc
-    limit 500`);
-  return r.rows.map((row:any)=>({
-    ...row,
-    operational:deriveConnectHealth({
-      connectionStatus:row.connection_status,
-      credentialState:row.credential_state,
-      accessState:row.access_state,
-      lastSuccessAt:row.last_success_at,
-      mode:row.mode,
-      fallbackEnabled:row.fallback_enabled,
-      fallbackMode:row.fallback_mode
-    })
-  }));
+function assertAdmin(principal:Principal){ if(principal.role!=='admin') throw new Error('forbidden'); }
+
+async function adminScope(principal:Principal,db:Queryable){
+  assertAdmin(principal);
+  if(!principal.actorId) return null;
+  const actor=await db.query(`select organization_id,location_id,status from actors where id=$1`,[principal.actorId]);
+  if(!actor.rowCount||actor.rows[0].status!=='active') throw new Error('forbidden');
+  return {organizationId:actor.rows[0].organization_id as string|null,locationId:actor.rows[0].location_id as string|null};
 }
 
-function assertAdmin(principal:Principal){ if(principal.role!=='admin') throw new Error('forbidden'); }
+async function assertConnectionScope(principal:Principal,row:any,db:Queryable){
+  const scope=await adminScope(principal,db);
+  if(!scope) return;
+  if(scope.organizationId&&scope.organizationId!==row.organization_id) throw new Error('forbidden');
+  if(scope.locationId&&scope.locationId!==row.location_id) throw new Error('forbidden');
+}
+
+export async function listConnectConnections(principal:Principal){
+  const client=await pool.connect();
+  try{
+    const scope=await adminScope(principal,client);
+    const r=await client.query(`
+      select c.*,o.display_name as organization_name,l.name as location_name,
+        (select count(*)::int from integration_sync_events e where e.connection_id=c.id and e.status='failed' and e.created_at>now()-interval '24 hours') as failures_24h,
+        (select max(e.created_at) from integration_sync_events e where e.connection_id=c.id) as latest_event_at
+      from partner_system_connections c
+      left join organizations o on o.id=c.organization_id
+      left join locations l on l.id=c.location_id
+      where ($1::uuid is null or c.organization_id=$1::uuid)
+        and ($2::uuid is null or c.location_id=$2::uuid)
+      order by c.updated_at desc,c.created_at desc
+      limit 500`,[scope?.organizationId??null,scope?.locationId??null]);
+    return r.rows.map((row:any)=>({
+      ...row,
+      operational:deriveConnectHealth({
+        connectionStatus:row.connection_status,
+        credentialState:row.credential_state,
+        accessState:row.access_state,
+        lastSuccessAt:row.last_success_at,
+        mode:row.mode,
+        fallbackEnabled:row.fallback_enabled,
+        fallbackMode:row.fallback_mode
+      })
+    }));
+  }finally{client.release();}
+}
 
 export async function setConnectionControl(principal:Principal,connectionId:string,input:{
   action:'activate'|'pause'|'degrade'|'fail'|'revoke';
@@ -87,6 +110,7 @@ export async function setConnectionControl(principal:Principal,connectionId:stri
     const current=await client.query(`select * from partner_system_connections where id=$1 for update`,[connectionId]);
     if(!current.rowCount) throw new Error('connection_not_found');
     const row=current.rows[0];
+    await assertConnectionScope(principal,row,client);
     if(row.connection_status==='revoked' && input.action!=='revoke') throw new Error('connection_revoked_terminal');
     const status:ConnectionStatus=input.action==='activate'?'active':input.action==='pause'?'paused':input.action==='degrade'?'degraded':input.action==='fail'?'failed':'revoked';
     const fallbackMode=input.fallbackMode ?? row.fallback_mode ?? 'none';
@@ -122,14 +146,13 @@ export async function reportConnectionHealth(principal:Principal,connectionId:st
     const current=await client.query(`select * from partner_system_connections where id=$1 for update`,[connectionId]);
     if(!current.rowCount) throw new Error('connection_not_found');
     const row=current.rows[0];
+    await assertConnectionScope(principal,row,client);
     if(row.connection_status==='revoked') throw new Error('connection_revoked_terminal');
     const credentialState=input.credentialState ?? row.credential_state;
     const accessState=input.accessState ?? row.access_state;
     const success=input.outcome==='success';
     const failure=input.outcome==='failure';
 
-    // paused/failed/revoked are explicit operator controls and health observations must not override them.
-    // degraded is an observed-health state, so a later successful synchronization recovers it to active.
     let nextStatus:ConnectionStatus=row.connection_status;
     if(row.connection_status!=='paused'&&row.connection_status!=='failed'){
       if(failure) nextStatus='degraded';
