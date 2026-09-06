@@ -125,6 +125,10 @@ export async function updateShopWaitlistEntry(principal:Principal,entryId:string
       if(row.requested_service_category&&a.service_category!==row.requested_service_category) throw httpError('waitlist_service_category_mismatch',409);
       if(row.requested_after&&new Date(a.starts_at).getTime()<new Date(row.requested_after).getTime()) throw httpError('waitlist_time_window_mismatch',409);
       if(row.requested_before&&new Date(a.ends_at).getTime()>new Date(row.requested_before).getTime()) throw httpError('waitlist_time_window_mismatch',409);
+      if(row.estimated_duration_minutes){
+        const durationMinutes=(new Date(a.ends_at).getTime()-new Date(a.starts_at).getTime())/60000;
+        if(!Number.isFinite(durationMinutes)||durationMinutes<Number(row.estimated_duration_minutes)) throw httpError('waitlist_duration_mismatch',409);
+      }
       nextState='booked';
     }else if(input.action==='cancel'){
       if(!['waiting','offered'].includes(row.state)) throw httpError('waitlist_transition_invalid',409);
