@@ -15,8 +15,9 @@ async function setupShop(){
   const shopActor=await pool.query(`insert into actors(actor_type,status,organization_id) values('shop','active',$1) returning id`,[org.rows[0].id]);
   const customer=await pool.query(`insert into actors(actor_type,status) values('customer','active') returning id`);
   const domain=await pool.query(`select id from domains where code='maintenance' limit 1`);
-  const serviceCase=await pool.query(`insert into service_cases(domain_id,case_type,state,customer_actor_id,current_owner_role,current_owner_actor_id)
-    values($1,'maintenance','provider_selection',$2,'partner',$3) returning id`,[domain.rows[0].id,customer.rows[0].id,shopActor.rows[0].id]);
+  const serviceCase=await pool.query(`insert into service_cases(domain_id,case_type,state,customer_actor_id)
+    values($1,'maintenance','provider_selection',$2) returning id`,[domain.rows[0].id,customer.rows[0].id]);
+  await pool.query(`update service_cases set current_owner_role='partner',current_owner_actor_id=$2 where id=$1`,[serviceCase.rows[0].id,shopActor.rows[0].id]);
   return {orgId:org.rows[0].id as string,shopActorId:shopActor.rows[0].id as string,customerActorId:customer.rows[0].id as string,caseId:serviceCase.rows[0].id as string};
 }
 
