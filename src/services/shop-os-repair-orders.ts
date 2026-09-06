@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
 import { assertCaseAccess } from './case-access.js';
+import { resolveShopPrincipalScope } from './shop-os-scope.js';
 
 type Queryable=Pick<PoolClient,'query'>;
 export type RepairOrderStatus='draft'|'estimate_pending'|'awaiting_approval'|'approved'|'in_progress'|'waiting_parts'|'waiting_customer'|'quality_control'|'completed'|'closed'|'cancelled';
@@ -16,18 +17,7 @@ function httpError(message:string,statusCode:number){
 }
 
 async function resolveScope(principal:Principal,input:{organizationId?:string;locationId?:string},db:Queryable){
-  if(principal.role==='admin'){
-    if(!input.organizationId) throw httpError('organization_id_required',400);
-    return {organizationId:input.organizationId,locationId:input.locationId??null};
-  }
-  if(principal.role!=='partner'||!principal.actorId) throw httpError('forbidden',403);
-  const actor=await db.query(`select organization_id,location_id from actors where id=$1 and status='active'`,[principal.actorId]);
-  if(!actor.rowCount||!actor.rows[0].organization_id) throw httpError('forbidden',403);
-  const organizationId=actor.rows[0].organization_id as string;
-  const actorLocationId=actor.rows[0].location_id as string|null;
-  if(input.organizationId&&input.organizationId!==organizationId) throw httpError('forbidden',403);
-  if(actorLocationId&&input.locationId&&input.locationId!==actorLocationId) throw httpError('forbidden',403);
-  return {organizationId,locationId:actorLocationId??input.locationId??null};
+  return resolveShopPrincipalScope(principal,input,db);
 }
 
 async function assertCaseBelongsToShop(principal:Principal,caseId:string|null|undefined,organizationId:string,db:Queryable){
@@ -83,6 +73,15 @@ async function recalculateTotals(repairOrderId:string,db:Queryable){
   return (await db.query(`update shop_repair_orders set
       subtotal_amount=$2,total_amount=$2+tax_amount,approved_amount=$3,updated_at=now()
       where id=$1 returning *`,[repairOrderId,totals.rows[0].subtotal,totals.rows[0].approved])).rows[0];
+}
+
+async function assertCompletionReady(repairOrderId:string,db:Queryable){
+  const openWork=await db.query(`select count(*)::int as n from shop_work_items where repair_order_id=$1 and status not in ('completed','cancelled')`,[repairOrderId]);
+  if(Number(openWork.rows[0].n)>0) throw httpError('repair_order_work_incomplete',409);
+  const openClocks=await db.query(`select count(*)::int as n from shop_technician_time_entries where repair_order_id=$1 and ended_at is null`,[repairOrderId]);
+  if(Number(openClocks.rows[0].n)>0) throw httpError('repair_order_time_open',409);
+  const unresolvedParts=await db.query(`select count(*)::int as n from case_parts_requirements where repair_order_id=$1 and readiness_status not in ('ready','cancelled')`,[repairOrderId]);
+  if(Number(unresolvedParts.rows[0].n)>0) throw httpError('repair_order_parts_unresolved',409);
 }
 
 export async function createRepairOrder(principal:Principal,input:{
@@ -189,6 +188,7 @@ export async function updateRepairOrderLine(principal:Principal,repairOrderId:st
     const order=await loadOrderForUpdate(principal,repairOrderId,client);
     const line=await client.query(`select * from shop_repair_order_lines where id=$1 and repair_order_id=$2 for update`,[lineId,repairOrderId]);
     if(!line.rowCount) throw httpError('repair_order_line_not_found',404);
+    const previousApproval=line.rows[0].approval_status as RepairOrderLineApproval;
     const pricingChange=input.description!==undefined||input.quantity!==undefined||input.unitPrice!==undefined||input.unitCost!==undefined;
     if(pricingChange&&!['draft','estimate_pending'].includes(order.status)) throw httpError('repair_order_lines_locked',409);
     if(input.approvalStatus!==undefined&&!['awaiting_approval','approved'].includes(order.status)) throw httpError('line_approval_not_allowed',409);
@@ -201,6 +201,20 @@ export async function updateRepairOrderLine(principal:Principal,repairOrderId:st
       updated_at=now() where id=$1 and repair_order_id=$2 returning *`,[
       lineId,repairOrderId,input.description??null,input.quantity??null,input.unitPrice??null,input.unitCost??null,input.approvalStatus??null
     ]);
+    const nextApproval=updatedLine.rows[0].approval_status as RepairOrderLineApproval;
+    if(nextApproval!==previousApproval){
+      if(['deferred','declined'].includes(previousApproval)&&!['deferred','declined'].includes(nextApproval)){
+        const closed=await client.query(`update shop_deferred_service_items set
+          status='dismissed',dismissed_at=coalesce(dismissed_at,now()),next_follow_up_at=null,updated_at=now()
+          where repair_order_line_id=$1 and status in ('open','reminded','booked') returning id`,[lineId]);
+        for(const row of closed.rows) await appendOrderEvent(client,repairOrderId,'SHOP_OS_DEFERRED_SERVICE_AUTO_DISMISSED',principal,{deferredItemId:row.id,lineId,approvalStatus:nextApproval});
+      }else if(['deferred','declined'].includes(nextApproval)){
+        const reopened=await client.query(`update shop_deferred_service_items set
+          status='open',dismissed_at=null,completed_at=null,booked_appointment_id=null,updated_at=now()
+          where repair_order_line_id=$1 and status in ('dismissed','completed') returning id`,[lineId]);
+        for(const row of reopened.rows) await appendOrderEvent(client,repairOrderId,'SHOP_OS_DEFERRED_SERVICE_AUTO_REOPENED',principal,{deferredItemId:row.id,lineId,approvalStatus:nextApproval});
+      }
+    }
     const updatedOrder=await recalculateTotals(repairOrderId,client);
     await appendOrderEvent(client,repairOrderId,'SHOP_OS_REPAIR_ORDER_LINE_UPDATED',principal,{lineId,approvalStatus:input.approvalStatus??undefined});
     await client.query('commit');
@@ -245,6 +259,7 @@ export async function updateRepairOrder(principal:Principal,repairOrderId:string
       if(Number(pending.rows[0].pending)>0) throw httpError('repair_order_line_approval_pending',409);
       if(Number(pending.rows[0].approved)===0) throw httpError('repair_order_no_approved_work',409);
     }
+    if(input.action==='complete'||input.action==='close') await assertCompletionReady(repairOrderId,client);
     if(input.action==='revise_estimate'){
       await client.query(`update shop_repair_order_lines set approval_status='pending',approved_at=null,declined_at=null,deferred_at=null,updated_at=now() where repair_order_id=$1`,[repairOrderId]);
     }
