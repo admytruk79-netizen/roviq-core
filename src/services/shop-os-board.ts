@@ -1,5 +1,6 @@
 import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
+import { resolveShopPrincipalScope } from './shop-os-scope.js';
 
 function httpError(message:string,statusCode:number){
   const error=new Error(message) as Error&{statusCode:number};
@@ -14,18 +15,8 @@ function assertRange(from:string,to:string){
 }
 
 async function resolveBoardScope(principal:Principal,input:{organizationId?:string;locationId?:string}){
-  if(principal.role==='admin'){
-    if(!input.organizationId) throw httpError('organization_id_required',400);
-    return {organizationId:input.organizationId,locationId:input.locationId??null};
-  }
-  if(principal.role!=='partner'||!principal.actorId) throw httpError('forbidden',403);
-  const actor=await pool.query(`select organization_id,location_id from actors where id=$1 and status='active'`,[principal.actorId]);
-  if(!actor.rowCount||!actor.rows[0].organization_id) throw httpError('forbidden',403);
-  const organizationId=actor.rows[0].organization_id as string;
-  const actorLocationId=actor.rows[0].location_id as string|null;
-  if(input.organizationId&&input.organizationId!==organizationId) throw httpError('forbidden',403);
-  if(actorLocationId&&input.locationId&&input.locationId!==actorLocationId) throw httpError('forbidden',403);
-  return {organizationId,locationId:actorLocationId??input.locationId??null};
+  const client=await pool.connect();
+  try{return await resolveShopPrincipalScope(principal,input,client);}finally{client.release();}
 }
 
 export async function listShopOsBoard(principal:Principal,input:{
@@ -75,8 +66,19 @@ export async function listShopOsBoard(principal:Principal,input:{
     statusCounts[row.appointment_status]=(statusCounts[row.appointment_status]??0)+1;
   }
   const activeAppointments=appointments.rows.filter((row)=>['held','confirmed','in_progress'].includes(row.appointment_status)).length;
-  const availableCapacityUnits=capacity.rows.reduce((sum,row)=>sum+Math.max(Number(row.capacity_units??0),0),0);
-  const nominalCapacityUnits=capacity.rows.reduce((sum,row)=>sum+Math.max(Number(row.nominal_capacity_units??row.capacity_units??0),0),0);
+
+  // capacity_units is the minimum temporal availability inside a canonical window.
+  // Summarize once per resource so overlapping category windows are not double-counted.
+  const byResource=new Map<string,{available:number;nominal:number}>();
+  for(const row of capacity.rows){
+    const available=Math.max(Number(row.capacity_units??0),0);
+    const nominal=Math.max(Number(row.nominal_capacity_units??row.capacity_units??0),0);
+    const existing=byResource.get(row.resource_id);
+    if(!existing) byResource.set(row.resource_id,{available,nominal});
+    else byResource.set(row.resource_id,{available:Math.min(existing.available,available),nominal:Math.max(existing.nominal,nominal)});
+  }
+  const availableCapacityUnits=[...byResource.values()].reduce((sum,row)=>sum+row.available,0);
+  const nominalCapacityUnits=[...byResource.values()].reduce((sum,row)=>sum+row.nominal,0);
 
   return {
     scope,
