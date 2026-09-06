@@ -8,11 +8,16 @@ import { createShopResource, listShopResources, updateShopResource } from '../..
 import {
   addRepairOrderLine, createRepairOrder, getRepairOrder, listRepairOrders, updateRepairOrder, updateRepairOrderLine
 } from '../../services/shop-os-repair-orders.js';
+import {
+  createRepairOrderPartRequirement, deferRepairOrderLine, listDeferredService, listRepairOrderPartRequirements,
+  reconcileRepairOrder, updateDeferredService, updateRepairOrderPartRequirement
+} from '../../services/shop-os-completion.js';
 
 const repairOrderStatusSchema=z.enum([
   'draft','estimate_pending','awaiting_approval','approved','in_progress','waiting_parts','waiting_customer',
   'quality_control','completed','closed','cancelled'
 ]);
+const deferredStatusSchema=z.enum(['open','reminded','booked','completed','dismissed']);
 
 export async function shopOsRoutes(app:FastifyInstance){
   const allowed={preHandler:requireRole('admin','partner')};
@@ -201,5 +206,61 @@ export async function shopOsRoutes(app:FastifyInstance){
       internalNotes:z.string().max(10000).nullable().optional()
     }).parse(req.body);
     return {repairOrder:await updateRepairOrder(req.principal,params.repairOrderId,body)};
+  });
+
+  app.post('/api/shop-os/repair-orders/:repairOrderId/parts-requirements',allowed,async(req,reply)=>{
+    const params=z.object({repairOrderId:z.string().uuid()}).parse(req.params);
+    const body=z.object({
+      repairOrderLineId:z.string().uuid(),description:z.string().max(5000).nullable().optional(),partReference:z.string().max(500).nullable().optional(),
+      quantity:z.number().positive().optional(),supplierReference:z.string().max(500).nullable().optional(),partsOrderId:z.string().uuid().nullable().optional(),
+      eta:z.string().datetime({offset:true}).nullable().optional()
+    }).parse(req.body);
+    return reply.code(201).send({requirement:await createRepairOrderPartRequirement(req.principal,{repairOrderId:params.repairOrderId,...body})});
+  });
+
+  app.get('/api/shop-os/repair-orders/:repairOrderId/parts-requirements',allowed,async(req)=>{
+    const params=z.object({repairOrderId:z.string().uuid()}).parse(req.params);
+    return await listRepairOrderPartRequirements(req.principal,params.repairOrderId);
+  });
+
+  app.patch('/api/shop-os/parts-requirements/:requirementId',allowed,async(req)=>{
+    const params=z.object({requirementId:z.string().uuid()}).parse(req.params);
+    const body=z.object({
+      readinessStatus:z.enum(['identified','sourcing','ordered','eta_known','received','ready','unavailable','cancelled']),
+      eta:z.string().datetime({offset:true}).nullable().optional(),supplierReference:z.string().max(500).nullable().optional(),
+      partsOrderId:z.string().uuid().nullable().optional()
+    }).parse(req.body);
+    return {requirement:await updateRepairOrderPartRequirement(req.principal,params.requirementId,body)};
+  });
+
+  app.post('/api/shop-os/repair-orders/:repairOrderId/lines/:lineId/defer',allowed,async(req,reply)=>{
+    const params=z.object({repairOrderId:z.string().uuid(),lineId:z.string().uuid()}).parse(req.params);
+    const body=z.object({
+      severity:z.enum(['recommended','attention','urgent']).optional(),reason:z.string().max(5000).nullable().optional(),
+      targetReturnAt:z.string().datetime({offset:true}).nullable().optional(),nextFollowUpAt:z.string().datetime({offset:true}).nullable().optional()
+    }).parse(req.body??{});
+    return reply.code(201).send({deferredItem:await deferRepairOrderLine(req.principal,{repairOrderId:params.repairOrderId,repairOrderLineId:params.lineId,...body})});
+  });
+
+  app.get('/api/shop-os/deferred-service',allowed,async(req)=>{
+    const query=z.object({organizationId:z.string().uuid().optional(),locationId:z.string().uuid().optional(),statuses:z.string().optional()}).parse(req.query);
+    const statuses=query.statuses
+      ? z.array(deferredStatusSchema).parse(query.statuses.split(',').map((value)=>value.trim()).filter(Boolean))
+      : undefined;
+    return await listDeferredService(req.principal,{organizationId:query.organizationId,locationId:query.locationId,statuses});
+  });
+
+  app.patch('/api/shop-os/deferred-service/:deferredItemId',allowed,async(req)=>{
+    const params=z.object({deferredItemId:z.string().uuid()}).parse(req.params);
+    const body=z.object({
+      action:z.enum(['remind','book','complete','dismiss','reopen']),appointmentId:z.string().uuid().nullable().optional(),
+      nextFollowUpAt:z.string().datetime({offset:true}).nullable().optional()
+    }).parse(req.body);
+    return {deferredItem:await updateDeferredService(req.principal,params.deferredItemId,body)};
+  });
+
+  app.post('/api/shop-os/repair-orders/:repairOrderId/reconcile',allowed,async(req)=>{
+    const params=z.object({repairOrderId:z.string().uuid()}).parse(req.params);
+    return await reconcileRepairOrder(req.principal,params.repairOrderId);
   });
 }
