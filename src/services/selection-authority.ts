@@ -83,18 +83,30 @@ export async function selectCaseActor(principal: Principal, caseId: string, acto
       throw error;
     }
 
-    await client.query(
-      `update service_cases set selected_actor_id=$1,selection_source=$2,selected_at=now(),updated_at=now() where id=$3`,
-      [actorId,mode,caseId]
-    );
+    const offerResult=await client.query(`
+      select * from matches_offers
+      where case_id=$1 and actor_id=$2 and outcome='offered'
+      order by offered_at desc limit 1`,[caseId,actorId]);
+    const offer=offerResult.rowCount
+      ? offerResult.rows[0]
+      : (await client.query(`insert into matches_offers(demand_id,case_id,actor_id,rank,rule_basis)
+          values($1,$2,$3,1,'authorized_provider_selection') returning *`,[row.demand_id,caseId,actorId])).rows[0];
+
+    const updatedCase=await client.query(`update service_cases set
+      selected_actor_id=$1,selection_source=$2,selected_at=now(),state='provider_pending',version=version+1,updated_at=now()
+      where id=$3 and state='provider_selection' and selected_actor_id is null
+      returning *`,[actorId,mode,caseId]);
+    if(!updatedCase.rowCount) throw new Error('case_not_selectable');
+
     await client.query(
       `insert into case_selections(case_id,recommended_actor_id,selected_actor_id,selection_mode,authority_role,authority_actor_id,rationale)
        values($1,$2,$3,$4,$5,$6,$7)`,
       [caseId,row.recommended_actor_id ?? null,actorId,mode,principal.role,principal.actorId ?? null,JSON.stringify({...rationale,serviceability:{serviceCategory:capability,capacitySource:serviceability.source,capacityWindowId:serviceability.capacityWindowId,capacityUnits:serviceability.capacityUnits}})]
     );
     await appendCaseEvent(caseId,'PROVIDER_SELECTED',principal,{actorId,selectionMode:mode,...rationale,serviceability:{serviceCategory:capability,capacitySource:serviceability.source,capacityWindowId:serviceability.capacityWindowId,capacityUnits:serviceability.capacityUnits}},client);
+    await appendCaseEvent(caseId,'CASE_PROVIDER_PENDING',principal,{from:'provider_selection',to:'provider_pending',offerId:offer.id,providerActorId:actorId,selectionMode:mode,source:'authorized_provider_selection'},client);
     await client.query('commit');
-    return {caseId,selectedActorId:actorId,selectionMode:mode,serviceability:serviceability.decision};
+    return {caseId,selectedActorId:actorId,selectionMode:mode,serviceability:serviceability.decision,offer,case:updatedCase.rows[0]};
   } catch (error) {
     await client.query('rollback');
     throw error;
