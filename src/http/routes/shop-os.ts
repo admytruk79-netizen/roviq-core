@@ -9,6 +9,11 @@ import {
   addRepairOrderLine, createRepairOrder, getRepairOrder, listRepairOrders, updateRepairOrder, updateRepairOrderLine
 } from '../../services/shop-os-repair-orders.js';
 
+const repairOrderStatusSchema=z.enum([
+  'draft','estimate_pending','awaiting_approval','approved','in_progress','waiting_parts','waiting_customer',
+  'quality_control','completed','closed','cancelled'
+]);
+
 export async function shopOsRoutes(app:FastifyInstance){
   const allowed={preHandler:requireRole('admin','partner')};
 
@@ -157,7 +162,9 @@ export async function shopOsRoutes(app:FastifyInstance){
 
   app.get('/api/shop-os/repair-orders',allowed,async(req)=>{
     const query=z.object({organizationId:z.string().uuid().optional(),locationId:z.string().uuid().optional(),statuses:z.string().optional()}).parse(req.query);
-    const statuses=query.statuses?.split(',').map((value)=>value.trim()).filter(Boolean) as any;
+    const statuses=query.statuses
+      ? z.array(repairOrderStatusSchema).parse(query.statuses.split(',').map((value)=>value.trim()).filter(Boolean))
+      : undefined;
     return await listRepairOrders(req.principal,{organizationId:query.organizationId,locationId:query.locationId,statuses});
   });
 
