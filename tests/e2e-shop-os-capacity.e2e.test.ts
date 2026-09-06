@@ -68,6 +68,32 @@ describe('ROVIQ-native Shop OS capacity',()=>{
       .rejects.toMatchObject({message:'shop_os_capacity_unavailable',statusCode:409});
   });
 
+  it('uses peak temporal occupancy instead of summing sequential bookings across a window',async()=>{
+    const {resourceId,windowId}=await setupNativeShop(2);
+    const base=Date.now()+10*60_000;
+    const firstStart=new Date(base).toISOString();
+    const firstEnd=new Date(base+20*60_000).toISOString();
+    const secondStart=new Date(base+30*60_000).toISOString();
+    const secondEnd=new Date(base+50*60_000).toISOString();
+
+    await createShopOsAppointment(admin,{resourceId,startsAt:firstStart,endsAt:firstEnd,serviceCategory:'repair',status:'confirmed'});
+    await createShopOsAppointment(admin,{resourceId,startsAt:secondStart,endsAt:secondEnd,serviceCategory:'repair',status:'confirmed'});
+
+    const afterSequential=await pool.query(`select capacity_units,capacity_state from capacity_windows where id=$1`,[windowId]);
+    expect(Number(afterSequential.rows[0].capacity_units)).toBe(1);
+    expect(afterSequential.rows[0].capacity_state).toBe('limited');
+
+    // A long booking overlaps each existing booking at a different time. Peak occupancy becomes two,
+    // so the booking is valid even though two total appointments intersect the requested interval.
+    const spanning=await createShopOsAppointment(admin,{
+      resourceId,startsAt:firstStart,endsAt:secondEnd,serviceCategory:'repair',status:'confirmed'
+    });
+    expect(spanning.id).toBeTruthy();
+    const full=await pool.query(`select capacity_units,capacity_state from capacity_windows where id=$1`,[windowId]);
+    expect(Number(full.rows[0].capacity_units)).toBe(0);
+    expect(full.rows[0].capacity_state).toBe('full');
+  });
+
   it('restores bookable capacity after cancellation',async()=>{
     const {resourceId}=await setupNativeShop(1);
     const start=new Date(Date.now()+15*60_000).toISOString();
