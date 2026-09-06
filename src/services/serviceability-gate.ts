@@ -159,9 +159,9 @@ export function deriveCanonicalSyncState(row:CanonicalWindowRow,now=new Date()):
   if(row.connection_status==='failed'||row.connection_status==='revoked') return 'failed';
   if(row.connection_status==='degraded'||row.connection_status==='paused'||row.connection_status==='planned') return 'degraded';
 
-  if(row.connection_mode==='roviq_native') {
-    return row.sync_state==='failed'?'failed':row.sync_state==='manual'?'manual':'current';
-  }
+  // Shop OS owns its native capacity state directly. Never upgrade stale/degraded
+  // windows to current merely because the connection itself remains active.
+  if(row.connection_mode==='roviq_native') return row.sync_state;
 
   const anchor=row.connection_mode==='native_integration'
     ? row.connection_last_success_at
