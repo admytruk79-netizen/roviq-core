@@ -1,0 +1,31 @@
+/* Nielsen-oriented driver UX: map first, visible status, minimal navigation, large contextual actions. */
+.tow-nav button:nth-child(2){display:none}
+.driver-workspace{position:relative;display:flex!important;flex-direction:column!important;gap:10px!important}
+#tow-case-map{order:-3}
+.active-dispatch{order:-2;position:relative;z-index:20;margin:-96px 12px 0!important;border-color:rgba(88,223,207,.42)!important;background:rgba(3,13,20,.96)!important;box-shadow:0 18px 48px rgba(0,0,0,.55)!important}
+.field-service{order:-1;margin:0 12px!important}
+.assignment-actions button{min-height:52px!important;font-size:15px!important}
+.tow-next{font-size:13px!important}
+.map-panel{margin-top:0!important}
+.spatial-grid>div{min-height:72px!important}
+.tow-mode{display:flex!important}
+@media(max-width:700px){
+  .tow-header{display:grid!important;grid-template-columns:1fr auto!important;padding:8px 10px!important;min-height:58px}
+  .tow-nav{grid-column:1/-1!important;display:grid!important;grid-template-columns:1fr 1fr!important;margin-top:4px}
+  .tow-nav button:nth-child(2){display:none!important}
+  .tow-nav button{min-height:38px!important;padding:7px 10px!important}
+  .tow-header-actions{gap:6px!important}
+  .tow-mode{display:flex!important}
+  .tow-mode button{padding:6px 9px!important;font-size:10px!important}
+  main{padding:8px!important}
+  #tow-case-map{margin:0!important}
+  .live-map-wrap{height:64vh!important;min-height:430px!important}
+  .active-dispatch{margin:-108px 10px 0!important;border-radius:18px!important;padding:14px!important}
+  .active-dispatch h2{display:none!important}
+  .active-dispatch>p:not(.tow-next){display:none!important}
+  .active-dispatch .pill{font-size:10px!important}
+  .assignment-actions{grid-template-columns:1fr 1fr!important}
+  .field-service{margin:0 10px!important}
+  .rq-nav-hud{top:72px!important}
+  .spatial-grid{grid-template-columns:1fr 1fr!important}
+}
