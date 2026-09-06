@@ -127,20 +127,33 @@ export async function reportConnectionHealth(principal:Principal,connectionId:st
     const accessState=input.accessState ?? row.access_state;
     const success=input.outcome==='success';
     const failure=input.outcome==='failure';
-    const nextStatus:ConnectionStatus=failure?'degraded':row.connection_status==='planned'&&success?'active':row.connection_status==='failed'&&success?'active':row.connection_status;
+
+    // paused/failed/revoked are explicit operator controls and health observations must not override them.
+    // degraded is an observed-health state, so a later successful synchronization recovers it to active.
+    let nextStatus:ConnectionStatus=row.connection_status;
+    if(row.connection_status!=='paused'&&row.connection_status!=='failed'){
+      if(failure) nextStatus='degraded';
+      else if(success&&['planned','degraded'].includes(row.connection_status)) nextStatus='active';
+    }
+
     const updated=await client.query(`
       update partner_system_connections
       set connection_status=$1,credential_state=$2,access_state=$3,health_checked_at=now(),last_sync_at=now(),
           last_success_at=case when $4 then now() else last_success_at end,
           last_failure_at=case when $5 then now() else last_failure_at end,
           last_error=case when $5 then $6 when $4 then null else last_error end,
-          status_reason=case when $5 then coalesce($6,'sync_failure') when $4 then null else status_reason end,
+          status_reason=case
+            when $7='paused' or $7='failed' then status_reason
+            when $5 then coalesce($6,'sync_failure')
+            when $4 then null
+            else status_reason
+          end,
           updated_at=now()
-      where id=$7 returning *`,[nextStatus,credentialState,accessState,success,failure,input.error??null,connectionId]);
+      where id=$8 returning *`,[nextStatus,credentialState,accessState,success,failure,input.error??null,row.connection_status,connectionId]);
     await client.query(`insert into integration_sync_events(connection_id,event_type,direction,status,error_message,payload)
       values($1,$2,$3,$4,$5,$6)`,[
       connectionId,input.eventType??'connection_health',input.direction??'internal',failure?'failed':'accepted',input.error??null,
-      JSON.stringify({outcome:input.outcome,credentialState,accessState})
+      JSON.stringify({outcome:input.outcome,credentialState,accessState,observedFromStatus:row.connection_status,resultingStatus:nextStatus})
     ]);
     await client.query('commit');
     await audit(principal,'report_connection_health','partner_system_connection',connectionId,'roviq_connect_health',{outcome:input.outcome,credentialState,accessState});
