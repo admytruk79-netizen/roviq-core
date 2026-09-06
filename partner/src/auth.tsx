@@ -61,9 +61,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function login(email: string, password: string) {
     setLoading(true);
     setError(null);
-
-    // Every login starts clean so a remembered/expired partner session cannot
-    // influence the new admin -> partner handoff.
     clearSession();
 
     try {
@@ -100,6 +97,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   function logout() {
     clearSession();
+    // Force a clean portal bootstrap so the history guard or stale in-memory
+    // state cannot leave the signed-out user on the protected dashboard.
+    queueMicrotask(() => window.location.replace(window.location.pathname));
   }
 
   return <AuthContext.Provider value={{ principal, loading, error, login, logout }}>{children}</AuthContext.Provider>;
