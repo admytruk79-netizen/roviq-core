@@ -4,6 +4,10 @@ import { requireRole } from '../middleware/principal.js';
 import { createShopOsAppointment, listShopOsSchedule, updateShopOsAppointment } from '../../services/shop-os.js';
 import { listShopOsBoard } from '../../services/shop-os-board.js';
 import { createShopWaitlistEntry, listShopWaitlist, updateShopWaitlistEntry } from '../../services/shop-os-waitlist.js';
+import { createShopResource, listShopResources, updateShopResource } from '../../services/shop-os-resources.js';
+import {
+  addRepairOrderLine, createRepairOrder, getRepairOrder, listRepairOrders, updateRepairOrder, updateRepairOrderLine
+} from '../../services/shop-os-repair-orders.js';
 
 export async function shopOsRoutes(app:FastifyInstance){
   const allowed={preHandler:requireRole('admin','partner')};
@@ -106,5 +110,89 @@ export async function shopOsRoutes(app:FastifyInstance){
       offerExpiresAt:z.string().datetime({offset:true}).nullable().optional()
     }).parse(req.body);
     return {entry:await updateShopWaitlistEntry(req.principal,params.entryId,body)};
+  });
+
+  app.post('/api/shop-os/resources',allowed,async(req,reply)=>{
+    const body=z.object({
+      organizationId:z.string().uuid().optional(),locationId:z.string().uuid().optional(),
+      resourceType:z.enum(['bay','technician','advisor','equipment','mobile_unit','tow_unit','valet_driver','loaner_vehicle']),
+      displayName:z.string().min(1).max(200),capabilityTags:z.array(z.string().min(1)).max(100).optional(),
+      constraints:z.record(z.string(),z.unknown()).optional(),assignedActorId:z.string().uuid().nullable().optional(),
+      operationalState:z.enum(['available','busy','blocked','offline']).optional(),
+      hourlyCost:z.number().nonnegative().nullable().optional(),laborRate:z.number().nonnegative().nullable().optional()
+    }).parse(req.body);
+    return reply.code(201).send({resource:await createShopResource(req.principal,body)});
+  });
+
+  app.get('/api/shop-os/resources',allowed,async(req)=>{
+    const query=z.object({
+      organizationId:z.string().uuid().optional(),locationId:z.string().uuid().optional(),
+      resourceType:z.enum(['bay','technician','advisor','equipment','mobile_unit','tow_unit','valet_driver','loaner_vehicle']).optional(),
+      includeInactive:z.enum(['true','false']).optional()
+    }).parse(req.query);
+    return await listShopResources(req.principal,{...query,includeInactive:query.includeInactive==='true'});
+  });
+
+  app.patch('/api/shop-os/resources/:resourceId',allowed,async(req)=>{
+    const params=z.object({resourceId:z.string().uuid()}).parse(req.params);
+    const body=z.object({
+      displayName:z.string().min(1).max(200).optional(),capabilityTags:z.array(z.string().min(1)).max(100).optional(),
+      constraints:z.record(z.string(),z.unknown()).optional(),assignedActorId:z.string().uuid().nullable().optional(),
+      operationalState:z.enum(['available','busy','blocked','offline']).optional(),active:z.boolean().optional(),
+      hourlyCost:z.number().nonnegative().nullable().optional(),laborRate:z.number().nonnegative().nullable().optional()
+    }).parse(req.body);
+    return {resource:await updateShopResource(req.principal,params.resourceId,body)};
+  });
+
+  app.post('/api/shop-os/repair-orders',allowed,async(req,reply)=>{
+    const body=z.object({
+      organizationId:z.string().uuid().optional(),locationId:z.string().uuid().optional(),serviceCaseId:z.string().uuid().nullable().optional(),
+      appointmentId:z.string().uuid().nullable().optional(),customerVehicleId:z.string().uuid().nullable().optional(),
+      advisorActorId:z.string().uuid().nullable().optional(),primaryTechnicianActorId:z.string().uuid().nullable().optional(),
+      customerConcern:z.string().max(5000).nullable().optional(),internalNotes:z.string().max(10000).nullable().optional(),
+      odometer:z.number().int().nonnegative().nullable().optional()
+    }).parse(req.body);
+    return reply.code(201).send({repairOrder:await createRepairOrder(req.principal,body)});
+  });
+
+  app.get('/api/shop-os/repair-orders',allowed,async(req)=>{
+    const query=z.object({organizationId:z.string().uuid().optional(),locationId:z.string().uuid().optional(),statuses:z.string().optional()}).parse(req.query);
+    const statuses=query.statuses?.split(',').map((value)=>value.trim()).filter(Boolean) as any;
+    return await listRepairOrders(req.principal,{organizationId:query.organizationId,locationId:query.locationId,statuses});
+  });
+
+  app.get('/api/shop-os/repair-orders/:repairOrderId',allowed,async(req)=>{
+    const params=z.object({repairOrderId:z.string().uuid()}).parse(req.params);
+    return await getRepairOrder(req.principal,params.repairOrderId);
+  });
+
+  app.post('/api/shop-os/repair-orders/:repairOrderId/lines',allowed,async(req,reply)=>{
+    const params=z.object({repairOrderId:z.string().uuid()}).parse(req.params);
+    const body=z.object({
+      lineType:z.enum(['labor','part','fee','sublet']),description:z.string().min(1).max(5000),serviceCategory:z.string().max(200).nullable().optional(),
+      quantity:z.number().positive().optional(),unitPrice:z.number().nonnegative().optional(),unitCost:z.number().nonnegative().optional(),
+      laborHours:z.number().nonnegative().nullable().optional(),taxable:z.boolean().optional(),sortOrder:z.number().int().optional(),
+      metadata:z.record(z.string(),z.unknown()).optional()
+    }).parse(req.body);
+    return reply.code(201).send(await addRepairOrderLine(req.principal,params.repairOrderId,body));
+  });
+
+  app.patch('/api/shop-os/repair-orders/:repairOrderId/lines/:lineId',allowed,async(req)=>{
+    const params=z.object({repairOrderId:z.string().uuid(),lineId:z.string().uuid()}).parse(req.params);
+    const body=z.object({
+      approvalStatus:z.enum(['pending','approved','declined','deferred']).optional(),description:z.string().min(1).max(5000).optional(),
+      quantity:z.number().positive().optional(),unitPrice:z.number().nonnegative().optional(),unitCost:z.number().nonnegative().optional()
+    }).parse(req.body);
+    return await updateRepairOrderLine(req.principal,params.repairOrderId,params.lineId,body);
+  });
+
+  app.patch('/api/shop-os/repair-orders/:repairOrderId',allowed,async(req)=>{
+    const params=z.object({repairOrderId:z.string().uuid()}).parse(req.params);
+    const body=z.object({
+      action:z.enum(['submit_estimate','revise_estimate','approve','start','wait_parts','wait_customer','resume','qc','complete','close','cancel']),
+      advisorActorId:z.string().uuid().nullable().optional(),primaryTechnicianActorId:z.string().uuid().nullable().optional(),
+      internalNotes:z.string().max(10000).nullable().optional()
+    }).parse(req.body);
+    return {repairOrder:await updateRepairOrder(req.principal,params.repairOrderId,body)};
   });
 }
