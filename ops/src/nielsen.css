@@ -1,0 +1,20 @@
+/* Nielsen-oriented Ops UX: compact hierarchy, contextual actions, progressive disclosure. */
+.roviq-header{position:sticky!important;top:0!important;z-index:50!important}
+.roviq-grid-glow>div{max-width:980px;margin:0 auto}
+.roviq-grid-glow .space-y-6{display:grid;gap:14px!important}
+.roviq-grid-glow .space-y-6>*{margin-top:0!important}
+.roviq-grid-glow section,.roviq-grid-glow .rounded-lg{border-radius:14px!important}
+.roviq-grid-glow button,.roviq-grid-glow select,.roviq-grid-glow input{min-height:42px}
+.roviq-grid-glow h1{letter-spacing:-.01em}
+@media(max-width:640px){
+  .roviq-header .roviq-mark{width:34px!important;height:34px!important}
+  .roviq-grid-glow{padding:10px!important}
+  .roviq-grid-glow .space-y-6{gap:10px!important}
+  .roviq-grid-glow .rounded-lg.border{padding:13px!important}
+  .roviq-grid-glow h1{font-size:19px!important;line-height:1.2!important}
+  .roviq-grid-glow h2{font-size:14px!important}
+  .roviq-grid-glow p{line-height:1.45!important}
+  .roviq-grid-glow form.flex{display:grid!important;grid-template-columns:1fr!important}
+  .roviq-grid-glow select,.roviq-grid-glow input,.roviq-grid-glow button{width:100%!important;min-width:0!important;min-height:46px!important}
+  .roviq-grid-glow ul li{gap:8px!important;align-items:flex-start!important}
+}
