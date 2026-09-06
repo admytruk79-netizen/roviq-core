@@ -124,10 +124,11 @@ export async function updateShopWaitlistEntry(principal:Principal,entryId:string
         if(!active.rows[0]?.active) throw httpError('waitlist_offer_expired',409);
       }
       const appointment=await client.query(`
-        select id,organization_id,location_id,service_case_id,service_category,starts_at,ends_at
+        select id,organization_id,location_id,service_case_id,service_category,starts_at,ends_at,appointment_status
         from roviq_appointments where id=$1`,[input.appointmentId]);
       if(!appointment.rowCount) throw httpError('appointment_not_found',404);
       const a=appointment.rows[0];
+      if(!['held','confirmed'].includes(a.appointment_status)) throw httpError('waitlist_appointment_inactive',409);
       if(a.organization_id!==row.organization_id) throw httpError('forbidden',403);
       if(row.location_id&&a.location_id!==row.location_id) throw httpError('forbidden',403);
       if((a.service_case_id??null)!==(row.service_case_id??null)) throw httpError('waitlist_case_mismatch',409);
