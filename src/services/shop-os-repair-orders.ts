@@ -68,6 +68,13 @@ async function appendOrderEvent(db:Queryable,orderId:string,eventType:string,pri
   ]);
 }
 
+async function appendOperationalEvent(db:Queryable,aggregateType:string,aggregateId:string,eventType:string,principal:Principal,payload:Record<string,unknown>={}){
+  await db.query(`insert into events(aggregate_type,aggregate_id,event_type,actor_id,actor_role,payload)
+    values($1,$2,$3,$4,$5,$6)`,[
+    aggregateType,aggregateId,eventType,principal.actorId??null,principal.role,JSON.stringify(payload)
+  ]);
+}
+
 async function recalculateTotals(repairOrderId:string,db:Queryable){
   const totals=await db.query(`select
       coalesce(sum(quantity*unit_price),0)::numeric(12,2) as subtotal,
@@ -100,8 +107,17 @@ export async function createRepairOrder(principal:Principal,input:{
       if(!['held','confirmed','in_progress','completed'].includes(a.appointment_status)) throw httpError('repair_order_appointment_inactive',409);
     }
     if(input.customerVehicleId){
-      const vehicle=await client.query(`select id from customer_vehicles where id=$1`,[input.customerVehicleId]);
+      if(!input.serviceCaseId) throw httpError('repair_order_vehicle_case_required',409);
+      const vehicle=await client.query(`
+        select v.id,v.customer_actor_id,sc.customer_actor_id as case_customer_actor_id
+        from customer_vehicles v
+        join service_cases sc on sc.id=$2
+        where v.id=$1`,[input.customerVehicleId,input.serviceCaseId]);
       if(!vehicle.rowCount) throw httpError('customer_vehicle_not_found',404);
+      const v=vehicle.rows[0];
+      if(!v.customer_actor_id||!v.case_customer_actor_id||v.customer_actor_id!==v.case_customer_actor_id){
+        throw httpError('repair_order_vehicle_customer_mismatch',409);
+      }
     }
     const created=await client.query(`insert into shop_repair_orders(
       organization_id,location_id,service_case_id,appointment_id,customer_vehicle_id,advisor_actor_id,
@@ -231,6 +247,28 @@ export async function updateRepairOrder(principal:Principal,repairOrderId:string
     }
     if(input.action==='revise_estimate'){
       await client.query(`update shop_repair_order_lines set approval_status='pending',approved_at=null,declined_at=null,deferred_at=null,updated_at=now() where repair_order_id=$1`,[repairOrderId]);
+    }
+    if(input.action==='cancel'){
+      const closedTime=await client.query(`update shop_technician_time_entries
+        set ended_at=now(),end_reason='order_cancelled',notes=case
+          when notes is null or notes='' then 'Closed automatically because repair order was cancelled'
+          else notes||E'\nClosed automatically because repair order was cancelled' end
+        where repair_order_id=$1 and ended_at is null
+        returning id,work_item_id,technician_actor_id`,[repairOrderId]);
+      for(const row of closedTime.rows){
+        await appendOperationalEvent(client,'technician_time_entry',row.id,'SHOP_OS_TECHNICIAN_TIME_AUTO_CLOSED',principal,{
+          repairOrderId,workItemId:row.work_item_id,technicianActorId:row.technician_actor_id,endReason:'order_cancelled'
+        });
+      }
+      const cancelledWork=await client.query(`update shop_work_items
+        set status='cancelled',blocked_reason=coalesce(blocked_reason,'repair_order_cancelled'),updated_at=now()
+        where repair_order_id=$1 and status not in ('completed','cancelled')
+        returning id,technician_actor_id,technician_resource_id,bay_resource_id`,[repairOrderId]);
+      for(const row of cancelledWork.rows){
+        await appendOperationalEvent(client,'work_item',row.id,'SHOP_OS_WORK_ITEM_CANCELLED_BY_ORDER',principal,{
+          repairOrderId,technicianActorId:row.technician_actor_id,technicianResourceId:row.technician_resource_id,bayResourceId:row.bay_resource_id
+        });
+      }
     }
     const updated=await client.query(`update shop_repair_orders set
       status=$2,
