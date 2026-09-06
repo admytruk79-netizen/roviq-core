@@ -34,15 +34,15 @@ export async function assertAdminCaseScope(principal:Principal,caseId:string,db:
       left join actors selected on selected.id=sc.selected_actor_id
       left join actors recommended on recommended.id=sc.recommended_actor_id
       where sc.id=$1 and (
-        (owner.organization_id=$2 and ($3::uuid is null or owner.location_id is null or owner.location_id=$3))
-        or (selected.organization_id=$2 and ($3::uuid is null or selected.location_id is null or selected.location_id=$3))
-        or (recommended.organization_id=$2 and ($3::uuid is null or recommended.location_id is null or recommended.location_id=$3))
+        (owner.organization_id=$2 and ($3::uuid is null or owner.location_id=$3))
+        or (selected.organization_id=$2 and ($3::uuid is null or selected.location_id=$3))
+        or (recommended.organization_id=$2 and ($3::uuid is null or recommended.location_id=$3))
         or exists(
           select 1 from matches_offers mo
           join actors provider on provider.id=mo.actor_id
           where mo.case_id=sc.id
             and provider.organization_id=$2
-            and ($3::uuid is null or provider.location_id is null or provider.location_id=$3)
+            and ($3::uuid is null or provider.location_id=$3)
         )
       )
     ) as linked`,[caseId,scope.organizationId,scope.locationId]);
@@ -63,15 +63,15 @@ export async function assertExceptionOwnerScope(ownerActorId:string,caseId:strin
       left join actors selected on selected.id=sc.selected_actor_id
       left join actors recommended on recommended.id=sc.recommended_actor_id
       where sc.id=$1 and (
-        (current_owner.organization_id=$2 and ($3::uuid is null or current_owner.location_id is null or current_owner.location_id=$3))
-        or (selected.organization_id=$2 and ($3::uuid is null or selected.location_id is null or selected.location_id=$3))
-        or (recommended.organization_id=$2 and ($3::uuid is null or recommended.location_id is null or recommended.location_id=$3))
+        (current_owner.organization_id=$2 and ($3::uuid is null or current_owner.location_id=$3))
+        or (selected.organization_id=$2 and ($3::uuid is null or selected.location_id=$3))
+        or (recommended.organization_id=$2 and ($3::uuid is null or recommended.location_id=$3))
         or exists(
           select 1 from matches_offers mo
           join actors provider on provider.id=mo.actor_id
           where mo.case_id=sc.id
             and provider.organization_id=$2
-            and ($3::uuid is null or provider.location_id is null or provider.location_id=$3)
+            and ($3::uuid is null or provider.location_id=$3)
         )
       )
     ) as linked`,[caseId,row.organization_id,row.location_id]);
