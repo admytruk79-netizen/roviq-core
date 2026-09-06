@@ -35,16 +35,22 @@ async function reserveSelectionCapacity(caseId:string,serviceability:{source:str
   await reserveCanonicalCapacity(caseId,serviceability.capacityWindowId,client,1);
 }
 
+function assertSelectableCase(row:{state:string;selected_actor_id?:string|null}){
+  if(row.state!=='provider_selection') throw new Error('case_not_selectable');
+  if(row.selected_actor_id) throw new Error('selection_already_recorded');
+}
+
 export async function selectCaseActor(principal: Principal, caseId: string, actorId: string, rationale: Record<string,unknown> = {}) {
   const client = await pool.connect();
   try {
     await client.query('begin');
     const c = await client.query(
-      `select id,demand_id,selection_mode,relationship_owner_actor_id,recommended_actor_id from service_cases where id=$1 for update`,
+      `select id,demand_id,state,selection_mode,relationship_owner_actor_id,recommended_actor_id,selected_actor_id from service_cases where id=$1 for update`,
       [caseId]
     );
     if (!c.rowCount) throw new Error('case_not_found');
     const row = c.rows[0];
+    assertSelectableCase(row);
     const mode = row.selection_mode as SelectionMode;
     if (!canSelect(principal,mode,row.relationship_owner_actor_id)) throw new Error('selection_forbidden');
     if (!row.demand_id) throw new Error('case_demand_missing');
@@ -99,8 +105,9 @@ export async function autoDispatchCase(caseId: string, actorId: string, routingD
   const client = await pool.connect();
   try {
     await client.query('begin');
-    const c = await client.query(`select demand_id,selection_mode,recommended_actor_id from service_cases where id=$1 for update`,[caseId]);
+    const c = await client.query(`select demand_id,state,selection_mode,recommended_actor_id,selected_actor_id from service_cases where id=$1 for update`,[caseId]);
     if (!c.rowCount) throw new Error('case_not_found');
+    assertSelectableCase(c.rows[0]);
     if (c.rows[0].selection_mode !== 'auto_dispatch') throw new Error('auto_dispatch_not_authorized');
     if (!c.rows[0].demand_id) throw new Error('case_demand_missing');
 
