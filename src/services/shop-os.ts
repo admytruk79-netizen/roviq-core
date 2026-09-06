@@ -4,6 +4,7 @@ import type { Principal } from '../types/principal.js';
 import { assertCaseAccess } from './case-access.js';
 import { syncOperationalConstraints } from './case-constraint-projection.js';
 import { evaluateServiceability, type ServiceabilityConstraint } from './serviceability.js';
+import { assertShopPrincipalScope } from './shop-os-scope.js';
 
 type Queryable=Pick<PoolClient,'query'>;
 export type ShopOsAppointmentStatus='held'|'confirmed'|'in_progress'|'completed'|'cancelled'|'no_show'|'released';
@@ -53,13 +54,7 @@ async function loadManageableResource(principal:Principal,resourceId:string,db:Q
     limit 1`,[resourceId]);
   if(!resource.rowCount) throw httpError('shop_os_resource_not_found',404);
   const row=resource.rows[0];
-  if(principal.role==='admin') return row;
-  if(principal.role!=='partner' || !principal.actorId) throw httpError('forbidden',403);
-  const actor=await db.query(`select organization_id,location_id from actors where id=$1 and status='active'`,[principal.actorId]);
-  if(!actor.rowCount) throw httpError('forbidden',403);
-  const scope=actor.rows[0];
-  if(!scope.organization_id || scope.organization_id!==row.organization_id) throw httpError('forbidden',403);
-  if(scope.location_id && scope.location_id!==row.location_id) throw httpError('forbidden',403);
+  await assertShopPrincipalScope(principal,row.organization_id,row.location_id,db);
   return row;
 }
 
@@ -116,6 +111,31 @@ async function lockSchedulingResources(resourceIds:string[],db:Queryable){
 
 type CapacityMatch={id:string;nominal_capacity_units:number;service_category:string|null;window_start:string|Date;window_end:string|Date};
 
+async function peakConcurrentAppointments(input:{resourceId:string;startsAt:string|Date;endsAt:string|Date;excludeAppointmentId?:string|null},db:Queryable){
+  const result=await db.query(`
+    with overlapping as (
+      select starts_at,ends_at
+      from roviq_appointments
+      where resource_id=$1
+        and appointment_status in ('held','confirmed','in_progress')
+        and starts_at<$3::timestamptz
+        and ends_at>$2::timestamptz
+        and ($4::uuid is null or id<>$4::uuid)
+    ), events as (
+      select greatest(starts_at,$2::timestamptz) as at,1::int as delta from overlapping
+      union all
+      select least(ends_at,$3::timestamptz) as at,-1::int as delta from overlapping
+    ), grouped as (
+      select at,sum(delta)::int as delta from events group by at
+    ), running as (
+      select sum(delta) over(order by at rows unbounded preceding)::int as concurrent from grouped
+    )
+    select coalesce(max(concurrent),0)::int as units from running`,[
+    input.resourceId,input.startsAt,input.endsAt,input.excludeAppointmentId??null
+  ]);
+  return Number(result.rows[0]?.units??0);
+}
+
 async function assertUsableShopOsCapacity(input:{
   resourceId:string;
   sourceConnectionId:string;
@@ -154,6 +174,10 @@ async function assertUsableShopOsCapacity(input:{
   ]);
   if(!windows.rowCount) throw httpError('shop_os_capacity_unavailable',409);
 
+  const used=await peakConcurrentAppointments({
+    resourceId:input.resourceId,startsAt:input.startsAt,endsAt:input.endsAt,excludeAppointmentId:input.excludeAppointmentId
+  },db);
+
   for(const window of windows.rows){
     const nominal=Number(window.nominal_capacity_units??0);
     if(!Number.isFinite(nominal)||nominal<=0) continue;
@@ -162,16 +186,6 @@ async function assertUsableShopOsCapacity(input:{
       set state='expired',updated_at=now()
       where capacity_window_id=$1 and state='held' and expires_at<=now()`,[window.id]);
 
-    const occupied=await db.query(`
-      select count(*)::int as units
-      from roviq_appointments
-      where resource_id=$1
-        and appointment_status in ('held','confirmed','in_progress')
-        and starts_at<$3::timestamptz
-        and ends_at>$2::timestamptz
-        and ($4::uuid is null or id<>$4::uuid)`,[
-      input.resourceId,input.startsAt,input.endsAt,input.excludeAppointmentId??null
-    ]);
     const heldReservations=await db.query(`
       select coalesce(sum(units),0)::int as units
       from capacity_reservations
@@ -181,7 +195,6 @@ async function assertUsableShopOsCapacity(input:{
         and ($2::uuid is null or service_case_id<>$2::uuid)`,[
       window.id,input.serviceCaseId??null
     ]);
-    const used=Number(occupied.rows[0]?.units??0);
     const reserved=Number(heldReservations.rows[0]?.units??0);
     if(Number.isFinite(used)&&Number.isFinite(reserved)&&used+reserved<nominal) return window as CapacityMatch;
   }
@@ -200,17 +213,36 @@ async function consumeMatchingCaseReservation(serviceCaseId:string|null|undefine
 
 export async function rebuildShopOsCapacity(resourceId:string,db:Queryable){
   await db.query(`
-    with recalculated as (
-      select cw.id,cw.nominal_capacity_units,
-        greatest(cw.nominal_capacity_units-count(a.id),0)::int as available_units
+    with window_events as (
+      select cw.id,greatest(a.starts_at,cw.window_start) as at,1::int as delta
       from capacity_windows cw
-      join partner_system_connections c on c.id=cw.source_connection_id and c.mode='roviq_native'
-      left join roviq_appointments a
+      join roviq_appointments a
         on a.resource_id=cw.resource_id
        and a.appointment_status in ('held','confirmed','in_progress')
        and a.starts_at<cw.window_end and a.ends_at>cw.window_start
       where cw.resource_id=$1
-      group by cw.id,cw.nominal_capacity_units
+      union all
+      select cw.id,least(a.ends_at,cw.window_end) as at,-1::int as delta
+      from capacity_windows cw
+      join roviq_appointments a
+        on a.resource_id=cw.resource_id
+       and a.appointment_status in ('held','confirmed','in_progress')
+       and a.starts_at<cw.window_end and a.ends_at>cw.window_start
+      where cw.resource_id=$1
+    ), grouped as (
+      select id,at,sum(delta)::int as delta from window_events group by id,at
+    ), running as (
+      select id,sum(delta) over(partition by id order by at rows unbounded preceding)::int as concurrent
+      from grouped
+    ), peaks as (
+      select id,coalesce(max(concurrent),0)::int as peak from running group by id
+    ), recalculated as (
+      select cw.id,cw.nominal_capacity_units,
+        greatest(cw.nominal_capacity_units-coalesce(p.peak,0),0)::int as available_units
+      from capacity_windows cw
+      join partner_system_connections c on c.id=cw.source_connection_id and c.mode='roviq_native'
+      left join peaks p on p.id=cw.id
+      where cw.resource_id=$1
     )
     update capacity_windows cw
        set capacity_units=r.available_units,
