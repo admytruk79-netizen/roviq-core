@@ -263,19 +263,22 @@ export async function updateShopOsAppointment(principal:Principal,appointmentId:
   const client=await pool.connect();
   try{
     await client.query('begin');
+    const scheduleFieldsSupplied=input.startsAt!==undefined||input.endsAt!==undefined||input.resourceId!==undefined;
+    if(input.action!=='reschedule'&&scheduleFieldsSupplied) throw httpError('schedule_change_requires_reschedule',400);
+
     const current=await client.query(`select * from roviq_appointments where id=$1 for update`,[appointmentId]);
     if(!current.rowCount) throw httpError('appointment_not_found',404);
     const existing=current.rows[0];
     const existingResource=await loadManageableResource(principal,existing.resource_id,client);
     await assertManageableServiceCase(principal,existing.service_case_id,existingResource.organization_id,client);
     const nextStatus=nextShopOsAppointmentStatus(existing.appointment_status,input.action);
-    const nextResourceId=input.resourceId??existing.resource_id;
+    const nextResourceId=input.action==='reschedule'?(input.resourceId??existing.resource_id):existing.resource_id;
     const nextResource=nextResourceId===existing.resource_id
       ? existingResource
       : await loadManageableResource(principal,nextResourceId,client);
     if(existing.service_case_id) await assertManageableServiceCase(principal,existing.service_case_id,nextResource.organization_id,client);
-    const nextStarts=input.startsAt??existing.starts_at;
-    const nextEnds=input.endsAt??existing.ends_at;
+    const nextStarts=input.action==='reschedule'?(input.startsAt??existing.starts_at):existing.starts_at;
+    const nextEnds=input.action==='reschedule'?(input.endsAt??existing.ends_at):existing.ends_at;
     assertInterval(nextStarts,nextEnds);
     if(input.action==='reschedule' && (!input.startsAt&&!input.endsAt&&!input.resourceId)) throw httpError('reschedule_change_required',400);
 
