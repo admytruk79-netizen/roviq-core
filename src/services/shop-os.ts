@@ -58,6 +58,20 @@ async function loadManageableResource(principal:Principal,resourceId:string,db:Q
   return row;
 }
 
+async function loadExistingResource(principal:Principal,resourceId:string,db:Queryable){
+  const resource=await db.query(`
+    select r.*,c.id as shop_os_connection_id,c.connection_status
+    from service_resources r
+    left join partner_system_connections c
+      on c.id=r.source_connection_id and c.mode='roviq_native'
+    where r.id=$1
+    limit 1`,[resourceId]);
+  if(!resource.rowCount) throw httpError('shop_os_resource_not_found',404);
+  const row=resource.rows[0];
+  await assertShopPrincipalScope(principal,row.organization_id,row.location_id,db);
+  return row;
+}
+
 async function assertManageableServiceCase(principal:Principal,serviceCaseId:string|null|undefined,organizationId:string,db:Queryable){
   if(!serviceCaseId)return;
   try{
@@ -327,13 +341,17 @@ export async function updateShopOsAppointment(principal:Principal,appointmentId:
     const current=await client.query(`select * from roviq_appointments where id=$1 for update`,[appointmentId]);
     if(!current.rowCount) throw httpError('appointment_not_found',404);
     const existing=current.rows[0];
-    const existingResource=await loadManageableResource(principal,existing.resource_id,client);
+    const existingResource=await loadExistingResource(principal,existing.resource_id,client);
     await assertManageableServiceCase(principal,existing.service_case_id,existingResource.organization_id,client);
     const nextStatus=nextShopOsAppointmentStatus(existing.appointment_status,input.action);
+
+    let nextResource=existingResource;
+    if(input.action==='reschedule'){
+      nextResource=await loadManageableResource(principal,input.resourceId??existing.resource_id,client);
+    }else if(input.action==='confirm'||input.action==='start'){
+      nextResource=await loadManageableResource(principal,existing.resource_id,client);
+    }
     const nextResourceId=input.action==='reschedule'?(input.resourceId??existing.resource_id):existing.resource_id;
-    const nextResource=nextResourceId===existing.resource_id
-      ? existingResource
-      : await loadManageableResource(principal,nextResourceId,client);
     if(existing.service_case_id) await assertManageableServiceCase(principal,existing.service_case_id,nextResource.organization_id,client);
     const nextStarts=input.action==='reschedule'?(input.startsAt??existing.starts_at):existing.starts_at;
     const nextEnds=input.action==='reschedule'?(input.endsAt??existing.ends_at):existing.ends_at;
@@ -360,12 +378,15 @@ export async function updateShopOsAppointment(principal:Principal,appointmentId:
       await assertConfirmableServiceCase(existing.service_case_id,client);
     }
 
+    const nextSourceConnectionId=(input.action==='reschedule'||input.action==='confirm'||input.action==='start')
+      ? nextResource.shop_os_connection_id
+      : existing.source_connection_id;
     const updated=await client.query(`update roviq_appointments
       set resource_id=$1,organization_id=$2,location_id=$3,source_connection_id=$4,appointment_status=$5,
           starts_at=$6,ends_at=$7,released_reason=case when $5 in ('released','cancelled','no_show') then $8 else released_reason end,
           lifecycle_version=lifecycle_version+1,updated_at=now()
       where id=$9 returning *`,[
-      nextResourceId,nextResource.organization_id,nextResource.location_id,nextResource.shop_os_connection_id,nextStatus,
+      nextResourceId,nextResource.organization_id,nextResource.location_id,nextSourceConnectionId,nextStatus,
       nextStarts,nextEnds,input.reason??null,appointmentId
     ]);
     if(matchedCapacity) await consumeMatchingCaseReservation(existing.service_case_id,matchedCapacity.id,client);
@@ -381,7 +402,7 @@ export async function updateShopOsAppointment(principal:Principal,appointmentId:
 export async function listShopOsSchedule(principal:Principal,input:{resourceId:string;from:string;to:string}){
   const client=await pool.connect();
   try{
-    await loadManageableResource(principal,input.resourceId,client);
+    await loadExistingResource(principal,input.resourceId,client);
     const appointments=await client.query(`select * from roviq_appointments
       where resource_id=$1 and starts_at<$3 and ends_at>$2
       order by starts_at asc,id asc`,[input.resourceId,input.from,input.to]);
