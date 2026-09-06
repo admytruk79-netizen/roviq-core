@@ -51,7 +51,7 @@ describe('Shop OS parts readiness, deferred service and reconciliation',()=>{
     expect(constraint.rows[0].status).toBe('satisfied');
   });
 
-  it('preserves deferred work as a follow-up CRM item and queues a reminder',async()=>{
+  it('preserves deferred work as follow-up CRM and closes it when the line becomes approved',async()=>{
     const shop=await setupOrder();
     const deferred=await deferRepairOrderLine(admin,{
       repairOrderId:shop.repairOrderId,repairOrderLineId:shop.deferredLineId,severity:'attention',reason:'Customer postponed repair'
@@ -65,19 +65,32 @@ describe('Shop OS parts readiness, deferred service and reconciliation',()=>{
     expect(outbox.rows[0].recipient_id).toBe(shop.customerActorId);
     const listed=await listDeferredService(admin,{organizationId:shop.orgId,statuses:['reminded']});
     expect(listed.deferredItems.some((item)=>item.id===deferred.id)).toBe(true);
+
+    await updateRepairOrderLine(admin,shop.repairOrderId,shop.deferredLineId,{approvalStatus:'approved'});
+    let followUp=await pool.query(`select status,next_follow_up_at from shop_deferred_service_items where id=$1`,[deferred.id]);
+    expect(followUp.rows[0].status).toBe('dismissed');
+    expect(followUp.rows[0].next_follow_up_at).toBeNull();
+
+    await updateRepairOrderLine(admin,shop.repairOrderId,shop.deferredLineId,{approvalStatus:'deferred'});
+    followUp=await pool.query(`select status,dismissed_at from shop_deferred_service_items where id=$1`,[deferred.id]);
+    expect(followUp.rows[0].status).toBe('open');
+    expect(followUp.rows[0].dismissed_at).toBeNull();
   });
 
-  it('fails closed on unresolved parts and then reconciles completed work idempotently',async()=>{
+  it('refuses completion while parts are unresolved, then reconciles completed work idempotently',async()=>{
     const shop=await setupOrder();
     const requirement=await createRepairOrderPartRequirement(admin,{
       repairOrderId:shop.repairOrderId,repairOrderLineId:shop.partLineId,partReference:'PAD-002'
     });
     await updateRepairOrder(admin,shop.repairOrderId,{action:'start'});
     await updateRepairOrder(admin,shop.repairOrderId,{action:'qc'});
-    await updateRepairOrder(admin,shop.repairOrderId,{action:'complete'});
-    await expect(reconcileRepairOrder(admin,shop.repairOrderId))
+    await expect(updateRepairOrder(admin,shop.repairOrderId,{action:'complete'}))
       .rejects.toMatchObject({message:'repair_order_parts_unresolved',statusCode:409});
+    const stillQc=await pool.query(`select status from shop_repair_orders where id=$1`,[shop.repairOrderId]);
+    expect(stillQc.rows[0].status).toBe('quality_control');
+
     await updateRepairOrderPartRequirement(admin,requirement.id,{readinessStatus:'ready'});
+    await updateRepairOrder(admin,shop.repairOrderId,{action:'complete'});
     const first=await reconcileRepairOrder(admin,shop.repairOrderId);
     expect(first.revenue).toBe(300);
     expect(first.directCost).toBe(100);
