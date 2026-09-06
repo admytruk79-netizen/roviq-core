@@ -32,6 +32,10 @@ export async function shopOsRoutes(app:FastifyInstance){
       resourceId:z.string().uuid().optional(),
       reason:z.string().max(1000).nullable().optional()
     }).superRefine((value,ctx)=>{
+      const changesSchedule=value.startsAt!==undefined||value.endsAt!==undefined||value.resourceId!==undefined;
+      if(value.action!=='reschedule'&&changesSchedule){
+        ctx.addIssue({code:z.ZodIssueCode.custom,message:'schedule fields are only allowed for reschedule',path:['action']});
+      }
       if(value.startsAt&&value.endsAt&&new Date(value.endsAt).getTime()<=new Date(value.startsAt).getTime()){
         ctx.addIssue({code:z.ZodIssueCode.custom,message:'endsAt must be after startsAt',path:['endsAt']});
       }
