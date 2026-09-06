@@ -2,6 +2,8 @@ import type { PoolClient } from 'pg';
 import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
 import { assertCaseAccess } from './case-access.js';
+import { syncOperationalConstraints } from './case-constraint-projection.js';
+import { evaluateServiceability, type ServiceabilityConstraint } from './serviceability.js';
 
 type Queryable=Pick<PoolClient,'query'>;
 export type ShopOsAppointmentStatus='held'|'confirmed'|'in_progress'|'completed'|'cancelled'|'no_show'|'released';
@@ -45,8 +47,9 @@ async function loadManageableResource(principal:Principal,resourceId:string,db:Q
     join partner_system_connections c
       on c.id=r.source_connection_id
      and c.mode='roviq_native'
-     and c.connection_status not in ('revoked','failed')
+     and c.connection_status='active'
     where r.id=$1 and r.active=true
+      and r.operational_state not in ('blocked','offline')
     limit 1`,[resourceId]);
   if(!resource.rowCount) throw httpError('shop_os_resource_not_found',404);
   const row=resource.rows[0];
@@ -83,6 +86,26 @@ async function assertManageableServiceCase(principal:Principal,serviceCaseId:str
       )
     ) as linked`,[serviceCaseId,organizationId]);
   if(!linked.rows[0]?.linked) throw httpError('service_case_tenant_mismatch',409);
+}
+
+async function assertConfirmableServiceCase(serviceCaseId:string|null|undefined,db:Queryable){
+  if(!serviceCaseId)return;
+  await syncOperationalConstraints(serviceCaseId,db);
+  const projected=await db.query(`select constraint_type,status,details from case_constraints where service_case_id=$1`,[serviceCaseId]);
+  const constraints:ServiceabilityConstraint[]=projected.rows.map((row:any)=>({
+    type:row.constraint_type,
+    status:row.status,
+    required:true,
+    details:row.details??{}
+  }));
+  const decision=evaluateServiceability({
+    capacity:{capacityState:'available',confidence:'roviq_native',syncState:'current',capacityUnits:1},
+    constraints,
+    requirementsProjected:true,
+    allowManualVerified:false,
+    allowStaleHold:false
+  });
+  if(!decision.confirmable) throw httpError('service_case_not_confirmable',409);
 }
 
 async function lockSchedulingResources(resourceIds:string[],db:Queryable){
@@ -241,6 +264,7 @@ export async function createShopOsAppointment(principal:Principal,input:{
       serviceCategory:input.serviceCategory??null,
       serviceCaseId:input.serviceCaseId??null
     },client);
+    if((input.status??'held')==='confirmed') await assertConfirmableServiceCase(input.serviceCaseId,client);
     const created=await client.query(`insert into roviq_appointments(
       service_case_id,organization_id,location_id,resource_id,source_connection_id,appointment_status,
       starts_at,ends_at,service_category,customer_visible_summary,internal_notes,created_by_actor_id
@@ -297,6 +321,9 @@ export async function updateShopOsAppointment(principal:Principal,appointmentId:
         serviceCaseId:existing.service_case_id??null,
         excludeAppointmentId:appointmentId
       },client);
+    }
+    if(nextStatus==='confirmed'&&(input.action==='confirm'||input.action==='reschedule')){
+      await assertConfirmableServiceCase(existing.service_case_id,client);
     }
 
     const updated=await client.query(`update roviq_appointments
