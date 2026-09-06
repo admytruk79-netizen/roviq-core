@@ -59,16 +59,14 @@ export async function buildApp() {
 
   await app.register(cors, { origin: false });
   await app.register(helmet);
-  // Keyed by the caller's bearer token (falling back to IP for unauthenticated requests) rather
-  // than request.ip alone: Core sits behind the Cloudflare Worker, which proxies every client's
-  // request via its own outbound fetch, so request.ip is the Worker's egress address for
-  // everyone -- a plain IP-keyed limit collapses all real, distinct callers into one shared
-  // budget. That was silently rate-limiting unrelated traffic once aggregate usage crossed the
-  // threshold, which the error handler above then misreported as a generic 500.
+  // Never key the unauthenticated limiter by caller-controlled Authorization data. Invalid bearer
+  // strings have not been authenticated yet and can be rotated to manufacture fresh buckets. Use
+  // the stable network identity available at this layer instead; authenticated authorization still
+  // happens in principalMiddleware before protected route handlers run.
   await app.register(rateLimit, {
     max: 120,
     timeWindow: '1 minute',
-    keyGenerator: (req) => (req.headers.authorization as string | undefined) ?? req.ip
+    keyGenerator: (req) => req.ip
   });
 
   await app.register(healthRoutes);
