@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireRole } from '../middleware/principal.js';
 import { createShopOsAppointment, listShopOsSchedule, updateShopOsAppointment } from '../../services/shop-os.js';
+import { listShopOsBoard } from '../../services/shop-os-board.js';
 
 export async function shopOsRoutes(app:FastifyInstance){
   const allowed={preHandler:requireRole('admin','partner')};
@@ -44,5 +45,15 @@ export async function shopOsRoutes(app:FastifyInstance){
       to:z.string().datetime({offset:true})
     }).refine((value)=>new Date(value.to).getTime()>new Date(value.from).getTime(),{message:'to must be after from',path:['to']}).parse(req.query);
     return await listShopOsSchedule(req.principal,query);
+  });
+
+  app.get('/api/shop-os/board',allowed,async(req)=>{
+    const query=z.object({
+      organizationId:z.string().uuid().optional(),
+      locationId:z.string().uuid().optional(),
+      from:z.string().datetime({offset:true}),
+      to:z.string().datetime({offset:true})
+    }).refine((value)=>new Date(value.to).getTime()>new Date(value.from).getTime(),{message:'to must be after from',path:['to']}).parse(req.query);
+    return await listShopOsBoard(req.principal,query);
   });
 }
