@@ -1,7 +1,7 @@
 import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
 import { appendCaseEvent } from './orchestration.js';
-import { assertCaseAccess } from './case-access.js';
+import { assertAdminCaseScope, assertExceptionOwnerScope, getAdminActorScope } from './admin-case-scope.js';
 
 export type ExceptionState = 'open' | 'acknowledged' | 'remediating' | 'resolved' | 'dismissed';
 
@@ -17,7 +17,7 @@ export async function updateExceptionState(principal: Principal, exceptionId: st
     const current = await client.query('select * from case_exceptions where id=$1 for update',[exceptionId]);
     if (!current.rowCount) throw new Error('exception_not_found');
     const row = current.rows[0];
-    await assertCaseAccess(principal,row.case_id,client);
+    await assertAdminCaseScope(principal,row.case_id,client);
 
     const allowed: Record<string, ExceptionState[]> = {
       open:['acknowledged','remediating','resolved','dismissed'],
@@ -67,7 +67,8 @@ export async function assignException(principal: Principal, exceptionId: string,
     const current=await client.query('select * from case_exceptions where id=$1 for update',[exceptionId]);
     if(!current.rowCount) throw new Error('exception_not_found');
     const row=current.rows[0];
-    await assertCaseAccess(principal,row.case_id,client);
+    await assertAdminCaseScope(principal,row.case_id,client);
+    if(input.ownerActorId) await assertExceptionOwnerScope(input.ownerActorId,row.case_id,client);
     const updated=await client.query(
       `update case_exceptions set owner_actor_id=$1,due_at=$2 where id=$3 returning *`,
       [input.ownerActorId ?? null,input.dueAt ?? null,exceptionId]
@@ -86,19 +87,47 @@ export async function assignException(principal: Principal, exceptionId: string,
   } finally { client.release(); }
 }
 
-export async function getExceptionQueue(input:{ state?:ExceptionState; severity?:string; limit?:number }={}) {
-  const params:unknown[]=[];
-  const clauses:string[]=[];
-  if(input.state){params.push(input.state);clauses.push(`e.state=$${params.length}`);}
-  if(input.severity){params.push(input.severity);clauses.push(`e.severity=$${params.length}`);}
-  params.push(input.limit ?? 200);
-  const where=clauses.length?`where ${clauses.join(' and ')}`:'';
-  const r=await pool.query(
-    `select e.*,c.state as case_state,c.priority,c.updated_at as case_updated_at
-     from case_exceptions e join service_cases c on c.id=e.case_id ${where}
-     order by case when e.severity='critical' then 0 when e.severity='warning' then 1 else 2 end,
-       e.due_at nulls last,e.created_at asc limit $${params.length}`,
-    params
-  );
-  return r.rows;
+export async function getExceptionQueue(principal:Principal,input:{ state?:ExceptionState; severity?:string; limit?:number }={}) {
+  if(principal.role!=='admin') throw new Error('exception_admin_only');
+  const client=await pool.connect();
+  try{
+    const scope=await getAdminActorScope(principal,client);
+    const params:unknown[]=[];
+    const clauses:string[]=[];
+    if(input.state){params.push(input.state);clauses.push(`e.state=$${params.length}`);}
+    if(input.severity){params.push(input.severity);clauses.push(`e.severity=$${params.length}`);}
+    if(scope){
+      params.push(scope.organizationId);const orgParam=params.length;
+      params.push(scope.locationId);const locationParam=params.length;
+      clauses.push(`exists(
+        select 1
+        from service_cases scoped_case
+        left join actors scoped_owner on scoped_owner.id=scoped_case.current_owner_actor_id
+        left join actors scoped_selected on scoped_selected.id=scoped_case.selected_actor_id
+        left join actors scoped_recommended on scoped_recommended.id=scoped_case.recommended_actor_id
+        where scoped_case.id=e.case_id and (
+          (scoped_owner.organization_id=$${orgParam} and ($${locationParam}::uuid is null or scoped_owner.location_id is null or scoped_owner.location_id=$${locationParam}))
+          or (scoped_selected.organization_id=$${orgParam} and ($${locationParam}::uuid is null or scoped_selected.location_id is null or scoped_selected.location_id=$${locationParam}))
+          or (scoped_recommended.organization_id=$${orgParam} and ($${locationParam}::uuid is null or scoped_recommended.location_id is null or scoped_recommended.location_id=$${locationParam}))
+          or exists(
+            select 1 from matches_offers scoped_offer
+            join actors scoped_provider on scoped_provider.id=scoped_offer.actor_id
+            where scoped_offer.case_id=scoped_case.id
+              and scoped_provider.organization_id=$${orgParam}
+              and ($${locationParam}::uuid is null or scoped_provider.location_id is null or scoped_provider.location_id=$${locationParam})
+          )
+        )
+      )`);
+    }
+    params.push(input.limit ?? 200);
+    const where=clauses.length?`where ${clauses.join(' and ')}`:'';
+    const r=await client.query(
+      `select e.*,c.state as case_state,c.priority,c.updated_at as case_updated_at
+       from case_exceptions e join service_cases c on c.id=e.case_id ${where}
+       order by case when e.severity='critical' then 0 when e.severity='warning' then 1 else 2 end,
+         e.due_at nulls last,e.created_at asc limit $${params.length}`,
+      params
+    );
+    return r.rows;
+  }finally{client.release();}
 }
