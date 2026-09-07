@@ -23,8 +23,8 @@ async function setupServiceDay(){
   const technician=await pool.query(`insert into actors(actor_type,status,organization_id) values('technician','active',$1) returning id`,[org.rows[0].id]);
   const customer=await pool.query(`insert into actors(actor_type,status) values('customer','active') returning id`);
   const domain=await pool.query(`select id from domains where code='maintenance' limit 1`);
-  const serviceCase=await pool.query(`insert into service_cases(domain_id,case_type,state,customer_actor_id,current_owner_role,current_owner_actor_id)
-    values($1,'maintenance','provider_selection',$2,'partner',$3) returning id`,[
+  const serviceCase=await pool.query(`insert into service_cases(domain_id,case_type,state,customer_actor_id,selected_actor_id)
+    values($1,'maintenance','provider_pending',$2,$3) returning id`,[
       domain.rows[0].id,customer.rows[0].id,shopActor.rows[0].id
     ]);
   const technicianResource=await createShopResource(admin,{
