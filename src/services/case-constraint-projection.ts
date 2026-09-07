@@ -155,10 +155,10 @@ async function syncApprovalConstraint(caseId:string,db:Queryable){
 
 async function syncTransportConstraint(caseId:string,db:Queryable){
   const result=await db.query(
-    `select id,transport_type,status,dropoff_location,provider_actor_id,eta_at,updated_at
+    `select id,transport_type,status,dropoff_location,provider_actor_id,eta_at,dispatch_sequence
        from transport_dispatches
       where case_id=$1 and status<>'cancelled'
-      order by updated_at desc,id desc
+      order by dispatch_sequence desc
       limit 1`,
     [caseId]
   );
