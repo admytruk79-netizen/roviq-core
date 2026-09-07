@@ -22,7 +22,21 @@ function Portal() {
     return () => window.removeEventListener('popstate', onBack);
   }, [principal]);
 
-  return principal ? <><Dashboard /><div className="shell"><main className="mx-auto max-w-7xl px-4 pb-10 sm:px-6"><ShopOsWorkspace /><ShopOsDviControl /><ShopOsFloorControl /></main></div><LocalMap /></> : <Login />;
+  return principal ? (
+    <Dashboard>
+      <section className="mt-8" aria-labelledby="shop-os-heading">
+        <div className="mb-4">
+          <p className="kicker">Operations workspace</p>
+          <h2 id="shop-os-heading" className="mt-1 text-2xl font-bold">Run today’s service work</h2>
+          <p className="muted mt-1 max-w-2xl text-sm">Move from coordinated demand to repair execution without leaving the partner workspace.</p>
+        </div>
+        <ShopOsWorkspace />
+        <ShopOsDviControl />
+        <ShopOsFloorControl />
+      </section>
+      <LocalMap />
+    </Dashboard>
+  ) : <Login />;
 }
 
 export default function App() {
