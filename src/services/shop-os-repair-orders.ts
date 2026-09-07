@@ -261,6 +261,19 @@ export async function updateRepairOrder(principal:Principal,repairOrderId:string
     }
     if(input.action==='complete'||input.action==='close') await assertCompletionReady(repairOrderId,client);
     if(input.action==='revise_estimate'){
+      const affected=await client.query(`select id,approval_status from shop_repair_order_lines
+        where repair_order_id=$1 and approval_status in ('declined','deferred') for update`,[repairOrderId]);
+      if(affected.rowCount){
+        const closed=await client.query(`update shop_deferred_service_items d set
+          status='dismissed',dismissed_at=coalesce(dismissed_at,now()),next_follow_up_at=null,updated_at=now()
+          where d.repair_order_line_id=any($1::uuid[]) and d.status in ('open','reminded','booked')
+          returning d.id,d.repair_order_line_id`,[affected.rows.map(row=>row.id)]);
+        for(const row of closed.rows){
+          await appendOrderEvent(client,repairOrderId,'SHOP_OS_DEFERRED_SERVICE_AUTO_DISMISSED',principal,{
+            deferredItemId:row.id,lineId:row.repair_order_line_id,approvalStatus:'pending',reason:'estimate_revision'
+          });
+        }
+      }
       await client.query(`update shop_repair_order_lines set approval_status='pending',approved_at=null,declined_at=null,deferred_at=null,updated_at=now() where repair_order_id=$1`,[repairOrderId]);
     }
     if(input.action==='cancel'){
