@@ -166,12 +166,17 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
       // superseded), and unconditionally clearing ownership here would strip a later, still-active
       // provider's claim on the case just because an older, already-superseded dispatch declined.
       await client.query(`update service_cases set current_owner_role=null,current_owner_actor_id=null,updated_at=now() where id=$1 and current_owner_actor_id=$2`,[current.case_id,current.provider_actor_id]);
-      // Leave status='declined' (already set by the update above) rather than overwriting it back
-      // to 'requested' here: assignTransportDispatch already treats 'declined' as assignable, so the
-      // dispatch is reassignable either way, but callers should see the decline they just recorded.
+      // docs/FIELD_SERVICE_ONSITE_REPAIR_ARCHITECTURE.md: "A declined assignment is released back
+      // to `requested`." Reset status here rather than leaving it at 'declined' -- a dispatch list
+      // filtered to status='requested' to find reassignable work would otherwise miss this one.
+      // The caller who just declined still gets 'declined' back in this response's local `status`
+      // param below (the event/audit trail records the decline itself); this is what the row
+      // settles to once assignable again. History views derive their own 'declined' label from the
+      // audit log (see /api/transport/me/history), not from this live column, so this doesn't
+      // affect what the declining provider sees in their own history.
       updated = await client.query(
         `update transport_dispatches
-         set provider_actor_id=null,assigned_at=null,accepted_at=null,updated_at=now(),metadata=metadata || $2::jsonb
+         set status='requested',provider_actor_id=null,assigned_at=null,accepted_at=null,updated_at=now(),metadata=metadata || $2::jsonb
          where id=$1 returning *`,
         [dispatchId,JSON.stringify({lastDeclinedBy:principal.actorId??null,lastDeclinedAt:new Date().toISOString()})]
       );
