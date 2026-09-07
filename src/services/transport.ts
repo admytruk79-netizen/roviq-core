@@ -29,7 +29,13 @@ export async function createTransportDispatch(principal: Principal, input:{
   );
   const dispatch = r.rows[0];
 
-  if (input.pickupLocation || input.dropoffLocation) {
+  // A per-dispatch override is execution context, not canonical Service Case spatial truth.
+  // Only mirror locations whose provenance is not explicitly dispatch-local. This prevents an
+  // explicit destination on one tow/valet job from changing case_spatial_context.destination and
+  // redirecting sibling inherited dispatches via the canonical destination trigger.
+  const spatialPickup = input.metadata?.pickupSource === 'explicit_dispatch' ? undefined : input.pickupLocation;
+  const spatialDropoff = input.metadata?.dropoffSource === 'explicit_dispatch' ? undefined : input.dropoffLocation;
+  if (spatialPickup || spatialDropoff) {
     await pool.query(
       `insert into case_spatial_context(case_id,origin,current_vehicle,destination,route_context,source,updated_at)
        values($1,$2::jsonb,$2::jsonb,$3::jsonb,'{}'::jsonb,'transport_dispatch',now())
@@ -39,7 +45,7 @@ export async function createTransportDispatch(principal: Principal, input:{
          destination=coalesce(excluded.destination,case_spatial_context.destination),
          source='transport_dispatch',
          updated_at=now()`,
-      [input.caseId,input.pickupLocation ? JSON.stringify(input.pickupLocation) : null,input.dropoffLocation ? JSON.stringify(input.dropoffLocation) : null]
+      [input.caseId,spatialPickup ? JSON.stringify(spatialPickup) : null,spatialDropoff ? JSON.stringify(spatialDropoff) : null]
     );
   }
 
@@ -105,9 +111,6 @@ export async function assignTransportDispatch(principal: Principal, dispatchId:s
     if (!committed) await client.query('rollback');
     throw e;
   } finally {
-    // Released before the post-commit side effects below, which each acquire their own connection
-    // via the shared pool -- holding this one open through them risks the same pool-exhaustion
-    // deadlock fixed in updateTransportStatus's declined branch (Devin review finding on this PR).
     client.release();
   }
 
@@ -136,10 +139,6 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
   let caseStateForTransition: string | null = null;
   try {
     await client.query('begin');
-    // Row lock for the whole read-check-write sequence: without it, a decline's status write and
-    // its later provider-release write are two separate statements that a concurrent
-    // assignTransportDispatch (itself row-locked) can interleave between, silently wiping out a
-    // newly assigned provider the moment it commits (Devin review finding on this PR).
     const d = await client.query('select * from transport_dispatches where id=$1 for update',[dispatchId]);
     if (!d.rowCount) throw new Error('dispatch_not_found');
     current = d.rows[0];
@@ -161,31 +160,19 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
       const c = await client.query('select state from service_cases where id=$1',[current.case_id]);
       caseStateForTransition = c.rows[0]?.state ?? null;
     } else if (status === 'declined') {
-      // Guard on current_owner_actor_id still matching this dispatch's provider: a case can have
-      // more than one transport_dispatches row (e.g. a second dispatch assigned after this one was
-      // superseded), and unconditionally clearing ownership here would strip a later, still-active
-      // provider's claim on the case just because an older, already-superseded dispatch declined.
       await client.query(`update service_cases set current_owner_role=null,current_owner_actor_id=null,updated_at=now() where id=$1 and current_owner_actor_id=$2`,[current.case_id,current.provider_actor_id]);
-      // Leave status='declined' (already set by the update above) rather than overwriting it back
-      // to 'requested' here: assignTransportDispatch already treats 'declined' as assignable, so the
-      // dispatch is reassignable either way, but callers should see the decline they just recorded.
       updated = await client.query(
         `update transport_dispatches
          set provider_actor_id=null,assigned_at=null,accepted_at=null,updated_at=now(),metadata=metadata || $2::jsonb
          where id=$1 returning *`,
         [dispatchId,JSON.stringify({lastDeclinedBy:principal.actorId??null,lastDeclinedAt:new Date().toISOString()})]
       );
-      // Insert directly on `client` rather than calling appendCaseEvent (which acquires its own
-      // connection via the shared pool): with `client`'s connection held open for this transaction,
-      // enough concurrent declines to saturate the pool would have every request holding one
-      // connection while waiting on a second, deadlocking until each blocked query times out.
       await client.query(
         `insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload)
          values('service_case',$1,'TRANSPORT_RELEASED_FOR_REASSIGNMENT',$2,$3)`,
         [current.case_id,principal.actorId??null,JSON.stringify({dispatchId,declinedProviderActorId:current.provider_actor_id})]
       );
     } else if (status === 'failed') {
-      // Same guard as the declined branch above.
       await client.query(`update service_cases set current_owner_role=null,current_owner_actor_id=null,updated_at=now() where id=$1 and current_owner_actor_id=$2`,[current.case_id,current.provider_actor_id]);
     } else if (status === 'delivered') {
       await client.query(`update workflow_deadlines set state='resolved',resolved_at=now() where case_id=$1 and deadline_type like 'transport_%' and state='open'`,[current.case_id]);
@@ -197,16 +184,9 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
     if (!committed) await client.query('rollback');
     throw e;
   } finally {
-    // Release the transaction's connection before the post-commit side effects below, which each
-    // acquire their own connection via the shared pool: holding this one open through them means
-    // every one of those calls competes for the same pool this connection is still occupying,
-    // which can exhaust it under load (Devin review finding on this PR).
     client.release();
   }
 
-  // transitionCase manages its own connection/transaction and can't run inside the transaction
-  // above; it must follow the commit (matches the pre-existing behavior: the case transition was
-  // never atomic with the dispatch update, only ever ordered after it).
   if (caseStateForTransition === 'tow_pending') await transitionCase(principal,current.case_id,'tow_in_progress',{ dispatchId });
 
   const eventType = status === 'declined' ? 'TRANSPORT_DECLINED' : `TRANSPORT_${status.toUpperCase()}`;
