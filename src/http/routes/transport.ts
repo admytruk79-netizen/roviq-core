@@ -139,7 +139,7 @@ export async function transportRoutes(app: FastifyInstance) {
     const base = await getTransportDispatch(id);
     if (!base) return reply.code(404).send({ error:'dispatch_not_found' });
     if(req.principal.role==='admin') await assertAdminCaseScope(req.principal,base.case_id,pool);
-    else if(base.provider_actor_id !== req.principal.actorId) return reply.code(403).send({ error:'forbidden' });
+    else if(!req.principal.actorId||!base.provider_actor_id||base.provider_actor_id !== req.principal.actorId) return reply.code(403).send({ error:'forbidden' });
     const projected = await pool.query(`${effectiveDispatchSelect} where td.id=$1`,[id]);
     return { dispatch:projected.rows[0] ?? base };
   });
@@ -150,7 +150,7 @@ export async function transportRoutes(app: FastifyInstance) {
     const d = await getTransportDispatch(id);
     if (!d) return reply.code(404).send({ error:'dispatch_not_found' });
     if(req.principal.role==='admin') await assertAdminCaseScope(req.principal,d.case_id,pool);
-    else if(d.provider_actor_id !== req.principal.actorId) return reply.code(403).send({ error:'dispatch_forbidden' });
+    else if(!req.principal.actorId||!d.provider_actor_id||d.provider_actor_id !== req.principal.actorId) return reply.code(403).send({ error:'dispatch_forbidden' });
     const point = { lat:body.lat,lng:body.lng,accuracy:body.accuracy ?? null,heading:body.heading ?? null,speed:body.speed ?? null,capturedAt:body.capturedAt ?? new Date().toISOString(),dispatchId:id };
     await pool.query(
       `insert into case_spatial_context(case_id,transport_location,source,updated_at)
@@ -167,6 +167,7 @@ export async function transportRoutes(app: FastifyInstance) {
       const d=await getTransportDispatch(id);
       if(!d) return reply.code(404).send({error:'dispatch_not_found'});
       if(req.principal.role==='admin') await assertAdminCaseScope(req.principal,d.case_id,pool);
+      else if(!req.principal.actorId||!d.provider_actor_id||d.provider_actor_id!==req.principal.actorId) return reply.code(403).send({error:'dispatch_forbidden'});
       return { dispatch:await updateTransportStatus(req.principal,id,body.status,body.metadata ?? {}) };
     }
     catch (e) {
