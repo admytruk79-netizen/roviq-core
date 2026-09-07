@@ -1,0 +1,19 @@
+/* Universal interaction baseline for customer-critical flows. */
+:where(button,a[href],input,select,textarea,[role="button"]){min-height:44px}
+:where(button,a[href],[role="button"]){touch-action:manipulation}
+:where(button,a[href],input,select,textarea,[role="button"]):focus-visible{outline:3px solid rgba(228,111,53,.62);outline-offset:3px}
+:where(button,[role="button"]):disabled,[aria-disabled="true"]{cursor:not-allowed}
+[aria-busy="true"]{cursor:progress}
+:where(.roviq-panel,.roviq-case-card,.roviq-summary-strip>div){scroll-margin-top:80px}
+@media(max-width:640px){
+  .roviq-nav-link{min-height:44px!important}
+}
+@media(prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto!important}
+  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;transition-delay:0s!important}
+  .roviq-btn-primary{transform:none!important}
+}
+@media(forced-colors:active){
+  :where(.roviq-panel,.roviq-case-card,.roviq-summary-strip>div){border:1px solid CanvasText!important}
+  :where(button,a[href],input,select,textarea,[role="button"]):focus-visible{outline:2px solid Highlight!important}
+}
