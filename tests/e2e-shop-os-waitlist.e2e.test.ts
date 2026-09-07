@@ -19,7 +19,7 @@ async function setupShop(){
     ) values($1,$2,$3,'repair',now()-interval '1 hour',now()+interval '8 hours',
       'available',1,1,'roviq_native','current')`,[org.rows[0].id,connection.rows[0].id,resource.rows[0].id]);
   const actor=await pool.query(`insert into actors(actor_type,status,organization_id) values('shop','active',$1) returning id`,[org.rows[0].id]);
-  return {orgId:org.rows[0].id as string,resourceId:resource.rows[0].id as string,actorId:actor.rows[0].id as string};
+  return {orgId:org.rows[0].id as string,connectionId:connection.rows[0].id as string,resourceId:resource.rows[0].id as string,actorId:actor.rows[0].id as string};
 }
 
 async function createCaseForActor(actorId:string){
@@ -102,6 +102,34 @@ describe('Shop OS waitlist',()=>{
 
     await expect(updateShopWaitlistEntry(partner,entry.id,{action:'book',appointmentId:appointment.id}))
       .rejects.toMatchObject({message:'waitlist_case_mismatch',statusCode:409});
+  });
+
+  it('rejects booking when the appointment resource type is outside the waitlist preference',async()=>{
+    const shop=await setupShop();
+    const partner={role:'partner',actorId:shop.actorId} as const;
+    const entry=await createShopWaitlistEntry(partner,{
+      requestedServiceCategory:'repair',
+      preferredResourceTypes:['technician']
+    });
+    const start=new Date(Date.now()+90*60_000).toISOString();
+    const end=new Date(Date.now()+150*60_000).toISOString();
+    const bayAppointment=await createShopOsAppointment(partner,{
+      resourceId:shop.resourceId,startsAt:start,endsAt:end,serviceCategory:'repair',status:'confirmed'
+    });
+
+    await expect(updateShopWaitlistEntry(partner,entry.id,{action:'book',appointmentId:bayAppointment.id}))
+      .rejects.toMatchObject({message:'waitlist_resource_type_mismatch',statusCode:409});
+
+    const technician=await pool.query(`insert into service_resources(
+      organization_id,resource_type,display_name,active,source_connection_id
+    ) values($1,'technician','Tech A',true,$2) returning id`,[shop.orgId,shop.connectionId]);
+    const techStart=new Date(Date.now()+180*60_000).toISOString();
+    const techEnd=new Date(Date.now()+240*60_000).toISOString();
+    const technicianAppointment=await createShopOsAppointment(partner,{
+      resourceId:technician.rows[0].id,startsAt:techStart,endsAt:techEnd,serviceCategory:'repair',status:'confirmed'
+    });
+    const booked=await updateShopWaitlistEntry(partner,entry.id,{action:'book',appointmentId:technicianAppointment.id});
+    expect(booked.state).toBe('booked');
   });
 
   it('prevents tenant-crossing case links even for an admin-scoped waitlist write',async()=>{
