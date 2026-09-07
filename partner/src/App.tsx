@@ -14,9 +14,17 @@ function Portal() {
     if (!principal) return;
     history.replaceState({ ...history.state, roviqRoot: true }, '');
     history.pushState({ roviqGuard: true }, '');
+    let exiting = false;
     const onBack = () => {
-      history.pushState({ roviqGuard: true }, '');
-      window.dispatchEvent(new Event('roviq:back'));
+      if (exiting) return;
+      const backEvent = new Event('roviq:back', { cancelable: true });
+      window.dispatchEvent(backEvent);
+      if (backEvent.defaultPrevented) {
+        history.pushState({ roviqGuard: true }, '');
+        return;
+      }
+      exiting = true;
+      history.back();
     };
     window.addEventListener('popstate', onBack);
     return () => window.removeEventListener('popstate', onBack);
