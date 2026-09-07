@@ -9,7 +9,7 @@
 .case-spatial .live-map-wrap{height:min(58vh,520px)!important;min-height:360px}
 .map-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}
 .mode-switch{display:inline-flex;padding:3px;border:1px solid var(--line);border-radius:999px;background:rgba(7,17,29,.55)}
-.mode-switch button{border:0;background:transparent;color:var(--muted);border-radius:999px;padding:8px 12px;font:inherit;font-size:11px;font-weight:800;cursor:pointer;min-height:36px}
+.mode-switch button{border:0;background:transparent;color:var(--muted);border-radius:999px;padding:8px 12px;font:inherit;font-size:11px;font-weight:800;cursor:pointer;min-height:44px;min-width:44px}
 .mode-switch button.active{background:rgba(228,111,53,.2);color:#fff}
 .live-badge{white-space:nowrap}
 .spatial-grid>div{min-height:76px!important;padding:12px 14px!important}
@@ -30,15 +30,17 @@
 .finding-form{border-color:rgba(228,111,53,.28)!important}
 .finding-form .form-head .eyebrow{margin-top:0}
 .finding-form textarea{min-height:128px}
-.form input,.form select,.form textarea{font-size:16px!important}
+.form input,.form select,.form textarea{font-size:16px!important;min-height:44px}
 .safety-panel{padding:12px!important;margin-top:12px!important}
 .safety-panel .eyebrow{margin-top:0!important}
-.check-row{display:flex!important;align-items:center!important;gap:9px!important;margin-top:8px!important}
-.check-row input{width:auto!important;flex:none}
+.check-row{display:flex!important;align-items:center!important;gap:9px!important;margin-top:8px!important;min-height:44px}
+.check-row input{width:auto!important;flex:none;min-width:24px;min-height:24px}
 .authorization{margin-top:14px!important}
 .decision-panel{text-transform:none}
-.primary:focus-visible,.secondary:focus-visible,.queue-card:focus-visible,.mode-switch button:focus-visible{outline:3px solid rgba(88,223,207,.5)!important;outline-offset:2px!important}
+.primary,.secondary,.queue-card{min-height:44px}
+.primary:focus-visible,.secondary:focus-visible,.queue-card:focus-visible,.mode-switch button:focus-visible,.form input:focus-visible,.form select:focus-visible,.form textarea:focus-visible{outline:3px solid rgba(88,223,207,.5)!important;outline-offset:2px!important}
 .empty-state{max-width:620px;margin:12px auto 0!important;text-align:center}
+[aria-busy="true"]{cursor:progress}
 @media(max-width:640px){
   .app-header{min-height:56px!important;padding:8px 10px!important}
   .app-header .brand{min-width:0!important}
@@ -82,6 +84,10 @@
   .spatial-grid>div{min-height:56px!important}
 }
 @media(prefers-reduced-motion:reduce){
-  .queue-card{transition:none!important}
-  *{scroll-behavior:auto!important}
+  .queue-card{transition:none!important;transform:none!important}
+  *{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+}
+@media(forced-colors:active){
+  .case-spatial,.queue-card,.form{border:1px solid CanvasText!important}
+  button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid Highlight!important}
 }
