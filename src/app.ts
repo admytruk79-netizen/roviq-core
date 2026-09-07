@@ -39,10 +39,6 @@ export async function buildApp() {
     if (err instanceof ZodError) return reply.code(400).send({ error:'validation_error', details:err.issues });
     if (err instanceof Error && err.message === 'idempotency_key_reused') return reply.code(409).send({error:err.message});
     if (err instanceof Error && err.message === 'idempotency_key_too_long') return reply.code(400).send({error:err.message});
-    const dbCode=(err as {code?:string}).code;
-    if(dbCode==='23514'&&err instanceof Error&&[
-      'deferred_service_case_required_for_booking','deferred_service_appointment_case_mismatch'
-    ].includes(err.message)) return reply.code(409).send({error:err.message});
     const statusCode = (err as { statusCode?: number }).statusCode;
     if (typeof statusCode === 'number' && statusCode >= 400 && statusCode < 500) {
       return reply.code(statusCode).send({ error: err instanceof Error ? err.message : 'request_error' });
@@ -68,11 +64,8 @@ export async function buildApp() {
 
     const routeUrl=req.routeOptions.url;
     if(req.principal.role==='admin'&&req.principal.actorId){
-      if(routeUrl==='/api/admin/exceptions'){
-        const error=new Error('forbidden') as Error&{statusCode:number};
-        error.statusCode=403;
-        throw error;
-      }
+      // Tenant-scoped exception queues are handled by getExceptionQueue itself. Do not block
+      // /api/admin/exceptions here; only case-addressed admin routes require the centralized case guard.
       if(routeUrl?.startsWith('/api/admin/cases/:id')){
         const caseId=(req.params as {id?:string}|undefined)?.id;
         if(caseId) await assertAdminCaseScope(req.principal,caseId,pool);
