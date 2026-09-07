@@ -30,6 +30,7 @@ import { fieldServiceRoutes } from './http/routes/field-service.js';
 import { exceptionRoutes } from './http/routes/exceptions.js';
 import { shopOsRoutes } from './http/routes/shop-os.js';
 import { shopOsFloorRoutes } from './http/routes/shop-os-floor.js';
+import { localRoutes } from './http/routes/local.js';
 import { assertAdminCaseScope } from './services/admin-case-scope.js';
 
 const deferredBookingConstraintErrors = new Set([
@@ -72,8 +73,6 @@ export async function buildApp() {
 
     const routeUrl=req.routeOptions.url;
     if(req.principal.role==='admin'&&req.principal.actorId){
-      // Tenant-scoped exception queues are handled by getExceptionQueue itself. Do not block
-      // /api/admin/exceptions here; only case-addressed admin routes require the centralized case guard.
       if(routeUrl?.startsWith('/api/admin/cases/:id')){
         const caseId=(req.params as {id?:string}|undefined)?.id;
         if(caseId) await assertAdminCaseScope(req.principal,caseId,pool);
@@ -103,6 +102,7 @@ export async function buildApp() {
   await app.register(integrationRoutes);
   await app.register(shopOsRoutes);
   await app.register(shopOsFloorRoutes);
+  await app.register(localRoutes);
   await app.register(triageEvaluationRoutes);
 
   return app;
