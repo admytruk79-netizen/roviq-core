@@ -80,11 +80,12 @@ export async function createDviInspection(principal:Principal,input:{
     await client.query('begin');
     const order=await loadOrder(principal,input.repairOrderId,client,true);
     if(['closed','cancelled'].includes(order.status)) throw httpError('repair_order_inactive',409);
-    await assertActor(input.technicianActorId,order.organization_id,order.location_id,client);
+    const effectiveTechnicianActorId=input.technicianActorId??order.primary_technician_actor_id??null;
+    await assertActor(effectiveTechnicianActorId,order.organization_id,order.location_id,client);
     const created=await client.query(`insert into shop_dvi_inspections(
       repair_order_id,organization_id,location_id,technician_actor_id,inspection_type,summary,status,started_at,created_by_actor_id
     ) values($1,$2,$3,$4,$5,$6,'in_progress',now(),$7) returning *`,[
-      input.repairOrderId,order.organization_id,order.location_id,input.technicianActorId??order.primary_technician_actor_id??null,
+      input.repairOrderId,order.organization_id,order.location_id,effectiveTechnicianActorId,
       input.inspectionType??'general',input.summary??null,principal.actorId??null
     ]);
     await appendEvent(client,input.repairOrderId,'SHOP_OS_DVI_STARTED',principal,{inspectionId:created.rows[0].id});
