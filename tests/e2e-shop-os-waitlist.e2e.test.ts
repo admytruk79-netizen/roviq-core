@@ -123,6 +123,11 @@ describe('Shop OS waitlist',()=>{
     const technician=await pool.query(`insert into service_resources(
       organization_id,resource_type,display_name,active,source_connection_id
     ) values($1,'technician','Tech A',true,$2) returning id`,[shop.orgId,shop.connectionId]);
+    await pool.query(`insert into capacity_windows(
+      organization_id,source_connection_id,resource_id,service_category,window_start,window_end,
+      capacity_state,capacity_units,nominal_capacity_units,confidence,sync_state
+    ) values($1,$2,$3,'repair',now()-interval '1 hour',now()+interval '8 hours',
+      'available',1,1,'roviq_native','current')`,[shop.orgId,shop.connectionId,technician.rows[0].id]);
     const techStart=new Date(Date.now()+180*60_000).toISOString();
     const techEnd=new Date(Date.now()+240*60_000).toISOString();
     const technicianAppointment=await createShopOsAppointment(partner,{
