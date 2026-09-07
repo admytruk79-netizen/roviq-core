@@ -4,14 +4,15 @@
 .roviq-grid-glow .space-y-6{display:grid;gap:14px!important}
 .roviq-grid-glow .space-y-6>*{margin-top:0!important}
 .roviq-grid-glow section,.roviq-grid-glow .rounded-lg{border-radius:14px!important}
-.roviq-grid-glow button,.roviq-grid-glow select,.roviq-grid-glow input,.roviq-grid-glow textarea{min-height:44px}
+.roviq-grid-glow button,.roviq-grid-glow select,.roviq-grid-glow input,.roviq-grid-glow textarea,.roviq-grid-glow a{min-height:44px}
 .roviq-grid-glow button{font-weight:650}
 .roviq-grid-glow h1{letter-spacing:-.01em}
 .roviq-grid-glow h2{letter-spacing:-.005em}
 .roviq-grid-glow .text-xs.text-slate-400{font-size:11px!important}
 .roviq-grid-glow .text-slate-500{color:#64748b}
 .roviq-grid-glow section:focus-within{border-color:#94a3b8!important}
-.roviq-grid-glow button:focus-visible,.roviq-grid-glow select:focus-visible,.roviq-grid-glow input:focus-visible,.roviq-grid-glow textarea:focus-visible{outline:3px solid rgba(15,118,110,.28)!important;outline-offset:2px!important}
+.roviq-grid-glow button:focus-visible,.roviq-grid-glow a:focus-visible,.roviq-grid-glow select:focus-visible,.roviq-grid-glow input:focus-visible,.roviq-grid-glow textarea:focus-visible{outline:3px solid rgba(15,118,110,.42)!important;outline-offset:2px!important}
+.roviq-grid-glow [aria-busy="true"]{cursor:progress}
 /* Human-operational content should dominate technical audit content. */
 .roviq-grid-glow ul{margin-top:8px!important}
 .roviq-grid-glow ul li{line-height:1.45}
@@ -34,5 +35,9 @@
   .roviq-grid-glow section button+button{margin-left:0!important}
 }
 @media(prefers-reduced-motion:reduce){
-  *{scroll-behavior:auto!important;transition:none!important}
+  *{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+}
+@media(forced-colors:active){
+  .roviq-grid-glow section,.roviq-grid-glow .rounded-lg{border:1px solid CanvasText!important}
+  .roviq-grid-glow button:focus-visible,.roviq-grid-glow a:focus-visible,.roviq-grid-glow select:focus-visible,.roviq-grid-glow input:focus-visible,.roviq-grid-glow textarea:focus-visible{outline:2px solid Highlight!important}
 }
