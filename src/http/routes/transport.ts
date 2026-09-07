@@ -9,6 +9,7 @@ import { assertAdminCaseScope, getAdminActorScope } from '../../services/admin-c
 const location = z.record(z.unknown()).optional();
 const status = z.enum(['accepted','en_route','arrived','vehicle_loaded','in_transit','delivered','declined','cancelled','failed']);
 const MAX_LOCATION_FUTURE_SKEW_MS=2*60*1000;
+const LIVE_LOCATION_STATUSES=new Set(['assigned','accepted','en_route','arrived','vehicle_loaded','in_transit']);
 
 const effectiveDispatchSelect = `
   select td.*,
@@ -152,18 +153,35 @@ export async function transportRoutes(app: FastifyInstance) {
     if (!d) return reply.code(404).send({ error:'dispatch_not_found' });
     if(req.principal.role==='admin') await assertAdminCaseScope(req.principal,d.case_id,pool);
     else if(!req.principal.actorId||!d.provider_actor_id||d.provider_actor_id !== req.principal.actorId) return reply.code(403).send({ error:'dispatch_forbidden' });
+    if(!LIVE_LOCATION_STATUSES.has(d.status)) return reply.code(409).send({error:'dispatch_location_inactive'});
+    const currentDispatch=await pool.query(
+      `select id from transport_dispatches where case_id=$1
+       order by dispatch_sequence desc nulls last,created_at desc,id desc limit 1`,
+      [d.case_id]
+    );
+    if(!currentDispatch.rowCount||currentDispatch.rows[0].id!==id) return reply.code(409).send({error:'dispatch_superseded'});
     const receivedAtMs=Date.now();
     const rawCapturedAtMs=body.capturedAt?new Date(body.capturedAt).getTime():receivedAtMs;
     if(rawCapturedAtMs>receivedAtMs+MAX_LOCATION_FUTURE_SKEW_MS){
       return reply.code(400).send({error:'location_captured_at_future',maxFutureSkewSeconds:MAX_LOCATION_FUTURE_SKEW_MS/1000});
     }
     const capturedAt = new Date(rawCapturedAtMs).toISOString();
-    const point = { lat:body.lat,lng:body.lng,accuracy:body.accuracy ?? null,heading:body.heading ?? null,speed:body.speed ?? null,capturedAt,capturedAtEpochMs:rawCapturedAtMs,receivedAt:new Date(receivedAtMs).toISOString(),dispatchId:id };
+    const point = { lat:body.lat,lng:body.lng,accuracy:body.accuracy ?? null,heading:body.heading ?? null,speed:body.speed ?? null,capturedAt,capturedAtEpochMs:rawCapturedAtMs,receivedAt:new Date(receivedAtMs).toISOString(),dispatchId:id,dispatchSequence:d.dispatch_sequence ?? null };
     const written = await pool.query(
       `insert into case_spatial_context(case_id,transport_location,source,updated_at)
-       values($1,$2::jsonb,'tow_live_gps',now())
+       select $1,$2::jsonb,'tow_live_gps',now()
+       where $3::uuid=(
+         select current_td.id from transport_dispatches current_td
+         where current_td.case_id=$1
+         order by current_td.dispatch_sequence desc nulls last,current_td.created_at desc,current_td.id desc limit 1
+       )
        on conflict(case_id) do update set transport_location=excluded.transport_location,source='tow_live_gps',updated_at=now()
-       where case
+       where (excluded.transport_location->>'dispatchId')=(
+         select current_td.id::text from transport_dispatches current_td
+         where current_td.case_id=case_spatial_context.case_id
+         order by current_td.dispatch_sequence desc nulls last,current_td.created_at desc,current_td.id desc limit 1
+       )
+       and case
          when jsonb_typeof(case_spatial_context.transport_location->'capturedAtEpochMs')='number'
            then (case_spatial_context.transport_location->>'capturedAtEpochMs')::numeric < (excluded.transport_location->>'capturedAtEpochMs')::numeric
          when case_spatial_context.transport_location->>'capturedAt' is null
@@ -173,7 +191,7 @@ export async function transportRoutes(app: FastifyInstance) {
          else (case_spatial_context.transport_location->>'capturedAt') < (excluded.transport_location->>'capturedAt')
        end
        returning transport_location`,
-      [d.case_id,JSON.stringify(point)]
+      [d.case_id,JSON.stringify(point),id]
     );
     if(written.rowCount) return { ok:true,accepted:true,transportLocation:written.rows[0].transport_location };
     const current=await pool.query(`select transport_location from case_spatial_context where case_id=$1`,[d.case_id]);
