@@ -8,6 +8,7 @@ import { assertAdminCaseScope, getAdminActorScope } from '../../services/admin-c
 
 const location = z.record(z.unknown()).optional();
 const status = z.enum(['accepted','en_route','arrived','vehicle_loaded','in_transit','delivered','declined','cancelled','failed']);
+const MAX_LOCATION_FUTURE_SKEW_MS=2*60*1000;
 
 const effectiveDispatchSelect = `
   select td.*,
@@ -151,8 +152,13 @@ export async function transportRoutes(app: FastifyInstance) {
     if (!d) return reply.code(404).send({ error:'dispatch_not_found' });
     if(req.principal.role==='admin') await assertAdminCaseScope(req.principal,d.case_id,pool);
     else if(!req.principal.actorId||!d.provider_actor_id||d.provider_actor_id !== req.principal.actorId) return reply.code(403).send({ error:'dispatch_forbidden' });
-    const capturedAt = new Date(body.capturedAt ?? Date.now()).toISOString();
-    const point = { lat:body.lat,lng:body.lng,accuracy:body.accuracy ?? null,heading:body.heading ?? null,speed:body.speed ?? null,capturedAt,capturedAtEpochMs:new Date(capturedAt).getTime(),dispatchId:id };
+    const receivedAtMs=Date.now();
+    const rawCapturedAtMs=body.capturedAt?new Date(body.capturedAt).getTime():receivedAtMs;
+    if(rawCapturedAtMs>receivedAtMs+MAX_LOCATION_FUTURE_SKEW_MS){
+      return reply.code(400).send({error:'location_captured_at_future',maxFutureSkewSeconds:MAX_LOCATION_FUTURE_SKEW_MS/1000});
+    }
+    const capturedAt = new Date(rawCapturedAtMs).toISOString();
+    const point = { lat:body.lat,lng:body.lng,accuracy:body.accuracy ?? null,heading:body.heading ?? null,speed:body.speed ?? null,capturedAt,capturedAtEpochMs:rawCapturedAtMs,receivedAt:new Date(receivedAtMs).toISOString(),dispatchId:id };
     const written = await pool.query(
       `insert into case_spatial_context(case_id,transport_location,source,updated_at)
        values($1,$2::jsonb,'tow_live_gps',now())
