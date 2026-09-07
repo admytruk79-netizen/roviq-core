@@ -114,8 +114,11 @@ export async function updateShopWaitlistEntry(principal:Principal,entryId:string
         if(!active.rows[0]?.active) throw httpError('waitlist_offer_expired',409);
       }
       const appointment=await client.query(`
-        select id,organization_id,location_id,service_case_id,service_category,starts_at,ends_at,appointment_status
-        from roviq_appointments where id=$1`,[input.appointmentId]);
+        select a.id,a.organization_id,a.location_id,a.service_case_id,a.service_category,a.starts_at,a.ends_at,a.appointment_status,
+               a.resource_id,r.resource_type
+        from roviq_appointments a
+        left join service_resources r on r.id=a.resource_id
+        where a.id=$1`,[input.appointmentId]);
       if(!appointment.rowCount) throw httpError('appointment_not_found',404);
       const a=appointment.rows[0];
       if(!['held','confirmed'].includes(a.appointment_status)) throw httpError('waitlist_appointment_inactive',409);
@@ -123,6 +126,10 @@ export async function updateShopWaitlistEntry(principal:Principal,entryId:string
       if(row.location_id&&a.location_id!==row.location_id) throw httpError('forbidden',403);
       if((a.service_case_id??null)!==(row.service_case_id??null)) throw httpError('waitlist_case_mismatch',409);
       if(row.requested_service_category&&a.service_category!==row.requested_service_category) throw httpError('waitlist_service_category_mismatch',409);
+      const preferredResourceTypes=Array.isArray(row.preferred_resource_types)?row.preferred_resource_types.map(String):[];
+      if(preferredResourceTypes.length>0&&(!a.resource_type||!preferredResourceTypes.includes(String(a.resource_type)))) {
+        throw httpError('waitlist_resource_type_mismatch',409);
+      }
       if(row.requested_after&&new Date(a.starts_at).getTime()<new Date(row.requested_after).getTime()) throw httpError('waitlist_time_window_mismatch',409);
       if(row.requested_before&&new Date(a.ends_at).getTime()>new Date(row.requested_before).getTime()) throw httpError('waitlist_time_window_mismatch',409);
       if(row.estimated_duration_minutes){
