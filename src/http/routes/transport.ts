@@ -151,14 +151,27 @@ export async function transportRoutes(app: FastifyInstance) {
     if (!d) return reply.code(404).send({ error:'dispatch_not_found' });
     if(req.principal.role==='admin') await assertAdminCaseScope(req.principal,d.case_id,pool);
     else if(!req.principal.actorId||!d.provider_actor_id||d.provider_actor_id !== req.principal.actorId) return reply.code(403).send({ error:'dispatch_forbidden' });
-    const point = { lat:body.lat,lng:body.lng,accuracy:body.accuracy ?? null,heading:body.heading ?? null,speed:body.speed ?? null,capturedAt:body.capturedAt ?? new Date().toISOString(),dispatchId:id };
-    await pool.query(
+    const capturedAt = new Date(body.capturedAt ?? Date.now()).toISOString();
+    const point = { lat:body.lat,lng:body.lng,accuracy:body.accuracy ?? null,heading:body.heading ?? null,speed:body.speed ?? null,capturedAt,capturedAtEpochMs:new Date(capturedAt).getTime(),dispatchId:id };
+    const written = await pool.query(
       `insert into case_spatial_context(case_id,transport_location,source,updated_at)
        values($1,$2::jsonb,'tow_live_gps',now())
-       on conflict(case_id) do update set transport_location=excluded.transport_location,source='tow_live_gps',updated_at=now()`,
+       on conflict(case_id) do update set transport_location=excluded.transport_location,source='tow_live_gps',updated_at=now()
+       where case
+         when jsonb_typeof(case_spatial_context.transport_location->'capturedAtEpochMs')='number'
+           then (case_spatial_context.transport_location->>'capturedAtEpochMs')::numeric < (excluded.transport_location->>'capturedAtEpochMs')::numeric
+         when case_spatial_context.transport_location->>'capturedAt' is null
+           then true
+         when case_spatial_context.transport_location->>'capturedAt' !~ '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$'
+           then true
+         else (case_spatial_context.transport_location->>'capturedAt') < (excluded.transport_location->>'capturedAt')
+       end
+       returning transport_location`,
       [d.case_id,JSON.stringify(point)]
     );
-    return { ok:true, transportLocation:point };
+    if(written.rowCount) return { ok:true,accepted:true,transportLocation:written.rows[0].transport_location };
+    const current=await pool.query(`select transport_location from case_spatial_context where case_id=$1`,[d.case_id]);
+    return { ok:true,accepted:false,transportLocation:current.rows[0]?.transport_location ?? point };
   });
 
   app.post('/api/transport/:id/status', { preHandler: requireRoleOrCapability('tow','tow','partner','admin') }, async (req, reply) => {
