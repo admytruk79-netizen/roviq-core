@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { pool } from '../src/db/pool.js';
-import { createShopOsAppointment } from '../src/services/shop-os.js';
+import { createShopOsAppointment, updateShopOsAppointment } from '../src/services/shop-os.js';
 import { listShopOsBoard } from '../src/services/shop-os-board.js';
 
 async function setupShop(){
@@ -47,6 +47,35 @@ describe('Shop OS operational board',()=>{
     expect(board.summary.appointmentStatusCounts.confirmed).toBe(1);
     expect(board.summary.nominalCapacityUnits).toBe(2);
     expect(board.summary.availableCapacityUnits).toBe(1);
+  });
+
+  it('runs the primary service-day actions from held through completed and restores capacity',async()=>{
+    const shop=await setupShop();
+    const partner={role:'partner',actorId:shop.actorId} as const;
+    const start=new Date(Date.now()+30*60_000).toISOString();
+    const end=new Date(Date.now()+90*60_000).toISOString();
+    const appointment=await createShopOsAppointment(partner,{resourceId:shop.resourceId,startsAt:start,endsAt:end,serviceCategory:'repair',status:'held'});
+    const range={from:new Date(Date.now()-60*60_000).toISOString(),to:new Date(Date.now()+4*60*60_000).toISOString()};
+
+    let board=await listShopOsBoard(partner,range);
+    expect(board.summary.appointmentStatusCounts.held).toBe(1);
+    expect(board.summary.activeAppointments).toBe(1);
+    expect(board.summary.availableCapacityUnits).toBe(1);
+
+    expect((await updateShopOsAppointment(partner,appointment.id,{action:'confirm'})).appointment_status).toBe('confirmed');
+    board=await listShopOsBoard(partner,range);
+    expect(board.summary.appointmentStatusCounts.confirmed).toBe(1);
+
+    expect((await updateShopOsAppointment(partner,appointment.id,{action:'start'})).appointment_status).toBe('in_progress');
+    board=await listShopOsBoard(partner,range);
+    expect(board.summary.appointmentStatusCounts.in_progress).toBe(1);
+    expect(board.summary.activeAppointments).toBe(1);
+
+    expect((await updateShopOsAppointment(partner,appointment.id,{action:'complete'})).appointment_status).toBe('completed');
+    board=await listShopOsBoard(partner,range);
+    expect(board.summary.appointmentStatusCounts.completed).toBe(1);
+    expect(board.summary.activeAppointments).toBe(0);
+    expect(board.summary.availableCapacityUnits).toBe(2);
   });
 
   it('rejects cross-tenant board access for partner actors',async()=>{
