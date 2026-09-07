@@ -56,10 +56,14 @@ export async function selectCaseActor(principal: Principal, caseId: string, acto
     if (!row.demand_id) throw new Error('case_demand_missing');
 
     const eligible = await client.query(
-      `select 1 from routing_decisions
-       where demand_id=$1
-         and eligible_actor_ids @> to_jsonb(array[$2::uuid]::uuid[])
-       order by evaluated_at desc limit 1`,
+      `select 1
+         from routing_decisions
+        where id=(
+          select id from routing_decisions
+           where demand_id=$1
+           order by evaluated_at desc,id desc limit 1
+        )
+          and eligible_actor_ids @> to_jsonb(array[$2::uuid]::uuid[])`,
       [row.demand_id,actorId]
     );
     if (!eligible.rowCount && mode !== 'ops_override') throw new Error('actor_not_eligible');
