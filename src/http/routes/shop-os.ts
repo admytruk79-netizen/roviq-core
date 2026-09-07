@@ -18,6 +18,7 @@ const repairOrderStatusSchema=z.enum([
   'quality_control','completed','closed','cancelled'
 ]);
 const deferredStatusSchema=z.enum(['open','reminded','booked','completed','dismissed']);
+const shopResourceTypeSchema=z.enum(['bay','technician','advisor','equipment','mobile_unit','tow_unit','valet_driver','loaner_vehicle']);
 
 export async function shopOsRoutes(app:FastifyInstance){
   const allowed={preHandler:requireRole('admin','partner')};
@@ -85,7 +86,7 @@ export async function shopOsRoutes(app:FastifyInstance){
       requestedAfter:z.string().datetime({offset:true}).nullable().optional(),
       requestedBefore:z.string().datetime({offset:true}).nullable().optional(),
       estimatedDurationMinutes:z.number().int().positive().nullable().optional(),
-      preferredResourceTypes:z.array(z.string().min(1)).max(20).optional(),
+      preferredResourceTypes:z.array(shopResourceTypeSchema).max(20).optional(),
       priority:z.number().int().min(0).max(10000).optional(),
       notes:z.string().max(5000).nullable().optional()
     }).superRefine((value,ctx)=>{
@@ -125,7 +126,7 @@ export async function shopOsRoutes(app:FastifyInstance){
   app.post('/api/shop-os/resources',allowed,async(req,reply)=>{
     const body=z.object({
       organizationId:z.string().uuid().optional(),locationId:z.string().uuid().optional(),
-      resourceType:z.enum(['bay','technician','advisor','equipment','mobile_unit','tow_unit','valet_driver','loaner_vehicle']),
+      resourceType:shopResourceTypeSchema,
       displayName:z.string().min(1).max(200),capabilityTags:z.array(z.string().min(1)).max(100).optional(),
       constraints:z.record(z.string(),z.unknown()).optional(),assignedActorId:z.string().uuid().nullable().optional(),
       operationalState:z.enum(['available','busy','blocked','offline']).optional(),
@@ -137,7 +138,7 @@ export async function shopOsRoutes(app:FastifyInstance){
   app.get('/api/shop-os/resources',allowed,async(req)=>{
     const query=z.object({
       organizationId:z.string().uuid().optional(),locationId:z.string().uuid().optional(),
-      resourceType:z.enum(['bay','technician','advisor','equipment','mobile_unit','tow_unit','valet_driver','loaner_vehicle']).optional(),
+      resourceType:shopResourceTypeSchema.optional(),
       includeInactive:z.enum(['true','false']).optional()
     }).parse(req.query);
     return await listShopResources(req.principal,{...query,includeInactive:query.includeInactive==='true'});
