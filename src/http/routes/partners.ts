@@ -141,6 +141,78 @@ export async function partnerRoutes(app: FastifyInstance) {
       }finally{client.release();}
     }
 
+    // Provider acceptance is guarded by the canonical selection under one case lock.
+    // A stale/competing offer can never become accepted or replace case ownership.
+    if(req.principal.role==='partner'){
+      const client=await pool.connect();
+      try{
+        await client.query('begin');
+        const offerResult=await client.query(
+          `select * from matches_offers where id=$1 and actor_id=$2 and outcome='offered' for update`,
+          [id,req.principal.actorId]
+        );
+        if(!offerResult.rowCount){
+          await client.query('rollback');
+          return reply.code(404).send({error:'offer_not_found_or_not_owned'});
+        }
+        const offer=offerResult.rows[0];
+        if(!offer.case_id){
+          await client.query('rollback');
+          return reply.code(409).send({error:'offer_case_missing'});
+        }
+        const caseResult=await client.query('select * from service_cases where id=$1 for update',[offer.case_id]);
+        if(!caseResult.rowCount){
+          await client.query('rollback');
+          return reply.code(409).send({error:'offer_case_missing'});
+        }
+        const current=caseResult.rows[0];
+        if(current.state!=='provider_pending'||current.selected_actor_id!==req.principal.actorId){
+          await client.query('rollback');
+          return reply.code(409).send({error:'offer_not_current_selection'});
+        }
+
+        const transition=await client.query(
+          `select allowed_roles from case_transition_rules where from_state='provider_pending' and to_state='repair_in_progress'`,
+        );
+        if(!transition.rowCount||!transition.rows[0].allowed_roles.includes(req.principal.role)){
+          await client.query('rollback');
+          return reply.code(409).send({error:'offer_accept_transition_not_allowed'});
+        }
+
+        const accepted=(await client.query(
+          `update matches_offers set outcome='accepted',responded_at=now()
+           where id=$1 and actor_id=$2 and outcome='offered' returning *`,
+          [id,req.principal.actorId]
+        )).rows[0];
+
+        await client.query(`
+          update matches_offers set outcome='declined',responded_at=coalesce(responded_at,now())
+          where case_id=$1 and id<>$2 and outcome='offered'`,[offer.case_id,id]);
+
+        const updated=await client.query(`
+          update service_cases
+             set state='repair_in_progress',version=version+1,updated_at=now()
+           where id=$1 and state='provider_pending' and selected_actor_id=$2
+           returning *`,[offer.case_id,req.principal.actorId]);
+        if(!updated.rowCount) throw new Error('offer_not_current_selection');
+
+        await client.query(`insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload)
+          values('service_case',$1,'PROVIDER_ACCEPTED',$2,$3),
+                ('service_case',$1,'CASE_REPAIR_IN_PROGRESS',$2,$4)`,[
+          offer.case_id,req.principal.actorId,
+          JSON.stringify({offerId:id,actorId:req.principal.actorId,from:'provider_pending'}),
+          JSON.stringify({from:'provider_pending',to:'repair_in_progress',offerId:id,providerActorId:req.principal.actorId})
+        ]);
+        await client.query('commit');
+        await audit(req.principal,'respond_offer','match_offer',id,'actor_scoped_offer',{outcome:'accepted',caseId:offer.case_id});
+        return {offer:accepted,case:updated.rows[0]};
+      }catch(error){
+        await client.query('rollback');
+        throw error;
+      }finally{client.release();}
+    }
+
+    // Non-provider actor offers retain their role-specific transition flow.
     const r = await pool.query(
       `update matches_offers set outcome=$1, responded_at=now()
        where id=$2 and actor_id=$3 and outcome='offered' returning *`,
