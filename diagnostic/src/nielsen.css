@@ -13,10 +13,12 @@
 .mode-switch button.active{background:rgba(228,111,53,.2);color:#fff}
 .live-badge{white-space:nowrap}
 .spatial-grid>div{min-height:76px!important;padding:12px 14px!important}
-.success-message{margin-top:12px!important;padding:11px 13px!important;border-color:rgba(88,223,207,.35)!important;color:#c8fff6!important}
-.offer-focus{margin-top:12px;padding:20px}
+.success-message{margin-top:12px!important;padding:11px 13px!important;border-color:rgba(88,223,207,.42)!important;background:rgba(88,223,207,.07)!important;color:#c8fff6!important}
+.error{margin-top:12px!important;border-color:rgba(248,113,113,.46)!important;background:rgba(127,29,29,.18)!important;color:#fecaca!important}
+.offer-focus{margin-top:12px;padding:20px;border-color:rgba(228,111,53,.34)!important}
 .offer-focus .eyebrow{margin-top:0}
 .offer-focus h2{margin:6px 0 4px}
+.offer-focus .actions{margin-top:16px!important}
 .queue-section{margin-top:18px}
 .section-head{display:flex;align-items:end;justify-content:space-between;gap:14px}
 .section-head .eyebrow{margin-top:0}
@@ -24,10 +26,13 @@
 .grid{margin-top:12px!important;gap:10px!important}
 .queue-card{padding:15px!important;text-align:left!important;min-height:128px;transition:transform .14s ease,border-color .14s ease,box-shadow .14s ease}
 .queue-card:hover,.queue-card:focus-visible{transform:translateY(-1px);border-color:rgba(228,111,53,.45)!important;box-shadow:0 12px 32px rgba(0,0,0,.2)}
+.queue-card.active{border-color:rgba(88,223,207,.58)!important;box-shadow:0 0 0 1px rgba(88,223,207,.22),0 12px 32px rgba(0,0,0,.22)!important}
+.queue-card.active strong{color:#9ff7eb!important}
 .queue-card h3{font-size:18px!important;margin:7px 0 5px!important;text-transform:none!important}
 .queue-card p{margin:4px 0 9px!important}
 .form{margin-top:12px!important}
 .finding-form{border-color:rgba(228,111,53,.28)!important}
+.finding-form .form-head{padding-bottom:12px;border-bottom:1px solid rgba(255,255,255,.08)}
 .finding-form .form-head .eyebrow{margin-top:0}
 .finding-form textarea{min-height:128px}
 .form input,.form select,.form textarea{font-size:16px!important;min-height:44px}
@@ -36,9 +41,11 @@
 .check-row{display:flex!important;align-items:center!important;gap:9px!important;margin-top:8px!important;min-height:44px}
 .check-row input{width:auto!important;flex:none;min-width:24px;min-height:24px}
 .authorization{margin-top:14px!important}
-.decision-panel{text-transform:none}
+.decision-panel{text-transform:none;border-color:rgba(88,223,207,.42)!important}
+.decision-panel .pill{font-weight:800}
 .primary,.secondary,.queue-card{min-height:44px}
 .primary:focus-visible,.secondary:focus-visible,.queue-card:focus-visible,.mode-switch button:focus-visible,.form input:focus-visible,.form select:focus-visible,.form textarea:focus-visible{outline:3px solid rgba(88,223,207,.5)!important;outline-offset:2px!important}
+button:disabled,[aria-disabled="true"]{cursor:not-allowed!important;opacity:.62}
 .empty-state{max-width:620px;margin:12px auto 0!important;text-align:center}
 [aria-busy="true"]{cursor:progress}
 @media(max-width:640px){
