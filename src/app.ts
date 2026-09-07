@@ -32,6 +32,11 @@ import { shopOsRoutes } from './http/routes/shop-os.js';
 import { shopOsFloorRoutes } from './http/routes/shop-os-floor.js';
 import { assertAdminCaseScope } from './services/admin-case-scope.js';
 
+const deferredBookingConstraintErrors = new Set([
+  'deferred_service_case_required_for_booking',
+  'deferred_service_appointment_case_mismatch'
+]);
+
 export async function buildApp() {
   const app = Fastify({ logger: false, disableRequestLogging: true });
 
@@ -39,6 +44,9 @@ export async function buildApp() {
     if (err instanceof ZodError) return reply.code(400).send({ error:'validation_error', details:err.issues });
     if (err instanceof Error && err.message === 'idempotency_key_reused') return reply.code(409).send({error:err.message});
     if (err instanceof Error && err.message === 'idempotency_key_too_long') return reply.code(400).send({error:err.message});
+    if (err instanceof Error && deferredBookingConstraintErrors.has(err.message)) {
+      return reply.code(409).send({ error:err.message });
+    }
     const statusCode = (err as { statusCode?: number }).statusCode;
     if (typeof statusCode === 'number' && statusCode >= 400 && statusCode < 500) {
       return reply.code(statusCode).send({ error: err instanceof Error ? err.message : 'request_error' });
