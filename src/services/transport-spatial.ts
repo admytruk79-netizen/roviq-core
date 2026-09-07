@@ -9,9 +9,9 @@ function objectLocation(value: unknown): Record<string, unknown> | undefined {
 /**
  * Resolve transport locations from the canonical Service Case spatial projection.
  * Explicit dispatch locations win. If they are absent, use the vehicle/origin and
- * destination already attached to the case. As a final pickup fallback, use the
- * originating demand location so a valid customer intake point cannot disappear
- * between intake and Tow / Valet assignment.
+ * destination already attached to the case. Return provenance as well so later
+ * canonical destination corrections can update only dispatches that inherited
+ * their destination from the Service Case, never a deliberate per-dispatch override.
  */
 export async function resolveTransportLocations(
   caseId: string,
@@ -30,16 +30,29 @@ export async function resolveTransportLocations(
   if (!row.rowCount) throw new Error('case_not_found');
 
   const current = row.rows[0];
-  const pickupLocation = objectLocation(input.pickupLocation)
-    ?? objectLocation(current.current_vehicle)
-    ?? objectLocation(current.origin)
-    ?? objectLocation(current.demand_location);
-  const dropoffLocation = objectLocation(input.dropoffLocation)
-    ?? objectLocation(current.destination);
+  const explicitPickup = objectLocation(input.pickupLocation);
+  const currentVehicle = objectLocation(current.current_vehicle);
+  const origin = objectLocation(current.origin);
+  const demandLocation = objectLocation(current.demand_location);
+  const explicitDropoff = objectLocation(input.dropoffLocation);
+  const canonicalDestination = objectLocation(current.destination);
+
+  const pickupLocation = explicitPickup ?? currentVehicle ?? origin ?? demandLocation;
+  const dropoffLocation = explicitDropoff ?? canonicalDestination;
+  const pickupSource = explicitPickup ? 'explicit_dispatch'
+    : currentVehicle ? 'case_current_vehicle'
+    : origin ? 'case_origin'
+    : demandLocation ? 'demand_intake'
+    : 'missing';
+  const dropoffSource = explicitDropoff ? 'explicit_dispatch'
+    : canonicalDestination ? 'case_spatial'
+    : 'missing';
 
   return {
     pickupLocation,
     dropoffLocation,
+    pickupSource,
+    dropoffSource,
     locationStatus: pickupLocation ? (dropoffLocation ? 'ready' : 'pickup_ready') : 'location_pending'
   } as const;
 }
