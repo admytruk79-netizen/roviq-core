@@ -48,7 +48,12 @@ export async function transportRoutes(app: FastifyInstance) {
           ...body,
           pickupLocation:resolved.pickupLocation,
           dropoffLocation:resolved.dropoffLocation,
-          metadata:{...(body.metadata ?? {}),locationStatus:resolved.locationStatus}
+          metadata:{
+            ...(body.metadata ?? {}),
+            locationStatus:resolved.locationStatus,
+            pickupSource:resolved.pickupSource,
+            dropoffSource:resolved.dropoffSource
+          }
         })
       });
     }
