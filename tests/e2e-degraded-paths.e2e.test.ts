@@ -85,7 +85,8 @@ describe('degraded cross-role case paths', () => {
       payload: { status: 'declined', metadata: { reason: 'capacity_changed' } }
     });
     expect(decline.statusCode).toBe(200);
-    expect(JSON.parse(decline.body).dispatch.status).toBe('declined');
+    // Released back to 'requested' per the field-service architecture doc, not left at 'declined'.
+    expect(JSON.parse(decline.body).dispatch.status).toBe('requested');
 
     const afterDecline = await app.inject({ method: 'GET', url: `/api/maintenance/cases/${caseId}`, headers: adminHeaders() });
     const declinedCase = JSON.parse(afterDecline.body).case;

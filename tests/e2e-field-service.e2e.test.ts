@@ -411,4 +411,42 @@ describe('field service on-site assessment', () => {
     });
     expect(secondStartRetryRes.statusCode).toBe(200);
   });
+
+  it('routes "limited" drivability to temporary_stabilization, not a full field_repair, and carries it through start/complete', async () => {
+    const caseId = await createCaseWithTowRelation();
+    await app.inject({
+      method: 'PUT', url: `/api/admin/field-service/actors/${towActorId}/capabilities`, headers: adminHeaders(),
+      payload: { active: true, repairClasses: ['minor_mechanical'] }
+    });
+
+    // Not non-drivable (that would take safety priority to tow_required above it in decide()), but
+    // not safely driveable either -- the architecture doc's "safely repaired or stabilized where it
+    // is located" case. An eligible operator with no required parts should land on
+    // temporary_stabilization, not field_repair.
+    const assessRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/assess`, headers: actorHeaders('tow', towActorId),
+      payload: {
+        operatorActorId: towActorId, summary: 'Suspension damage limits safe speed; can be stabilized on site',
+        repairClass: 'minor_mechanical', drivability: 'limited', confidence: 0.9, safety: {},
+        customerAuthorizationRequired: false
+      }
+    });
+    expect(assessRes.statusCode).toBe(201);
+    const decision = JSON.parse(assessRes.body).decision;
+    expect(decision.action).toBe('temporary_stabilization');
+    expect(decision.status).toBe('proposed');
+
+    const startRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/${decision.id}/start`, headers: actorHeaders('tow', towActorId)
+    });
+    expect(startRes.statusCode).toBe(200);
+
+    const completeRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/${decision.id}/complete`, headers: actorHeaders('tow', towActorId),
+      payload: { outcome: 'stabilized' }
+    });
+    expect(completeRes.statusCode).toBe(200);
+    expect(JSON.parse(completeRes.body).decision.status).toBe('completed');
+    expect(JSON.parse(completeRes.body).decision.outcome).toBe('stabilized');
+  });
 });

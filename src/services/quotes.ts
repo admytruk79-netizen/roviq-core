@@ -15,6 +15,11 @@ export type QuoteLineInput = {
   unitAmountMinor:number;
   merchantActorId?:string;
   revenueRecognition?:RevenueRecognition;
+  // What the merchant is actually owed on a 'net' line (e.g. the parts vendor's cost, the
+  // technician's payout) -- ROVIQ's own contribution margin on that line is lineAmountMinor minus
+  // this. Optional, since real cost data isn't always known at quote time; only meaningful for
+  // 'net' lines ('gross' keeps the full amount by definition, 'pass_through' keeps none).
+  merchantCostMinor?:number;
   metadata?:Record<string,unknown>;
 };
 
@@ -79,7 +84,7 @@ export async function createServiceQuote(principal:Principal, caseId:string, inp
 
     let subtotalMinor = 0;
     let taxMinor = 0;
-    const lineRows:{lineType:QuoteLineType;description:string;quantity:number;unitAmountMinor:number;lineAmountMinor:number;productId:string|null;merchantActorId:string|null;revenueRecognition:RevenueRecognition;metadata:Record<string,unknown>}[] = [];
+    const lineRows:{lineType:QuoteLineType;description:string;quantity:number;unitAmountMinor:number;lineAmountMinor:number;productId:string|null;merchantActorId:string|null;revenueRecognition:RevenueRecognition;merchantCostMinor:number|null;metadata:Record<string,unknown>}[] = [];
     for (const line of input.lines) {
       if (!(line.unitAmountMinor >= 0)) throw new Error('invalid_line_amount');
       const quantity = line.quantity ?? 1;
@@ -89,12 +94,16 @@ export async function createServiceQuote(principal:Principal, caseId:string, inp
       if (!merchantExempt && revenueRecognition !== 'gross' && !line.merchantActorId) {
         throw new Error('merchant_required_for_recognized_revenue');
       }
+      if (line.merchantCostMinor != null) {
+        if (revenueRecognition !== 'net') throw new Error('merchant_cost_only_valid_for_net_recognition');
+        if (!(line.merchantCostMinor >= 0)) throw new Error('invalid_merchant_cost');
+      }
       const lineAmountMinor = Math.round(quantity * line.unitAmountMinor);
       if (line.lineType === 'tax') taxMinor += lineAmountMinor; else subtotalMinor += lineAmountMinor;
       lineRows.push({
         lineType:line.lineType, description:line.description, quantity, unitAmountMinor:line.unitAmountMinor, lineAmountMinor,
         productId:line.productId ?? null, merchantActorId:merchantExempt ? null : (line.merchantActorId ?? null),
-        revenueRecognition, metadata:line.metadata ?? {}
+        revenueRecognition, merchantCostMinor:line.merchantCostMinor ?? null, metadata:line.metadata ?? {}
       });
     }
     const totalMinor = subtotalMinor + taxMinor;
@@ -106,9 +115,9 @@ export async function createServiceQuote(principal:Principal, caseId:string, inp
     );
     for (const line of lineRows) {
       await client.query(
-        `insert into service_quote_lines(quote_id,product_id,line_type,description,quantity,unit_amount_minor,line_amount_minor,merchant_actor_id,revenue_recognition,metadata)
-         values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-        [quote.rows[0].id,line.productId,line.lineType,line.description,line.quantity,line.unitAmountMinor,line.lineAmountMinor,line.merchantActorId,line.revenueRecognition,JSON.stringify(line.metadata)]
+        `insert into service_quote_lines(quote_id,product_id,line_type,description,quantity,unit_amount_minor,line_amount_minor,merchant_actor_id,revenue_recognition,merchant_cost_minor,metadata)
+         values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [quote.rows[0].id,line.productId,line.lineType,line.description,line.quantity,line.unitAmountMinor,line.lineAmountMinor,line.merchantActorId,line.revenueRecognition,line.merchantCostMinor,JSON.stringify(line.metadata)]
       );
     }
     await client.query(

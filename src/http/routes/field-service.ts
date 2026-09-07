@@ -65,6 +65,13 @@ function decide(a:Assessment,p:CapabilityProfile|null,partsFulfillable:boolean):
   if(a.repairClass==='unknown')return'remote_review' as const;
   if(!operatorEligible(a,p))return'dispatch_field_technician' as const;
   if(a.requiredParts.length>0&&!partsFulfillable)return'dispatch_field_technician' as const;
+  // 'limited' drivability is the vehicle the architecture doc's "or stabilized where it is
+  // located" case describes: not fully non-drivable (that already routed to tow above), but not
+  // safely driveable either -- the on-site job is making it safe enough to reach the next
+  // approved route, not a permanent fix. Every downstream step (authorization gating, the
+  // start-eligibility check, and the 'stabilized' completion outcome) already handles this action;
+  // only decide() itself never produced it.
+  if(a.drivability==='limited')return'temporary_stabilization' as const;
   return'field_repair' as const;
 }
 async function findFulfillingSupplier(items:{sku:string;quantity:number}[]):Promise<string|null>{
@@ -155,7 +162,7 @@ export async function fieldServiceRoutes(app:FastifyInstance){
       }
     }
     await appendCaseEvent(id,'FIELD_SERVICE_DECISION_PROPOSED',req.principal,{decisionId:r.rows[0].id,action,status,operatorActorId,partsOrderId:(partsOrder as any)?.order?.id??null});
-    await setCustomerSnapshot(id,'field_service_assessment',action==='tow_required'?'On-site assessment requires vehicle transport.':action==='field_repair'?'An on-site repair is available.':b.requiredParts.length>0&&!partsFulfillable?'Required parts are being sourced for the on-site repair.':'The on-site assessment is being reviewed.',authorizationRequired?'Approval required':b.requiredParts.length>0&&!partsFulfillable?'Waiting for parts availability':'ROVIQ is coordinating the next action');
+    await setCustomerSnapshot(id,'field_service_assessment',action==='tow_required'?'On-site assessment requires vehicle transport.':action==='field_repair'?'An on-site repair is available.':action==='temporary_stabilization'?'An on-site stabilization is available.':b.requiredParts.length>0&&!partsFulfillable?'Required parts are being sourced for the on-site repair.':'The on-site assessment is being reviewed.',authorizationRequired?'Approval required':b.requiredParts.length>0&&!partsFulfillable?'Waiting for parts availability':'ROVIQ is coordinating the next action');
     await audit(req.principal,'create_field_service_decision','service_case',id,action,{decisionId:r.rows[0].id,status,operatorActorId,partsOrderId:(partsOrder as any)?.order?.id??null});
     return reply.code(201).send({decision:r.rows[0],partsOrder});
   });

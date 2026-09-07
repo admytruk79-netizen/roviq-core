@@ -188,7 +188,8 @@ describe('transport dispatch end-to-end lifecycle', () => {
         payload: { status: 'declined' }
       });
       expect(declineRes.statusCode).toBe(200);
-      expect(JSON.parse(declineRes.body).dispatch.status).toBe('declined');
+      // Released back to 'requested' per the field-service architecture doc, not left at 'declined'.
+      expect(JSON.parse(declineRes.body).dispatch.status).toBe('requested');
     } finally {
       heldClients.forEach((c) => c.release());
     }

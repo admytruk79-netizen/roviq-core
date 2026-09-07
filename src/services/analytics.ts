@@ -4,15 +4,7 @@ export type CaseMetricsRange = { from?:string; to?:string };
 
 // Each metric's exact definition is a product/reporting decision as much as a query -- stated
 // here explicitly so it's auditable and easy to correct if the intended definition differs,
-// rather than left implicit in SQL. All of them are computable from data the platform already
-// records; contribution margin (MVP_EXECUTION_PLAN.md's backlog #13 also asks for it) is not:
-// service_quote_lines stores the customer-facing unit_amount_minor and a categorical
-// revenue_recognition ('gross'|'net'|'pass_through'), but never the actual dollar split between
-// ROVIQ's take and the merchant's cost on a 'net' line -- there is nothing to compute a real
-// contribution-margin dollar figure from without inventing a take-rate, which is exactly the kind
-// of unvalidated number the business plan itself warns against presenting as real. That needs a
-// schema decision (e.g. a merchant_cost_minor column) before it can be instrumented, not a metric
-// formula.
+// rather than left implicit in SQL.
 export async function getCaseMetrics(range:CaseMetricsRange = {}) {
   const from = range.from ?? null;
   const to = range.to ?? null;
@@ -25,7 +17,8 @@ export async function getCaseMetrics(range:CaseMetricsRange = {}) {
     towAvoidance,
     handoffFailure,
     exceptionRate,
-    customerResponseTime
+    customerResponseTime,
+    contributionMargin
   ] = await Promise.all([
     // Average and median minutes from case creation to completion, for cases actually completed
     // in the window (filtered on completed_at, not created_at, so a case isn't counted before it
@@ -122,6 +115,24 @@ export async function getCaseMetrics(range:CaseMetricsRange = {}) {
        from field_service_decisions
        where ($1::timestamptz is null or created_at>=$1) and ($2::timestamptz is null or created_at<=$2)`,
       [from,to]
+    ),
+    // ROVIQ's own share of quoted revenue: a 'gross' line's full amount, a 'net' line's amount
+    // less what its merchant is actually owed (merchant_cost_minor), zero for 'pass_through' and
+    // the tax/discount/credit/other adjustment types. A 'net' line with no recorded cost is
+    // excluded from the sum entirely rather than assumed to be all-margin or all-cost -- reported
+    // separately as missing so the total is legible as a floor, not silently understated as complete.
+    pool.query(
+      `select
+         sum(case
+               when revenue_recognition='gross' then line_amount_minor
+               when revenue_recognition='net' and merchant_cost_minor is not null then line_amount_minor-merchant_cost_minor
+               else 0
+             end) as margin_minor,
+         count(*) filter (where revenue_recognition='net' and merchant_cost_minor is null) as net_lines_missing_cost,
+         count(*) filter (where revenue_recognition='net') as net_lines_total
+       from service_quote_lines
+       where ($1::timestamptz is null or created_at>=$1) and ($2::timestamptz is null or created_at<=$2)`,
+      [from,to]
     )
   ]);
 
@@ -133,6 +144,7 @@ export async function getCaseMetrics(range:CaseMetricsRange = {}) {
   const hf = handoffFailure.rows[0];
   const ex = exceptionRate.rows[0];
   const crt = customerResponseTime.rows[0];
+  const cm = contributionMargin.rows[0];
 
   const handoffTotal = Number(hf.transport_total) + Number(hf.parts_total);
   const handoffFailed = Number(hf.transport_failed) + Number(hf.parts_failed);
@@ -173,7 +185,14 @@ export async function getCaseMetrics(range:CaseMetricsRange = {}) {
       quoteMinutes:crt.quote_minutes!==null?Number(crt.quote_minutes):null,
       quoteCount:Number(crt.quote_count)
     },
-    contributionMargin:null,
-    contributionMarginNote:'Not computable from current data: service_quote_lines records the customer-facing price and a gross/net/pass_through category per line, but never the actual dollar split between ROVIQ\'s take and the merchant\'s cost on a net line. Needs a schema decision (e.g. a merchant_cost_minor column) before this can be instrumented for real, rather than assuming an unvalidated take-rate.'
+    contributionMargin:{
+      marginMinor:cm.margin_minor!==null?Number(cm.margin_minor):0,
+      netLinesMissingCost:Number(cm.net_lines_missing_cost),
+      netLinesTotal:Number(cm.net_lines_total),
+      // false means marginMinor is a floor, not the true total: at least one 'net' line's actual
+      // merchant cost was never recorded, so its real contribution (somewhere between 0 and its
+      // full line amount) is excluded rather than guessed.
+      complete:Number(cm.net_lines_missing_cost)===0
+    }
   };
 }

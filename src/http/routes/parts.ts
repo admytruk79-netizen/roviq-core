@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { pool } from '../../db/pool.js';
 import { requireRole } from '../middleware/principal.js';
 import { assignSupplier, createPartsOrder, getPartsOrder, markPartsOrderStatus, reserveOrderInventory, upsertInventory } from '../../services/parts.js';
+import { loadCaseForPrincipal } from '../../services/case-access.js';
 
 export async function partsRoutes(app: FastifyInstance) {
   app.post('/api/maintenance/cases/:caseId/parts-orders', { preHandler: requireRole('partner','diagnostic','admin') }, async (req, reply) => {
@@ -37,20 +38,18 @@ export async function partsRoutes(app: FastifyInstance) {
     const result = await getPartsOrder(id);
     if (!result) return reply.code(404).send({ error:'order_not_found' });
     const order:any = (result as any).order;
-    // Explicit allow-list, default deny -- the previous if/else-if only rejected 'customer' and
-    // 'parts' mismatches, so every other role (partner, tow, diagnostic, fleet) fell through
-    // unchecked and could read any parts order by id alone.
-    if (req.principal.role === 'admin') return result;
-    if (req.principal.role === 'customer') {
-      const c = await pool.query('select customer_actor_id from service_cases where id=$1',[order.case_id]);
-      if (!c.rowCount || c.rows[0].customer_actor_id !== req.principal.actorId) return reply.code(403).send({ error:'forbidden' });
+    try {
+      // Route through the shared access service (also used by cases.ts/mobility.ts/payments.ts)
+      // instead of a second, narrower ad hoc allow-list -- the previous version only recognized
+      // the case's customer or this order's own assigned supplier, so e.g. a tow provider or
+      // diagnostic actor with a real relation to the same case was wrongly denied.
+      const c = await loadCaseForPrincipal(req.principal,order.case_id);
+      if (!c) return reply.code(404).send({ error:'order_not_found' });
       return result;
+    } catch (e) {
+      if (e instanceof Error && e.message === 'forbidden') return reply.code(403).send({ error:'forbidden' });
+      throw e;
     }
-    if (req.principal.role === 'parts') {
-      if (order.supplier_actor_id !== req.principal.actorId) return reply.code(403).send({ error:'forbidden' });
-      return result;
-    }
-    return reply.code(403).send({ error:'forbidden' });
   });
 
   app.post('/api/admin/parts-orders/:id/assign-supplier', { preHandler: requireRole('admin') }, async (req, reply) => {

@@ -29,10 +29,6 @@ export async function createTransportDispatch(principal: Principal, input:{
   );
   const dispatch = r.rows[0];
 
-  // A per-dispatch override is execution context, not canonical Service Case spatial truth.
-  // Only mirror locations whose provenance is not explicitly dispatch-local. This prevents an
-  // explicit destination on one tow/valet job from changing case_spatial_context.destination and
-  // redirecting sibling inherited dispatches via the canonical destination trigger.
   const spatialPickup = input.metadata?.pickupSource === 'explicit_dispatch' ? undefined : input.pickupLocation;
   const spatialDropoff = input.metadata?.dropoffSource === 'explicit_dispatch' ? undefined : input.dropoffLocation;
   if (spatialPickup || spatialDropoff) {
@@ -60,13 +56,7 @@ export async function createTransportDispatch(principal: Principal, input:{
     audit(principal,'create_transport_dispatch','transport_dispatch',dispatch.id,'transport_requested',{ caseId:input.caseId, transportType:input.transportType })
   ]);
   const failedSideEffects = sideEffects.filter((result) => result.status === 'rejected');
-  if (failedSideEffects.length > 0) {
-    console.warn('transport_creation_side_effect_failed', {
-      dispatchId:dispatch.id,
-      caseId:input.caseId,
-      failedCount:failedSideEffects.length
-    });
-  }
+  if (failedSideEffects.length > 0) console.warn('transport_creation_side_effect_failed',{dispatchId:dispatch.id,caseId:input.caseId,failedCount:failedSideEffects.length});
   return dispatch;
 }
 
@@ -90,29 +80,21 @@ export async function assignTransportDispatch(principal: Principal, dispatchId:s
     }
     const provider = await client.query(
       `select a.id,a.actor_type,coalesce(pc.tow_participation,false) as tow_participation,coalesce(pc.valet_participation,false) as valet_participation,
-              exists(
-                select 1 from actor_capabilities ac
-                join capabilities c on c.id=ac.capability_id
-                where ac.actor_id=a.id and ac.active=true and c.capability_code='tow'
-              ) as has_tow_capability
+              exists(select 1 from actor_capabilities ac join capabilities c on c.id=ac.capability_id
+                where ac.actor_id=a.id and ac.active=true and c.capability_code='tow') as has_tow_capability
        from actors a left join partner_controls pc on pc.actor_id=a.id where a.id=$1 and a.status='active'`,[providerActorId]
     );
     if (!provider.rowCount) throw new Error('provider_not_found');
     const allowed = current.transport_type === 'tow' ? (provider.rows[0].actor_type === 'tow' || provider.rows[0].tow_participation || provider.rows[0].has_tow_capability) : provider.rows[0].valet_participation;
     if (!allowed) throw new Error('provider_not_transport_capable');
-    updated = await client.query(
-      `update transport_dispatches set provider_actor_id=$1,status='assigned',assigned_at=now(),eta_at=coalesce($2,eta_at),updated_at=now() where id=$3 returning *`,
-      [providerActorId,etaAt ?? null,dispatchId]
-    );
+    updated = await client.query(`update transport_dispatches set provider_actor_id=$1,status='assigned',assigned_at=now(),eta_at=coalesce($2,eta_at),updated_at=now() where id=$3 returning *`,[providerActorId,etaAt ?? null,dispatchId]);
     await client.query(`update service_cases set current_owner_role='tow',current_owner_actor_id=$1,updated_at=now() where id=$2`,[providerActorId,current.case_id]);
     await client.query('commit');
     committed = true;
   } catch (e) {
     if (!committed) await client.query('rollback');
     throw e;
-  } finally {
-    client.release();
-  }
+  } finally { client.release(); }
 
   const sideEffects = await Promise.allSettled([
     appendCaseEvent(current.case_id,'TRANSPORT_ASSIGNED',principal,{ dispatchId, providerActorId, etaAt:updated.rows[0].eta_at }),
@@ -121,13 +103,7 @@ export async function assignTransportDispatch(principal: Principal, dispatchId:s
     audit(principal,'assign_transport','transport_dispatch',dispatchId,'transport_provider_assigned',{ providerActorId })
   ]);
   const failedSideEffects = sideEffects.filter((result) => result.status === 'rejected');
-  if (failedSideEffects.length > 0) {
-    console.warn('transport_assignment_side_effect_failed', {
-      dispatchId,
-      caseId:current.case_id,
-      failedCount:failedSideEffects.length
-    });
-  }
+  if (failedSideEffects.length > 0) console.warn('transport_assignment_side_effect_failed',{dispatchId,caseId:current.case_id,failedCount:failedSideEffects.length});
   return updated.rows[0];
 }
 
@@ -144,12 +120,8 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
     current = d.rows[0];
     if (principal.role !== 'admin' && current.provider_actor_id !== principal.actorId) throw new Error('dispatch_forbidden');
     const allowed:Record<string,TransportStatus[]> = {
-      assigned:['accepted','declined','cancelled'],
-      accepted:['en_route','cancelled','failed'],
-      en_route:['arrived','failed'],
-      arrived:['vehicle_loaded','in_transit','delivered','failed'],
-      vehicle_loaded:['in_transit','failed'],
-      in_transit:['delivered','failed']
+      assigned:['accepted','declined','cancelled'],accepted:['en_route','cancelled','failed'],en_route:['arrived','failed'],
+      arrived:['vehicle_loaded','in_transit','delivered','failed'],vehicle_loaded:['in_transit','failed'],in_transit:['delivered','failed']
     };
     if (!(allowed[current.status] ?? []).includes(status)) throw new Error('invalid_dispatch_transition');
     if (status === 'delivered' && !hasLocation(current.dropoff_location)) throw new Error('dropoff_location_required');
@@ -163,15 +135,11 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
       await client.query(`update service_cases set current_owner_role=null,current_owner_actor_id=null,updated_at=now() where id=$1 and current_owner_actor_id=$2`,[current.case_id,current.provider_actor_id]);
       updated = await client.query(
         `update transport_dispatches
-         set provider_actor_id=null,assigned_at=null,accepted_at=null,updated_at=now(),metadata=metadata || $2::jsonb
+         set status='requested',provider_actor_id=null,assigned_at=null,accepted_at=null,updated_at=now(),metadata=metadata || $2::jsonb
          where id=$1 returning *`,
         [dispatchId,JSON.stringify({lastDeclinedBy:principal.actorId??null,lastDeclinedAt:new Date().toISOString()})]
       );
-      await client.query(
-        `insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload)
-         values('service_case',$1,'TRANSPORT_RELEASED_FOR_REASSIGNMENT',$2,$3)`,
-        [current.case_id,principal.actorId??null,JSON.stringify({dispatchId,declinedProviderActorId:current.provider_actor_id})]
-      );
+      await client.query(`insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload) values('service_case',$1,'TRANSPORT_RELEASED_FOR_REASSIGNMENT',$2,$3)`,[current.case_id,principal.actorId??null,JSON.stringify({dispatchId,declinedProviderActorId:current.provider_actor_id})]);
     } else if (status === 'failed') {
       await client.query(`update service_cases set current_owner_role=null,current_owner_actor_id=null,updated_at=now() where id=$1 and current_owner_actor_id=$2`,[current.case_id,current.provider_actor_id]);
     } else if (status === 'delivered') {
@@ -183,9 +151,7 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
   } catch (e) {
     if (!committed) await client.query('rollback');
     throw e;
-  } finally {
-    client.release();
-  }
+  } finally { client.release(); }
 
   if (caseStateForTransition === 'tow_pending') await transitionCase(principal,current.case_id,'tow_in_progress',{ dispatchId });
 
@@ -198,9 +164,7 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
   else if (status === 'declined' || status === 'failed') sideEffects.push(setCustomerSnapshot(current.case_id,'transport_reassignment','A new transport provider is being arranged.','Reassigning transport'));
   const results = await Promise.allSettled(sideEffects);
   const failedSideEffects = results.filter((r) => r.status === 'rejected');
-  if (failedSideEffects.length > 0) {
-    console.warn('transport_status_side_effect_failed', { dispatchId, caseId:current.case_id, status, failedCount:failedSideEffects.length });
-  }
+  if (failedSideEffects.length > 0) console.warn('transport_status_side_effect_failed',{dispatchId,caseId:current.case_id,status,failedCount:failedSideEffects.length});
   return updated.rows[0];
 }
 

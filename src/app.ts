@@ -25,8 +25,10 @@ import { triageEvaluationRoutes } from './http/routes/triage-evaluation.js';
 import { servicePlanRoutes } from './http/routes/service-plans.js';
 import { quoteRoutes } from './http/routes/quotes.js';
 import { analyticsRoutes } from './http/routes/analytics.js';
+import { commerceRoutes } from './http/routes/commerce.js';
 import { coherenceRoutes } from './http/routes/coherence.js';
 import { fieldServiceRoutes } from './http/routes/field-service.js';
+import { meRoutes } from './http/routes/me.js';
 import { exceptionRoutes } from './http/routes/exceptions.js';
 import { shopOsRoutes } from './http/routes/shop-os.js';
 import { shopOsFloorRoutes } from './http/routes/shop-os-floor.js';
@@ -45,9 +47,7 @@ export async function buildApp() {
     if (err instanceof ZodError) return reply.code(400).send({ error:'validation_error', details:err.issues });
     if (err instanceof Error && err.message === 'idempotency_key_reused') return reply.code(409).send({error:err.message});
     if (err instanceof Error && err.message === 'idempotency_key_too_long') return reply.code(400).send({error:err.message});
-    if (err instanceof Error && deferredBookingConstraintErrors.has(err.message)) {
-      return reply.code(409).send({ error:err.message });
-    }
+    if (err instanceof Error && deferredBookingConstraintErrors.has(err.message)) return reply.code(409).send({ error:err.message });
     const statusCode = (err as { statusCode?: number }).statusCode;
     if (typeof statusCode === 'number' && statusCode >= 400 && statusCode < 500) {
       return reply.code(statusCode).send({ error: err instanceof Error ? err.message : 'request_error' });
@@ -61,7 +61,7 @@ export async function buildApp() {
   await app.register(rateLimit, {
     max: 120,
     timeWindow: '1 minute',
-    keyGenerator: (req) => req.ip
+    keyGenerator: (req) => (req.headers.authorization as string | undefined) ?? req.ip
   });
 
   await app.register(healthRoutes);
@@ -69,16 +69,15 @@ export async function buildApp() {
     const routeConfig = req.routeOptions.config as { public?: boolean } | undefined;
     if (routeConfig?.public || req.url === '/health' || req.url === '/ready') return;
     await principalMiddleware(req, reply);
-    if(reply.sent)return;
+    if (reply.sent) return;
 
     const routeUrl=req.routeOptions.url;
-    if(req.principal.role==='admin'&&req.principal.actorId){
-      if(routeUrl?.startsWith('/api/admin/cases/:id')){
-        const caseId=(req.params as {id?:string}|undefined)?.id;
-        if(caseId) await assertAdminCaseScope(req.principal,caseId,pool);
-      }
+    if(req.principal.role==='admin'&&req.principal.actorId&&routeUrl?.startsWith('/api/admin/cases/:id')){
+      const caseId=(req.params as {id?:string}|undefined)?.id;
+      if(caseId) await assertAdminCaseScope(req.principal,caseId,pool);
     }
   });
+
   await app.register(authRoutes);
   await app.register(coreRoutes);
   await app.register(demandRoutes);
@@ -86,9 +85,11 @@ export async function buildApp() {
   await app.register(exceptionRoutes);
   await app.register(coherenceRoutes);
   await app.register(fieldServiceRoutes);
+  await app.register(meRoutes);
   await app.register(servicePlanRoutes);
   await app.register(quoteRoutes);
   await app.register(analyticsRoutes);
+  await app.register(commerceRoutes);
   await app.register(partnerRoutes);
   await app.register(adminRoutes);
   await app.register(routingRoutes);

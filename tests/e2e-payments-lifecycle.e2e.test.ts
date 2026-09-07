@@ -81,6 +81,20 @@ describe('payments and settlement end-to-end lifecycle', () => {
     expect(ownerPaymentsRes.statusCode).toBe(200);
     expect(JSON.parse(ownerPaymentsRes.body).payments.some((p: { id: string }) => p.id === payment1.id)).toBe(true);
 
+    // A provider with a real relation to this case -- an assigned transport dispatch, in this
+    // case -- must also be able to see its payments, even though it is neither the customer nor
+    // the case's current owner. This is what distinguishes strangerPartnerId (403 above, no
+    // relation at all) from a genuinely related provider.
+    const relatedTow = await app.inject({ method: 'POST', url: '/api/admin/actors', headers: adminHeaders(), payload: { actorType: 'tow' } });
+    const relatedTowActorId = JSON.parse(relatedTow.body).actor.id;
+    await pool.query(
+      `insert into transport_dispatches(case_id,transport_type,provider_actor_id,status) values($1,'tow',$2,'accepted')`,
+      [caseId, relatedTowActorId]
+    );
+    const relatedProviderPaymentsRes = await app.inject({ method: 'GET', url: `/api/maintenance/cases/${caseId}/payments`, headers: actorHeaders('tow', relatedTowActorId) });
+    expect(relatedProviderPaymentsRes.statusCode).toBe(200);
+    expect(JSON.parse(relatedProviderPaymentsRes.body).payments.some((p: { id: string }) => p.id === payment1.id)).toBe(true);
+
     const captureRes = await app.inject({ method: 'POST', url: `/api/admin/payments/${payment1.id}/state`, headers: adminHeaders(), payload: { state: 'captured' } });
     expect(captureRes.statusCode).toBe(200);
     expect(JSON.parse(captureRes.body).payment.state).toBe('captured');

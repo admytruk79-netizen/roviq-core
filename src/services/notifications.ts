@@ -6,8 +6,37 @@ export type DeliveryResult = { success:boolean; providerMessageId?:string; error
 
 type Adapter = (input:{ channel:string; recipientId:string; subject?:string; body:string; payload:Record<string,unknown> }) => Promise<DeliveryResult>;
 
+// Twilio credentials are deliberately read from process.env directly (matching how TRIAGE_MODEL_*
+// is handled) rather than the strict zod schema in config/env.ts: they're optional, only needed
+// once an admin actually enables the 'sms' channel with a real account, and self-hosters who never
+// configure SMS shouldn't be forced to set unrelated env vars just to boot Core.
+async function sendTwilioSms(recipientId:string, body:string):Promise<DeliveryResult> {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const fromNumber = process.env.TWILIO_FROM_NUMBER;
+  if (!accountSid || !authToken || !fromNumber) {
+    return { success:false, errorCode:'twilio_not_configured', errorMessage:'TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN/TWILIO_FROM_NUMBER are not set' };
+  }
+  const actor = await pool.query('select phone from actors where id=$1',[recipientId]);
+  const to = actor.rows[0]?.phone as string|undefined;
+  if (!to) return { success:false, errorCode:'recipient_phone_missing', errorMessage:'Recipient actor has no phone number on file' };
+  const auth = Buffer.from(`${accountSid}:${authToken}`).toString('base64');
+  const params = new URLSearchParams({ To:to, From:fromNumber, Body:body });
+  const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`, {
+    method:'POST',
+    headers:{ authorization:`Basic ${auth}`, 'content-type':'application/x-www-form-urlencoded' },
+    body:params.toString()
+  });
+  const json = await response.json().catch(() => ({})) as Record<string,unknown>;
+  if (!response.ok) {
+    return { success:false, errorCode:`twilio_http_${response.status}`, errorMessage:typeof json.message === 'string' ? json.message : `Twilio request failed with status ${response.status}`, response:json };
+  }
+  return { success:true, providerMessageId:typeof json.sid === 'string' ? json.sid : undefined, response:json };
+}
+
 const adapters: Record<string,Adapter> = {
-  internal: async ({ recipientId }) => ({ success:true, providerMessageId:`internal:${recipientId}:${Date.now()}` })
+  internal: async ({ recipientId }) => ({ success:true, providerMessageId:`internal:${recipientId}:${Date.now()}` }),
+  twilio: async ({ recipientId, body }) => sendTwilioSms(recipientId, body)
 };
 
 function render(template:string, payload:Record<string,unknown>) {

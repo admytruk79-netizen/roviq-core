@@ -5,6 +5,7 @@ import { audit } from '../../services/audit.js';
 import { transitionCase, type CaseState } from '../../services/orchestration.js';
 import { assignTransportDispatch, createTransportDispatch } from '../../services/transport.js';
 import { requireRole, requireRoleOrCapability } from '../middleware/principal.js';
+import { loadCaseForPrincipal } from '../../services/case-access.js';
 
 const findingBody = z.object({
   findingCode: z.string().optional(),
@@ -142,6 +143,29 @@ export async function diagnosticRoutes(app: FastifyInstance) {
     const r = await pool.query(
       `select id,demand_id,case_id,finding_code,summary,drivability,disposition,confidence,created_at
        from diagnostic_findings where demand_id=$1 order by created_at desc`, [id]
+    );
+    return { findings:r.rows };
+  });
+
+  // The demand-scoped route above requires already knowing the demand id and re-derives access
+  // from matches_offers/demand_requests directly rather than the shared case access service --
+  // MVP_EXECUTION_PLAN.md backlog #4 calls for a Field Operations UI card showing "the latest
+  // diagnostic finding," and a case detail view only ever has the case id on hand. Routing through
+  // loadCaseForPrincipal here also means every relation it already recognizes (an accepted offer,
+  // an assigned dispatch, a parts order, a mobility allocation) can read a case's findings, not
+  // just the diagnostic who happens to still hold the matches_offers row.
+  app.get('/api/maintenance/cases/:id/diagnostic-findings', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    try {
+      const c = await loadCaseForPrincipal(req.principal,id);
+      if (!c) return reply.code(404).send({ error:'case_not_found' });
+    } catch (e) {
+      if (e instanceof Error && e.message === 'forbidden') return reply.code(403).send({ error:'forbidden' });
+      throw e;
+    }
+    const r = await pool.query(
+      `select id,demand_id,case_id,finding_code,summary,drivability,disposition,confidence,created_at
+       from diagnostic_findings where case_id=$1 order by created_at desc`, [id]
     );
     return { findings:r.rows };
   });

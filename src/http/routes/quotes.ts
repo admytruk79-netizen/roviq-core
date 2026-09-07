@@ -11,6 +11,7 @@ const lineBody = z.object({
   unitAmountMinor:z.number().int().nonnegative(),
   merchantActorId:z.string().uuid().optional(),
   revenueRecognition:z.enum(['gross','net','pass_through']).optional(),
+  merchantCostMinor:z.number().int().nonnegative().optional(),
   metadata:z.record(z.unknown()).optional()
 });
 
@@ -43,7 +44,7 @@ export async function quoteRoutes(app:FastifyInstance) {
       const message = error instanceof Error ? error.message : 'quote_create_failed';
       if (message === 'case_not_found' || message === 'service_plan_not_found') return reply.code(404).send({error:message});
       if (message === 'forbidden') return reply.code(403).send({error:message});
-      if (['quote_requires_lines','invalid_line_amount','invalid_line_quantity','merchant_required_for_recognized_revenue'].includes(message)) return reply.code(400).send({error:message});
+      if (['quote_requires_lines','invalid_line_amount','invalid_line_quantity','merchant_required_for_recognized_revenue','merchant_cost_only_valid_for_net_recognition','invalid_merchant_cost'].includes(message)) return reply.code(400).send({error:message});
       throw error;
     }
   });

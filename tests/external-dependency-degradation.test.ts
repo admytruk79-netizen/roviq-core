@@ -1,7 +1,23 @@
+import { createHmac } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import worker, { pingCore } from '../cloudflare/worker.js';
+import worker, { hmacSha256Hex, pingCore, processNotificationBatchNative, processWebhookOutboxNative } from '../cloudflare/worker.js';
 import { handleLocalCoreRequest } from '../cloudflare/local-adapter.js';
 import { evaluateAssessmentAuthority } from '../src/services/ai-authority.js';
+
+// A minimal stand-in for the Neon serverless driver's tagged-template `sql` function -- just
+// enough to drive processWebhookOutboxNative's control flow without a live database. Each call
+// records the literal SQL text (joined on the interpolation points) and the interpolated values,
+// and returns the next canned result in order.
+function fakeSql(results: unknown[][]) {
+  const calls: { text: string; values: unknown[] }[] = [];
+  const tag = async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    calls.push({ text: strings.join('?'), values });
+    const result = results[calls.length - 1];
+    if (result === undefined) throw new Error(`fakeSql: no canned result for call ${calls.length}`);
+    return result;
+  };
+  return { tag, calls };
+}
 
 describe('external dependency degradation', () => {
   afterEach(() => {
@@ -113,5 +129,140 @@ describe('external dependency degradation', () => {
     expect(evaluateAssessmentAuthority({
       deploymentMode: 'assisted', status: 'accepted', requiresHumanReview: true
     })).toEqual({ effectiveForAutomation: false, rationale: 'ai_human_review_required' });
+  });
+
+  it('signs webhook deliveries with the exact HMAC-SHA256 hex digest subscribers verify against', async () => {
+    // src/services/integration-gateway.ts's deliverWebhookBatch (the admin-triggered, non-Worker
+    // delivery path) signs with node:crypto's createHmac -- a subscriber's signature check must
+    // pass identically regardless of which path delivered the event, so this native Worker's
+    // Web Crypto reimplementation has to produce byte-identical hex output for the same input.
+    const expected = createHmac('sha256', 'whsec_test').update('123.{"a":1}').digest('hex');
+    await expect(hmacSha256Hex('whsec_test', '123.{"a":1}')).resolves.toBe(expected);
+  });
+
+  it('delivers a claimed webhook, signs it, and marks it delivered on a 2xx response', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const delivery = {
+      id: 'delivery-1', subscription_id: 'sub-1', integration_event_id: 'event-1', attempt_count: 0,
+      endpoint_url: 'https://partner.example/webhooks/roviq', secret: 'whsec_test',
+      event_type: 'case.updated', aggregate_type: 'service_case', aggregate_id: 'case-1',
+      actor_id: 'actor-1', payload: { state: 'repair_in_progress' }, occurred_at: '2026-09-05T00:00:00Z'
+    };
+    const { tag: sql, calls } = fakeSql([[delivery], []]);
+
+    const results = await processWebhookOutboxNative(sql as never, 10);
+
+    expect(results).toEqual([{ id: 'delivery-1', state: 'delivered' }]);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit & { headers: Record<string, string> }];
+    expect(url).toBe(delivery.endpoint_url);
+    expect(init.headers['x-roviq-event-id']).toBe('event-1');
+    const ts = init.headers['x-roviq-timestamp'];
+    expect(ts).toBeTruthy();
+    const expectedSig = `v1=${createHmac('sha256', 'whsec_test').update(`${ts}.${init.body}`).digest('hex')}`;
+    expect(init.headers['x-roviq-signature']).toBe(expectedSig);
+
+    // Second sql call is the post-delivery write; confirm it marks the row delivered with the
+    // real response code, and does not touch retry/backoff fields.
+    expect(calls[1].text).toContain("state='delivered'");
+    expect(calls[1].values).toEqual([200, 'delivery-1']);
+  });
+
+  it('retries a failing webhook delivery with exponential backoff instead of dropping it', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(null, { status: 500 }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const delivery = {
+      id: 'delivery-2', subscription_id: 'sub-1', integration_event_id: 'event-2', attempt_count: 2,
+      endpoint_url: 'https://partner.example/webhooks/roviq', secret: 'whsec_test',
+      event_type: 'case.updated', aggregate_type: 'service_case', aggregate_id: 'case-2',
+      actor_id: 'actor-1', payload: {}, occurred_at: '2026-09-05T00:00:00Z'
+    };
+    const { tag: sql, calls } = fakeSql([[delivery], []]);
+
+    const results = await processWebhookOutboxNative(sql as never, 10);
+
+    expect(results).toEqual([{ id: 'delivery-2', state: 'retry' }]);
+    // attempt_count was 2, so this is attempt 3 of 8 -- not yet dead, backoff is 2^3*15=120s.
+    expect(calls[1].values).toEqual(['retry', 3, 'http_500', '120', 'delivery-2']);
+  });
+
+  it('dead-letters a webhook delivery after 8 failed attempts instead of retrying forever', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(null, { status: 500 }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const delivery = {
+      id: 'delivery-3', subscription_id: 'sub-1', integration_event_id: 'event-3', attempt_count: 7,
+      endpoint_url: 'https://partner.example/webhooks/roviq', secret: 'whsec_test',
+      event_type: 'case.updated', aggregate_type: 'service_case', aggregate_id: 'case-3',
+      actor_id: 'actor-1', payload: {}, occurred_at: '2026-09-05T00:00:00Z'
+    };
+    const { tag: sql, calls } = fakeSql([[delivery], []]);
+
+    const results = await processWebhookOutboxNative(sql as never, 10);
+
+    expect(results).toEqual([{ id: 'delivery-3', state: 'dead' }]);
+    // attempt_count was 7, so this is attempt 8 -- the dead-letter threshold.
+    expect(calls[1].values).toEqual(['dead', 8, 'http_500', '3600', 'delivery-3']);
+  });
+
+  it('delivers a customer SMS via Twilio when the sms channel is configured for it', async () => {
+    process.env.TWILIO_ACCOUNT_SID = 'ACtest';
+    process.env.TWILIO_AUTH_TOKEN = 'test_auth_token';
+    process.env.TWILIO_FROM_NUMBER = '+15550000000';
+    try {
+      const fetchSpy = vi.fn().mockResolvedValue(new Response(JSON.stringify({ sid: 'SMtest123' }), { status: 201 }));
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const notification = { id: 'n1', channel: 'sms', recipient_id: 'actor-1', template_key: 'customer_status_update', payload: { message: 'Your diagnostic is complete.' }, attempt_count: 0, max_attempts: 5, provider: null };
+      const { tag: sql } = fakeSql([
+        [notification],
+        [{ channel: 'sms', provider: 'twilio', enabled: true }],
+        [{ body_template: 'ROVIQ: {{message}}', subject_template: null }],
+        [{ phone: '+15559990001' }],
+        [],
+        [],
+        []
+      ]);
+
+      const results = await processNotificationBatchNative(sql as never, { TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN: process.env.TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER: process.env.TWILIO_FROM_NUMBER } as never, 'test-worker', 10);
+
+      expect(results).toEqual([{ id: 'n1', state: 'sent', providerMessageId: 'SMtest123' }]);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit & { headers: Record<string, string> }];
+      expect(url).toBe('https://api.twilio.com/2010-04-01/Accounts/ACtest/Messages.json');
+      expect(init.headers.authorization).toBe(`Basic ${Buffer.from('ACtest:test_auth_token').toString('base64')}`);
+      const sentParams = new URLSearchParams(init.body as string);
+      expect(sentParams.get('To')).toBe('+15559990001');
+      expect(sentParams.get('From')).toBe('+15550000000');
+      expect(sentParams.get('Body')).toBe('ROVIQ: Your diagnostic is complete.');
+    } finally {
+      delete process.env.TWILIO_ACCOUNT_SID;
+      delete process.env.TWILIO_AUTH_TOKEN;
+      delete process.env.TWILIO_FROM_NUMBER;
+    }
+  });
+
+  it('retries an sms notification with a specific reason when Twilio is not configured, without touching fetch', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const notification = { id: 'n2', channel: 'sms', recipient_id: 'actor-2', template_key: 'customer_status_update', payload: { message: 'Hi' }, attempt_count: 0, max_attempts: 5, provider: null };
+    const { tag: sql, calls } = fakeSql([
+      [notification],
+      [{ channel: 'sms', provider: 'twilio', enabled: true }],
+      [{ body_template: 'ROVIQ: {{message}}', subject_template: null }],
+      [],
+      []
+    ]);
+
+    const results = await processNotificationBatchNative(sql as never, {} as never, 'test-worker', 10);
+
+    expect(results).toEqual([{ id: 'n2', state: 'retry' }]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    // The 4th sql call is the failed-attempt insert; confirm the specific, diagnosable reason.
+    expect(calls[3].values).toContain('twilio_not_configured');
   });
 });
