@@ -203,6 +203,12 @@ export async function updateRepairOrderLine(principal:Principal,repairOrderId:st
     ]);
     const nextApproval=updatedLine.rows[0].approval_status as RepairOrderLineApproval;
     if(nextApproval!==previousApproval){
+      if(order.status==='approved'){
+        await client.query(`update shop_repair_orders set status='awaiting_approval',approved_at=null,updated_at=now() where id=$1`,[repairOrderId]);
+        await appendOrderEvent(client,repairOrderId,'SHOP_OS_REPAIR_ORDER_APPROVAL_REOPENED',principal,{
+          lineId,previousApproval,approvalStatus:nextApproval,previousStatus:'approved',status:'awaiting_approval'
+        });
+      }
       if(['deferred','declined'].includes(previousApproval)&&!['deferred','declined'].includes(nextApproval)){
         const closed=await client.query(`update shop_deferred_service_items set
           status='dismissed',dismissed_at=coalesce(dismissed_at,now()),next_follow_up_at=null,updated_at=now()
