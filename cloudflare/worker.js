@@ -207,7 +207,35 @@ async function retryNotificationNative(sql, notification, attemptNumber, provide
   return dead ? 'dead' : 'retry';
 }
 
-async function processNotificationBatchNative(sql, workerId = 'cloudflare-cron', limit = 200) {
+async function sendTwilioSmsNative(env, sql, recipientId, body) {
+  const accountSid = env.TWILIO_ACCOUNT_SID;
+  const authToken = env.TWILIO_AUTH_TOKEN;
+  const fromNumber = env.TWILIO_FROM_NUMBER;
+  if (!accountSid || !authToken || !fromNumber) {
+    return { success: false, errorCode: 'twilio_not_configured', errorMessage: 'TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN/TWILIO_FROM_NUMBER are not set' };
+  }
+  const actor = await sql`select phone from actors where id=${recipientId}`;
+  const to = actor[0]?.phone;
+  if (!to) return { success: false, errorCode: 'recipient_phone_missing', errorMessage: 'Recipient actor has no phone number on file' };
+  const auth = btoa(`${accountSid}:${authToken}`);
+  const params = new URLSearchParams({ To: to, From: fromNumber, Body: body });
+  const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`, {
+    method: 'POST',
+    headers: { authorization: `Basic ${auth}`, 'content-type': 'application/x-www-form-urlencoded' },
+    body: params.toString()
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    return { success: false, errorCode: `twilio_http_${response.status}`, errorMessage: typeof json.message === 'string' ? json.message : `Twilio request failed with status ${response.status}`, response: json };
+  }
+  return { success: true, providerMessageId: typeof json.sid === 'string' ? json.sid : undefined, response: json };
+}
+
+// Mirrors src/services/notifications.ts's twilio adapter -- same env-var contract
+// (TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN/TWILIO_FROM_NUMBER), same recipient-phone lookup on
+// actors.phone -- reimplemented against the Neon HTTP driver and Workers' native btoa instead of
+// pg/node:buffer, since this is what actually runs the cron in production.
+export async function processNotificationBatchNative(sql, env, workerId = 'cloudflare-cron', limit = 200) {
   const claimed = await sql`
     with candidates as (
       select id from notification_outbox
@@ -246,23 +274,29 @@ async function processNotificationBatchNative(sql, workerId = 'cloudflare-cron',
     const subject = template?.subject_template ? render(template.subject_template) : undefined;
     const body = template?.body_template ? render(template.body_template) : JSON.stringify(payload);
 
-    if (provider !== 'internal') {
-      const message = `No adapter registered for ${provider}`;
+    const delivery = provider === 'internal'
+      ? { success: true, providerMessageId: `internal:${n.recipient_id}:${Date.now()}`, response: {} }
+      : provider === 'twilio'
+        ? await sendTwilioSmsNative(env, sql, n.recipient_id, body)
+        : { success: false, errorCode: 'provider_not_configured', errorMessage: `No adapter registered for ${provider}` };
+
+    if (!delivery.success) {
+      const message = delivery.errorMessage || 'delivery_failed';
       await sql`
-        insert into notification_delivery_attempts(notification_id,attempt_number,provider,state,error_code,error_message)
-        values(${n.id},${attemptNumber},${provider},'failed','provider_not_configured',${message})
+        insert into notification_delivery_attempts(notification_id,attempt_number,provider,state,error_code,error_message,response_payload)
+        values(${n.id},${attemptNumber},${provider},'failed',${delivery.errorCode || 'delivery_failed'},${message},${JSON.stringify(delivery.response || {})}::jsonb)
       `;
       results.push({ id: n.id, state: await retryNotificationNative(sql, n, attemptNumber, provider, message) });
       continue;
     }
 
-    const providerMessageId = `internal:${n.recipient_id}:${Date.now()}`;
+    const providerMessageId = delivery.providerMessageId || `${provider}:${n.recipient_id}:${Date.now()}`;
     await sql`
       insert into notification_delivery_attempts(
         notification_id,attempt_number,provider,provider_message_id,state,request_payload,response_payload
       ) values(
         ${n.id},${attemptNumber},${provider},${providerMessageId},'sent',
-        ${JSON.stringify({ subject, body, recipientId: n.recipient_id })}::jsonb,'{}'::jsonb
+        ${JSON.stringify({ subject, body, recipientId: n.recipient_id })}::jsonb,${JSON.stringify(delivery.response || {})}::jsonb
       )
     `;
     await sql`
@@ -375,7 +409,7 @@ async function runScheduledOperations(env) {
   const sql = await sqlFor(env);
   const [deadlines, notifications, webhooks, corePing] = await Promise.all([
     sweepExpiredDeadlinesNative(sql, 200),
-    processNotificationBatchNative(sql, 'cloudflare-cron', 200),
+    processNotificationBatchNative(sql, env, 'cloudflare-cron', 200),
     processWebhookOutboxNative(sql, 100),
     pingCore(env)
   ]);

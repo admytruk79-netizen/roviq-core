@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import worker, { hmacSha256Hex, pingCore, processWebhookOutboxNative } from '../cloudflare/worker.js';
+import worker, { hmacSha256Hex, pingCore, processNotificationBatchNative, processWebhookOutboxNative } from '../cloudflare/worker.js';
 import { handleLocalCoreRequest } from '../cloudflare/local-adapter.js';
 import { evaluateAssessmentAuthority } from '../src/services/ai-authority.js';
 
@@ -206,5 +206,63 @@ describe('external dependency degradation', () => {
     expect(results).toEqual([{ id: 'delivery-3', state: 'dead' }]);
     // attempt_count was 7, so this is attempt 8 -- the dead-letter threshold.
     expect(calls[1].values).toEqual(['dead', 8, 'http_500', '3600', 'delivery-3']);
+  });
+
+  it('delivers a customer SMS via Twilio when the sms channel is configured for it', async () => {
+    process.env.TWILIO_ACCOUNT_SID = 'ACtest';
+    process.env.TWILIO_AUTH_TOKEN = 'test_auth_token';
+    process.env.TWILIO_FROM_NUMBER = '+15550000000';
+    try {
+      const fetchSpy = vi.fn().mockResolvedValue(new Response(JSON.stringify({ sid: 'SMtest123' }), { status: 201 }));
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const notification = { id: 'n1', channel: 'sms', recipient_id: 'actor-1', template_key: 'customer_status_update', payload: { message: 'Your diagnostic is complete.' }, attempt_count: 0, max_attempts: 5, provider: null };
+      const { tag: sql } = fakeSql([
+        [notification],
+        [{ channel: 'sms', provider: 'twilio', enabled: true }],
+        [{ body_template: 'ROVIQ: {{message}}', subject_template: null }],
+        [{ phone: '+15559990001' }],
+        [],
+        [],
+        []
+      ]);
+
+      const results = await processNotificationBatchNative(sql as never, { TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN: process.env.TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER: process.env.TWILIO_FROM_NUMBER } as never, 'test-worker', 10);
+
+      expect(results).toEqual([{ id: 'n1', state: 'sent', providerMessageId: 'SMtest123' }]);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit & { headers: Record<string, string> }];
+      expect(url).toBe('https://api.twilio.com/2010-04-01/Accounts/ACtest/Messages.json');
+      expect(init.headers.authorization).toBe(`Basic ${Buffer.from('ACtest:test_auth_token').toString('base64')}`);
+      const sentParams = new URLSearchParams(init.body as string);
+      expect(sentParams.get('To')).toBe('+15559990001');
+      expect(sentParams.get('From')).toBe('+15550000000');
+      expect(sentParams.get('Body')).toBe('ROVIQ: Your diagnostic is complete.');
+    } finally {
+      delete process.env.TWILIO_ACCOUNT_SID;
+      delete process.env.TWILIO_AUTH_TOKEN;
+      delete process.env.TWILIO_FROM_NUMBER;
+    }
+  });
+
+  it('retries an sms notification with a specific reason when Twilio is not configured, without touching fetch', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const notification = { id: 'n2', channel: 'sms', recipient_id: 'actor-2', template_key: 'customer_status_update', payload: { message: 'Hi' }, attempt_count: 0, max_attempts: 5, provider: null };
+    const { tag: sql, calls } = fakeSql([
+      [notification],
+      [{ channel: 'sms', provider: 'twilio', enabled: true }],
+      [{ body_template: 'ROVIQ: {{message}}', subject_template: null }],
+      [],
+      []
+    ]);
+
+    const results = await processNotificationBatchNative(sql as never, {} as never, 'test-worker', 10);
+
+    expect(results).toEqual([{ id: 'n2', state: 'retry' }]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    // The 4th sql call is the failed-attempt insert; confirm the specific, diagnosable reason.
+    expect(calls[3].values).toContain('twilio_not_configured');
   });
 });
