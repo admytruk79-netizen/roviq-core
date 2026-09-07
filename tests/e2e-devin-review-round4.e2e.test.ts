@@ -16,7 +16,12 @@ async function organization(){
 
 describe('Devin review round 4 regressions',()=>{
   let app:FastifyInstance;
-  beforeAll(async()=>{app=await buildApp();});
+  beforeAll(async()=>{
+    app=await buildApp();
+    app.get('/__test/deferred-booking-conflict',{config:{public:true}},async()=>{
+      throw Object.assign(new Error('deferred_service_appointment_case_mismatch'),{code:'23514'});
+    });
+  });
   afterAll(async()=>{await app.close();await pool.end();});
 
   it('rejects noncanonical waitlist resource preferences at the HTTP boundary',async()=>{
@@ -40,9 +45,6 @@ describe('Devin review round 4 regressions',()=>{
   });
 
   it('maps deferred-service database integrity conflicts to a client conflict response',async()=>{
-    app.get('/__test/deferred-booking-conflict',{config:{public:true}},async()=>{
-      throw Object.assign(new Error('deferred_service_appointment_case_mismatch'),{code:'23514'});
-    });
     const response=await app.inject({method:'GET',url:'/__test/deferred-booking-conflict'});
     expect(response.statusCode).toBe(409);
     expect(JSON.parse(response.body)).toEqual({error:'deferred_service_appointment_case_mismatch'});
