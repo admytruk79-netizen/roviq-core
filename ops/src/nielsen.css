@@ -1,43 +1,15 @@
 /* Nielsen-oriented Ops UX: compact hierarchy, contextual actions, progressive disclosure. */
-.roviq-header{position:sticky!important;top:0!important;z-index:50!important;backdrop-filter:blur(14px)}
-.roviq-grid-glow>div{max-width:980px;margin:0 auto}
-.roviq-grid-glow .space-y-6{display:grid;gap:14px!important}
-.roviq-grid-glow .space-y-6>*{margin-top:0!important}
-.roviq-grid-glow section,.roviq-grid-glow .rounded-lg{border-radius:14px!important}
-.roviq-grid-glow button,.roviq-grid-glow select,.roviq-grid-glow input,.roviq-grid-glow textarea,.roviq-grid-glow a{min-height:44px}
-.roviq-grid-glow button{font-weight:650}
-.roviq-grid-glow h1{letter-spacing:-.01em}
-.roviq-grid-glow h2{letter-spacing:-.005em}
-.roviq-grid-glow .text-xs.text-slate-400{font-size:11px!important}
-.roviq-grid-glow .text-slate-500{color:#64748b}
-.roviq-grid-glow section:focus-within{border-color:#94a3b8!important}
-.roviq-grid-glow button:focus-visible,.roviq-grid-glow a:focus-visible,.roviq-grid-glow select:focus-visible,.roviq-grid-glow input:focus-visible,.roviq-grid-glow textarea:focus-visible{outline:3px solid rgba(15,118,110,.42)!important;outline-offset:2px!important}
-.roviq-grid-glow [aria-busy="true"]{cursor:progress}
+:root{--roviq-copper:#e46f35;--roviq-copper-soft:#f0834b;--roviq-line:rgba(244,242,237,.14)}
+.roviq-header{position:sticky!important;top:0!important;z-index:50!important;backdrop-filter:blur(22px) saturate(130%)!important;-webkit-backdrop-filter:blur(22px) saturate(130%)!important}
+.roviq-grid-glow>div{max-width:1040px;margin:0 auto}
+.roviq-grid-glow .space-y-6{display:grid;gap:14px!important}.roviq-grid-glow .space-y-6>*{margin-top:0!important}
+.roviq-grid-glow section,.roviq-grid-glow .rounded-lg{border-radius:16px!important}
+.roviq-grid-glow button,.roviq-grid-glow select,.roviq-grid-glow input,.roviq-grid-glow textarea,.roviq-grid-glow a{min-height:44px}.roviq-grid-glow button{font-weight:700}
+.roviq-grid-glow h1{letter-spacing:-.025em}.roviq-grid-glow h2{letter-spacing:-.012em}.roviq-grid-glow .text-xs.text-slate-400{font-size:11px!important}.roviq-grid-glow .text-slate-500{color:#a8b4c2!important}
+.roviq-grid-glow section:focus-within{border-color:rgba(228,111,53,.46)!important}.roviq-grid-glow button:focus-visible,.roviq-grid-glow a:focus-visible,.roviq-grid-glow select:focus-visible,.roviq-grid-glow input:focus-visible,.roviq-grid-glow textarea:focus-visible{outline:3px solid rgba(228,111,53,.62)!important;outline-offset:2px!important}
+.roviq-grid-glow [aria-busy="true"]{cursor:progress}.ops-case-card{transition:transform .15s ease,border-color .15s ease,box-shadow .15s ease!important}.ops-case-card:hover,.ops-case-card:focus-visible{transform:translateY(-2px);border-color:rgba(228,111,53,.44)!important;box-shadow:0 22px 54px rgba(0,0,0,.28)!important}.ops-open-row{color:var(--roviq-copper-soft)!important}.ops-stats>div{box-shadow:inset 0 1px 0 rgba(255,255,255,.035)}.ops-error{display:flex!important;align-items:center;justify-content:space-between;gap:12px;border-left:4px solid #f87171!important}.ops-error button{flex:0 0 auto}
 /* Human-operational content should dominate technical audit content. */
-.roviq-grid-glow ul{margin-top:8px!important}
-.roviq-grid-glow ul li{line-height:1.45}
-.roviq-grid-glow form{max-width:760px}
-.roviq-grid-glow form button[type="submit"]{white-space:nowrap}
-@media(max-width:640px){
-  .roviq-header .roviq-mark{width:34px!important;height:34px!important}
-  .roviq-header{min-height:56px!important}
-  .roviq-grid-glow{padding:10px 10px calc(30px + env(safe-area-inset-bottom))!important}
-  .roviq-grid-glow .space-y-6{gap:10px!important}
-  .roviq-grid-glow .rounded-lg.border{padding:13px!important}
-  .roviq-grid-glow .flex.items-center.justify-between{gap:10px!important;align-items:flex-start!important}
-  .roviq-grid-glow h1{font-size:19px!important;line-height:1.2!important}
-  .roviq-grid-glow h2{font-size:14px!important}
-  .roviq-grid-glow p{line-height:1.45!important}
-  .roviq-grid-glow form.flex{display:grid!important;grid-template-columns:1fr!important}
-  .roviq-grid-glow select,.roviq-grid-glow input,.roviq-grid-glow textarea,.roviq-grid-glow button{width:100%!important;min-width:0!important;min-height:48px!important;font-size:16px!important}
-  .roviq-grid-glow ul li{gap:8px!important;align-items:flex-start!important}
-  .roviq-grid-glow form .flex.gap-2,.roviq-grid-glow form .flex.items-center{display:grid!important;grid-template-columns:1fr!important}
-  .roviq-grid-glow section button+button{margin-left:0!important}
-}
-@media(prefers-reduced-motion:reduce){
-  *{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
-}
-@media(forced-colors:active){
-  .roviq-grid-glow section,.roviq-grid-glow .rounded-lg{border:1px solid CanvasText!important}
-  .roviq-grid-glow button:focus-visible,.roviq-grid-glow a:focus-visible,.roviq-grid-glow select:focus-visible,.roviq-grid-glow input:focus-visible,.roviq-grid-glow textarea:focus-visible{outline:2px solid Highlight!important}
-}
+.roviq-grid-glow ul{margin-top:8px!important}.roviq-grid-glow ul li{line-height:1.45}.roviq-grid-glow form{max-width:760px}.roviq-grid-glow form button[type="submit"]{white-space:nowrap}
+@media(max-width:640px){.roviq-header .roviq-mark{width:34px!important;height:34px!important}.roviq-header{min-height:56px!important}.roviq-grid-glow{padding:10px 10px calc(30px + env(safe-area-inset-bottom))!important}.roviq-grid-glow .space-y-6{gap:10px!important}.roviq-grid-glow .rounded-lg.border{padding:13px!important}.roviq-grid-glow .flex.items-center.justify-between{gap:10px!important;align-items:flex-start!important}.roviq-grid-glow h1{font-size:21px!important;line-height:1.2!important}.roviq-grid-glow h2{font-size:15px!important}.roviq-grid-glow p{line-height:1.45!important}.roviq-grid-glow form.flex{display:grid!important;grid-template-columns:1fr!important}.roviq-grid-glow select,.roviq-grid-glow input,.roviq-grid-glow textarea,.roviq-grid-glow button{width:100%!important;min-width:0!important;min-height:48px!important;font-size:16px!important}.roviq-grid-glow ul li{gap:8px!important;align-items:flex-start!important}.roviq-grid-glow form .flex.gap-2,.roviq-grid-glow form .flex.items-center{display:grid!important;grid-template-columns:1fr!important}.roviq-grid-glow section button+button{margin-left:0!important}.ops-error{align-items:stretch;flex-direction:column}.ops-error button{width:100%!important}}
+@media(prefers-reduced-motion:reduce){.ops-case-card{transition:none!important;transform:none!important}*{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+@media(forced-colors:active){.roviq-grid-glow section,.roviq-grid-glow .rounded-lg{border:1px solid CanvasText!important}.roviq-grid-glow button:focus-visible,.roviq-grid-glow a:focus-visible,.roviq-grid-glow select:focus-visible,.roviq-grid-glow input:focus-visible,.roviq-grid-glow textarea:focus-visible{outline:2px solid Highlight!important}}
