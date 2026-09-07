@@ -1,8 +1,7 @@
 -- Keep transport dispatch destination state coherent with the canonical Service Case spatial context.
--- Dispatches that inherit the case destination are explicitly tagged in metadata. Later canonical
--- corrections update only those inherited destinations; deliberate per-dispatch overrides remain
--- untouched. Destination propagation must not rewrite transport_dispatches.updated_at because that
--- timestamp is part of dispatch recency ordering.
+-- A destination may be assigned after the dispatch already exists. Read projections already treat
+-- case_spatial_context.destination as effective transport truth, so persist that late destination
+-- into active dispatch rows and refresh the serviceability projection at the same boundary.
 
 create or replace function sync_transport_destination_from_case_spatial()
 returns trigger
@@ -18,20 +17,17 @@ begin
 
   update transport_dispatches
      set dropoff_location = new.destination,
-         metadata = coalesce(metadata,'{}'::jsonb) || jsonb_build_object('dropoffSource','case_spatial')
+         updated_at = now()
    where case_id = new.case_id
-     and status not in ('delivered','cancelled')
-     and (
-       coalesce(dropoff_location,'{}'::jsonb) = '{}'::jsonb
-       or metadata->>'dropoffSource' = 'case_spatial'
-     );
+     and coalesce(dropoff_location, '{}'::jsonb) = '{}'::jsonb
+     and status not in ('delivered','cancelled');
 
   select id, transport_type, status, dropoff_location, provider_actor_id, eta_at
     into latest
     from transport_dispatches
    where case_id = new.case_id
      and status <> 'cancelled'
-   order by updated_at desc, created_at desc, id desc
+   order by updated_at desc, id desc
    limit 1;
 
   if found then
@@ -49,7 +45,7 @@ begin
              'dispatchId', latest.id,
              'transportType', latest.transport_type,
              'transportStatus', latest.status,
-             'destinationReady', latest.dropoff_location is not null and latest.dropoff_location <> '{}'::jsonb,
+             'destinationReady', true,
              'providerActorId', latest.provider_actor_id,
              'etaAt', latest.eta_at
            ),
@@ -71,12 +67,10 @@ for each row
 when (new.destination is not null and new.destination <> '{}'::jsonb)
 execute function sync_transport_destination_from_case_spatial();
 
--- Backfill only destinationless active dispatches. Preserve updated_at so propagation cannot change
--- which dispatch is considered current. Existing nonempty untagged destinations are intentionally
--- treated as legacy explicit/unknown overrides and are not overwritten by future case corrections.
+-- Backfill active dispatches that predate this coherence rule.
 update transport_dispatches td
    set dropoff_location = s.destination,
-       metadata = coalesce(td.metadata,'{}'::jsonb) || jsonb_build_object('dropoffSource','case_spatial')
+       updated_at = now()
   from case_spatial_context s
  where s.case_id = td.case_id
    and s.destination is not null
