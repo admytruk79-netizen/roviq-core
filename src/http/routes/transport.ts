@@ -3,18 +3,37 @@ import { z } from 'zod';
 import { pool } from '../../db/pool.js';
 import { requireRole, requireRoleOrCapability } from '../middleware/principal.js';
 import { assignTransportDispatch, createTransportDispatch, getTransportDispatch, updateTransportStatus } from '../../services/transport.js';
+import { resolveTransportLocations } from '../../services/transport-spatial.js';
 
 const location = z.record(z.unknown()).optional();
 const status = z.enum(['accepted','en_route','arrived','vehicle_loaded','in_transit','delivered','declined','cancelled','failed']);
+
+const effectiveDispatchSelect = `
+  select td.*,
+    case when td.pickup_location='{}'::jsonb then
+      coalesce(nullif(s.current_vehicle,'{}'::jsonb),nullif(s.origin,'{}'::jsonb),nullif(d.location,'{}'::jsonb),td.pickup_location)
+      else td.pickup_location end as pickup_location,
+    case when td.dropoff_location='{}'::jsonb then
+      coalesce(nullif(s.destination,'{}'::jsonb),td.dropoff_location)
+      else td.dropoff_location end as dropoff_location,
+    case
+      when coalesce(nullif(td.pickup_location,'{}'::jsonb),nullif(s.current_vehicle,'{}'::jsonb),nullif(s.origin,'{}'::jsonb),nullif(d.location,'{}'::jsonb)) is null then 'location_pending'
+      when coalesce(nullif(td.dropoff_location,'{}'::jsonb),nullif(s.destination,'{}'::jsonb)) is null then 'pickup_ready'
+      else 'ready'
+    end as location_status
+  from transport_dispatches td
+  join service_cases c on c.id=td.case_id
+  left join case_spatial_context s on s.case_id=td.case_id
+  left join demand_requests d on d.id=c.demand_id`;
 
 export async function transportRoutes(app: FastifyInstance) {
   app.get('/api/admin/transport', { preHandler: requireRole('admin') }, async (req) => {
     const query = z.object({ caseId:z.string().uuid().optional(), status:status.optional() }).parse(req.query ?? {});
     const r = await pool.query(
-      `select * from transport_dispatches
-       where ($1::uuid is null or case_id=$1)
-         and ($2::text is null or status=$2)
-       order by created_at desc limit 200`,
+      `${effectiveDispatchSelect}
+       where ($1::uuid is null or td.case_id=$1)
+         and ($2::text is null or td.status=$2)
+       order by td.created_at desc limit 200`,
       [query.caseId ?? null, query.status ?? null]
     );
     return { dispatches:r.rows };
@@ -22,7 +41,17 @@ export async function transportRoutes(app: FastifyInstance) {
 
   app.post('/api/admin/transport', { preHandler: requireRole('admin') }, async (req, reply) => {
     const body = z.object({ caseId:z.string().uuid(), transportType:z.enum(['tow','valet']), pickupLocation:location, dropoffLocation:location, vehicleContext:z.record(z.unknown()).optional(), etaAt:z.string().datetime().optional(), metadata:z.record(z.unknown()).optional() }).parse(req.body);
-    try { return reply.code(201).send({ dispatch:await createTransportDispatch(req.principal,body) }); }
+    try {
+      const resolved = await resolveTransportLocations(body.caseId, body);
+      return reply.code(201).send({
+        dispatch:await createTransportDispatch(req.principal,{
+          ...body,
+          pickupLocation:resolved.pickupLocation,
+          dropoffLocation:resolved.dropoffLocation,
+          metadata:{...(body.metadata ?? {}),locationStatus:resolved.locationStatus}
+        })
+      });
+    }
     catch (e) { const message=e instanceof Error?e.message:'transport_create_failed'; if (message==='case_not_found') return reply.code(404).send({ error:message }); if (message==='invalid_case_transition') return reply.code(409).send({ error:message }); throw e; }
   });
   app.post('/api/admin/transport/:id/assign', { preHandler: requireRole('admin') }, async (req, reply) => {
@@ -31,7 +60,7 @@ export async function transportRoutes(app: FastifyInstance) {
     catch (e) { const message=e instanceof Error?e.message:'transport_assign_failed'; if (['dispatch_not_found','provider_not_found'].includes(message)) return reply.code(404).send({ error:message }); if (['dispatch_not_assignable','provider_not_transport_capable'].includes(message)) return reply.code(409).send({ error:message }); throw e; }
   });
   app.get('/api/transport/me/dispatches', { preHandler: requireRoleOrCapability('tow','tow','partner') }, async (req) => {
-    const r = await pool.query(`select * from transport_dispatches where provider_actor_id=$1 order by created_at desc limit 200`, [req.principal.actorId]);
+    const r = await pool.query(`${effectiveDispatchSelect} where td.provider_actor_id=$1 order by td.created_at desc limit 200`, [req.principal.actorId]);
     return { dispatches:r.rows };
   });
   app.get('/api/transport/me/history', { preHandler: requireRoleOrCapability('tow','tow','partner') }, async (req) => {
@@ -65,7 +94,12 @@ export async function transportRoutes(app: FastifyInstance) {
     return { dispatches:history };
   });
   app.get('/api/transport/:id', async (req, reply) => {
-    const { id } = req.params as { id:string }; const d = await getTransportDispatch(id); if (!d) return reply.code(404).send({ error:'dispatch_not_found' }); if (req.principal.role !== 'admin' && d.provider_actor_id !== req.principal.actorId) return reply.code(403).send({ error:'forbidden' }); return { dispatch:d };
+    const { id } = req.params as { id:string };
+    const base = await getTransportDispatch(id);
+    if (!base) return reply.code(404).send({ error:'dispatch_not_found' });
+    if (req.principal.role !== 'admin' && base.provider_actor_id !== req.principal.actorId) return reply.code(403).send({ error:'forbidden' });
+    const projected = await pool.query(`${effectiveDispatchSelect} where td.id=$1`,[id]);
+    return { dispatch:projected.rows[0] ?? base };
   });
   app.post('/api/transport/:id/location', { preHandler: requireRoleOrCapability('tow','tow','partner','admin') }, async (req, reply) => {
     const { id } = req.params as { id:string };
