@@ -3,9 +3,14 @@ import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
 import { assertCaseAccess } from './case-access.js';
 import { resolveShopPrincipalScope } from './shop-os-scope.js';
+import type { ShopResourceType } from './shop-os-resources.js';
 
 type Queryable=Pick<PoolClient,'query'>;
 export type ShopWaitlistAction='offer'|'book'|'cancel'|'expire'|'requeue';
+
+const shopResourceTypes = new Set<ShopResourceType>([
+  'bay','technician','advisor','equipment','mobile_unit','tow_unit','valet_driver','loaner_vehicle'
+]);
 
 function httpError(message:string,statusCode:number){
   const error=new Error(message) as Error&{statusCode:number};
@@ -49,10 +54,13 @@ export async function createShopWaitlistEntry(principal:Principal,input:{
   requestedAfter?:string|null;
   requestedBefore?:string|null;
   estimatedDurationMinutes?:number|null;
-  preferredResourceTypes?:string[];
+  preferredResourceTypes?:ShopResourceType[];
   priority?:number;
   notes?:string|null;
 }){
+  const preferences=input.preferredResourceTypes??[];
+  if(preferences.some((value)=>!shopResourceTypes.has(value))) throw httpError('preferred_resource_type_invalid',400);
+
   const client=await pool.connect();
   try{
     await client.query('begin');
@@ -64,7 +72,7 @@ export async function createShopWaitlistEntry(principal:Principal,input:{
     ) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning *`,[
       scope.organizationId,scope.locationId,input.serviceCaseId??null,input.requestedServiceCategory??null,
       input.requestedAfter??null,input.requestedBefore??null,input.estimatedDurationMinutes??null,
-      input.preferredResourceTypes??[],input.priority??100,input.notes??null,principal.actorId??null
+      preferences,input.priority??100,input.notes??null,principal.actorId??null
     ]);
     await client.query('commit');
     return created.rows[0];
