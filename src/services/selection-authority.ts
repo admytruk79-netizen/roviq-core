@@ -40,6 +40,19 @@ function assertSelectableCase(row:{state:string;selected_actor_id?:string|null})
   if(row.selected_actor_id) throw new Error('selection_already_recorded');
 }
 
+async function closeCompetingOffers(caseId:string,selectedOfferId:string,selectedActorId:string,client:PoolClient){
+  const closed=await client.query(`
+    update matches_offers
+       set outcome='declined',responded_at=coalesce(responded_at,now())
+     where case_id=$1 and id<>$2 and outcome='offered'
+     returning id,actor_id`,[caseId,selectedOfferId]);
+  if(!closed.rowCount)return;
+  await client.query(`insert into events(aggregate_type,aggregate_id,event_type,payload)
+    values('service_case',$1,'COMPETING_PROVIDER_OFFERS_CLOSED',$2)`,[
+    caseId,JSON.stringify({selectedOfferId,selectedActorId,closedOffers:closed.rows.map(row=>({offerId:row.id,actorId:row.actor_id}))})
+  ]);
+}
+
 export async function selectCaseActor(principal: Principal, caseId: string, actorId: string, rationale: Record<string,unknown> = {}) {
   const client = await pool.connect();
   try {
@@ -101,6 +114,8 @@ export async function selectCaseActor(principal: Principal, caseId: string, acto
       where id=$3 and state='provider_selection' and selected_actor_id is null
       returning *`,[actorId,mode,caseId]);
     if(!updatedCase.rowCount) throw new Error('case_not_selectable');
+
+    await closeCompetingOffers(caseId,offer.id,actorId,client);
 
     await client.query(
       `insert into case_selections(case_id,recommended_actor_id,selected_actor_id,selection_mode,authority_role,authority_actor_id,rationale)
