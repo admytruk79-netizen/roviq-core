@@ -6,16 +6,25 @@ import { Login } from './pages/Login';
 import { Cases } from './pages/Cases';
 import { Exceptions } from './pages/Exceptions';
 import { CaseDetail } from './pages/CaseDetail';
+import { CaseActionView } from './pages/CaseActionView';
 import { PartsHandoff } from './pages/PartsHandoff';
 import { PaymentHandoff } from './pages/PaymentHandoff';
 import { NetworkMap } from './pages/NetworkMap';
 
 function CaseControl() {
   return (
-    <div className="space-y-6">
-      <CaseDetail />
-      <PartsHandoff />
-      <PaymentHandoff />
+    <div className="space-y-4">
+      <CaseActionView />
+      <details className="rounded-xl border border-slate-200 bg-white">
+        <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-700">Case tools & details</summary>
+        <div className="border-t border-slate-200 p-4">
+          <CaseDetail />
+          <div className="mt-6 space-y-6">
+            <PartsHandoff />
+            <PaymentHandoff />
+          </div>
+        </div>
+      </details>
     </div>
   );
 }
