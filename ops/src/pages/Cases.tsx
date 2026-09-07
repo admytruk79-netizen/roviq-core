@@ -50,7 +50,7 @@ export function Cases() {
             <option value="">All states</option>
             {CASE_STATES.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
           </select>
-          <button type="button" className="roviq-button-secondary" onClick={() => setRefreshKey(key => key + 1)} disabled={loading} aria-busy={loading}>
+          <button type="button" className="roviq-btn-secondary" onClick={() => setRefreshKey(key => key + 1)} disabled={loading} aria-busy={loading}>
             {loading ? 'Refreshing…' : 'Refresh'}
           </button>
         </div>
@@ -62,7 +62,7 @@ export function Cases() {
         <div><span>Priority watch</span><strong>{critical}</strong></div>
       </section>
 
-      {error && <div className="ops-error" role="alert"><span>{error}</span><button type="button" className="roviq-button-secondary" onClick={() => setRefreshKey(key => key + 1)}>Try again</button></div>}
+      {error && <div className="ops-error flex flex-wrap items-center justify-between gap-3" role="alert"><span>{error}</span><button type="button" className="roviq-btn-secondary" onClick={() => setRefreshKey(key => key + 1)}>Try again</button></div>}
       {loading && <div className="roviq-panel p-5 text-sm roviq-muted" role="status" aria-live="polite">Loading operational cases…</div>}
       {cases !== null && cases.length === 0 && <div className="roviq-panel ops-empty" role="status">No cases match this filter.</div>}
 
