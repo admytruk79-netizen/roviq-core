@@ -9,8 +9,9 @@
 .case-spatial .live-map-wrap{height:min(58vh,520px)!important;min-height:360px}
 .map-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}
 .mode-switch{display:inline-flex;padding:3px;border:1px solid var(--line);border-radius:999px;background:rgba(7,17,29,.55)}
-.mode-switch button{border:0;background:transparent;color:var(--muted);border-radius:999px;padding:6px 10px;font:inherit;font-size:11px;font-weight:800;cursor:pointer}
+.mode-switch button{border:0;background:transparent;color:var(--muted);border-radius:999px;padding:8px 12px;font:inherit;font-size:11px;font-weight:800;cursor:pointer;min-height:36px}
 .mode-switch button.active{background:rgba(228,111,53,.2);color:#fff}
+.live-badge{white-space:nowrap}
 .spatial-grid>div{min-height:76px!important;padding:12px 14px!important}
 .success-message{margin-top:12px!important;padding:11px 13px!important;border-color:rgba(88,223,207,.35)!important;color:#c8fff6!important}
 .offer-focus{margin-top:12px;padding:20px}
@@ -21,21 +22,28 @@
 .section-head .eyebrow{margin-top:0}
 .section-head h2{margin:5px 0 0;font-size:20px}
 .grid{margin-top:12px!important;gap:10px!important}
-.queue-card{padding:15px!important}
+.queue-card{padding:15px!important;text-align:left!important;min-height:128px;transition:transform .14s ease,border-color .14s ease,box-shadow .14s ease}
+.queue-card:hover,.queue-card:focus-visible{transform:translateY(-1px);border-color:rgba(228,111,53,.45)!important;box-shadow:0 12px 32px rgba(0,0,0,.2)}
 .queue-card h3{font-size:18px!important;margin:7px 0 5px!important;text-transform:none!important}
 .queue-card p{margin:4px 0 9px!important}
 .form{margin-top:12px!important}
 .finding-form{border-color:rgba(228,111,53,.28)!important}
 .finding-form .form-head .eyebrow{margin-top:0}
+.finding-form textarea{min-height:128px}
+.form input,.form select,.form textarea{font-size:16px!important}
 .safety-panel{padding:12px!important;margin-top:12px!important}
 .safety-panel .eyebrow{margin-top:0!important}
 .check-row{display:flex!important;align-items:center!important;gap:9px!important;margin-top:8px!important}
 .check-row input{width:auto!important;flex:none}
 .authorization{margin-top:14px!important}
 .decision-panel{text-transform:none}
+.primary:focus-visible,.secondary:focus-visible,.queue-card:focus-visible,.mode-switch button:focus-visible{outline:3px solid rgba(88,223,207,.5)!important;outline-offset:2px!important}
+.empty-state{max-width:620px;margin:12px auto 0!important;text-align:center}
 @media(max-width:640px){
   .app-header{min-height:56px!important;padding:8px 10px!important}
-  main{padding:10px 10px 28px!important}
+  .app-header .brand{min-width:0!important}
+  .portal-label{display:none!important}
+  main{padding:10px 10px calc(32px + env(safe-area-inset-bottom))!important}
   .hero{display:grid!important;grid-template-columns:1fr auto!important;gap:10px!important;padding:6px 2px!important}
   .hero .eyebrow{margin:0!important;font-size:10px!important}
   .hero h1{font-size:22px!important;margin:4px 0!important}
@@ -46,22 +54,34 @@
   .case-spatial .local-head p{display:none!important}
   .case-spatial .local-head h2{font-size:17px!important;line-height:1.25!important}
   .map-controls{justify-content:space-between;width:100%}
-  .case-spatial .live-map-wrap{height:50vh!important;min-height:340px!important}
+  .case-spatial .live-map-wrap{height:46vh!important;min-height:300px!important;max-height:440px!important}
   .spatial-grid{grid-template-columns:1fr 1fr!important}
   .spatial-grid>div{min-height:68px!important;padding:10px!important}
   .spatial-grid span{font-size:9px!important}
-  .spatial-grid strong{font-size:12px!important}
+  .spatial-grid strong{font-size:12px!important;overflow-wrap:anywhere}
   .offer-focus{padding:14px!important;border-radius:14px!important}
   .offer-focus .actions{grid-template-columns:1fr 1fr!important}
   .offer-focus .actions button:last-child{grid-column:1/-1}
   .section-head{align-items:center}
   .section-head h2{font-size:17px!important}
-  .queue-card{padding:12px!important;border-radius:14px!important}
+  .queue-card{padding:12px!important;border-radius:14px!important;min-height:116px!important}
   .queue-card h3{font-size:16px!important}
   .form{padding:14px!important;border-radius:14px!important}
+  .form-head{align-items:flex-start!important;gap:8px!important}
   .form-head h2{font-size:18px!important}
   .form-head p{font-size:12px!important}
   .form-grid{grid-template-columns:1fr!important}
-  .actions{display:grid!important;grid-template-columns:1fr 1fr!important}
-  .actions button{min-height:48px!important;width:100%!important}
+  .actions{display:grid!important;grid-template-columns:1fr 1fr!important;gap:8px!important}
+  .actions button{min-height:50px!important;width:100%!important}
+  .finding-form .actions{position:sticky;bottom:calc(8px + env(safe-area-inset-bottom));z-index:12;margin:16px -6px -6px!important;padding:8px!important;border:1px solid var(--line);border-radius:14px;background:rgba(7,17,29,.94);backdrop-filter:blur(14px)}
+  .finding-form .actions .primary{grid-column:1/-1;order:-1}
+}
+@media(max-height:560px) and (orientation:landscape){
+  .case-spatial .live-map-wrap{height:58vh!important;min-height:230px!important}
+  .case-spatial .local-head{padding:8px 10px!important}
+  .spatial-grid>div{min-height:56px!important}
+}
+@media(prefers-reduced-motion:reduce){
+  .queue-card{transition:none!important}
+  *{scroll-behavior:auto!important}
 }
