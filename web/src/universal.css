@@ -5,15 +5,7 @@
 :where(button,[role="button"]):disabled,[aria-disabled="true"]{cursor:not-allowed}
 [aria-busy="true"]{cursor:progress}
 :where(.roviq-panel,.roviq-case-card,.roviq-summary-strip>div){scroll-margin-top:80px}
-@media(max-width:640px){
-  .roviq-nav-link{min-height:44px!important}
-}
-@media(prefers-reduced-motion:reduce){
-  html{scroll-behavior:auto!important}
-  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;transition-delay:0s!important}
-  .roviq-btn-primary{transform:none!important}
-}
-@media(forced-colors:active){
-  :where(.roviq-panel,.roviq-case-card,.roviq-summary-strip>div){border:1px solid CanvasText!important}
-  :where(button,a[href],input,select,textarea,[role="button"]):focus-visible{outline:2px solid Highlight!important}
-}
+.roviq-case-card{transition:transform .15s ease,border-color .15s ease,box-shadow .15s ease}.roviq-case-card:hover,.roviq-case-card:focus-visible{transform:translateY(-2px);border-color:rgba(228,111,53,.44)!important;box-shadow:0 22px 54px rgba(0,0,0,.28)!important}.roviq-summary-strip>div{box-shadow:inset 0 1px 0 rgba(255,255,255,.035)}.roviq-btn-primary:hover{filter:brightness(1.06);transform:translateY(-1px)}.roviq-btn-secondary:hover,.roviq-nav-link:hover{border-color:rgba(228,111,53,.42)!important;color:var(--roviq-copper-soft)!important}.roviq-error{display:flex;align-items:center;justify-content:space-between;gap:12px;border-left:4px solid var(--roviq-danger)!important}.roviq-customer-hero{max-width:1100px}.roviq-case-copy{min-width:0}.roviq-case-copy p{line-height:1.45}.roviq-case-status{white-space:nowrap}
+@media(max-width:640px){.roviq-nav-link{min-height:44px!important}.roviq-case-card{align-items:flex-start!important}.roviq-case-status{align-self:center}.roviq-error{align-items:stretch;flex-direction:column}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto!important}*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;transition-delay:0s!important}.roviq-btn-primary,.roviq-case-card{transform:none!important}}
+@media(forced-colors:active){:where(.roviq-panel,.roviq-case-card,.roviq-summary-strip>div){border:1px solid CanvasText!important}:where(button,a[href],input,select,textarea,[role="button"]):focus-visible{outline:2px solid Highlight!important}}
