@@ -16,6 +16,9 @@ async function setupServiceDay(){
   const org=await pool.query(`insert into organizations(organization_type,display_name) values('shop',$1) returning id`,[
     `Shop OS Service Day ${Date.now()}-${Math.random()}`
   ]);
+  await pool.query(`insert into partner_system_connections(
+      organization_id,mode,provider_key,display_name,connection_status
+    ) values($1,'roviq_native','roviq','Shop OS Native','active')`,[org.rows[0].id]);
   const shopActor=await pool.query(`insert into actors(actor_type,status,organization_id) values('shop','active',$1) returning id`,[org.rows[0].id]);
   const technician=await pool.query(`insert into actors(actor_type,status,organization_id) values('technician','active',$1) returning id`,[org.rows[0].id]);
   const customer=await pool.query(`insert into actors(actor_type,status) values('customer','active') returning id`);
