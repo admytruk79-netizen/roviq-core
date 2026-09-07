@@ -11,6 +11,10 @@
 .tow-nav button,.tow-header-actions button,.tow-mode button,.job-row,.assignment-actions button,.field-service button{min-height:44px}
 .tow-nav button:focus-visible,.tow-header-actions button:focus-visible,.tow-mode button:focus-visible,.job-row:focus-visible,.assignment-actions button:focus-visible,.field-service button:focus-visible{outline:3px solid rgba(88,223,207,.58)!important;outline-offset:2px!important}
 [aria-busy="true"]{cursor:progress}
+/* Status and next action remain readable without relying on map position or color alone. */
+.active-dispatch .pill{display:inline-flex;align-items:center;min-height:28px}
+.tow-next{display:block!important}
+.error,.tow-error{border-left:4px solid currentColor}
 @media(max-width:700px){
   .tow-header{display:grid!important;grid-template-columns:1fr auto!important;padding:8px 10px!important;min-height:58px}
   .tow-nav{grid-column:1/-1!important;display:grid!important;grid-template-columns:repeat(3,1fr)!important;margin-top:4px}
@@ -22,8 +26,9 @@
   #tow-case-map{margin:0!important}
   .live-map-wrap{height:64vh!important;min-height:430px!important}
   .active-dispatch{margin:-108px 10px 0!important;border-radius:18px!important;padding:14px!important}
-  .active-dispatch h2{display:none!important}
-  .active-dispatch>p:not(.tow-next){display:none!important}
+  /* Keep dispatch identity/status visible: hiding it forced drivers to infer context from the map. */
+  .active-dispatch h2{display:block!important;font-size:15px!important;margin:6px 0 2px!important}
+  .active-dispatch>p:not(.tow-next){display:block!important;font-size:11px!important;white-space:normal}
   .active-dispatch .pill{font-size:10px!important}
   .assignment-actions{grid-template-columns:1fr 1fr!important}
   .field-service{margin:0 10px!important}
