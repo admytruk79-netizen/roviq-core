@@ -60,9 +60,13 @@ export async function recordRecommendation(caseId: string, actorId: string | nul
   }
 }
 
-async function reserveSelectionCapacity(caseId:string,serviceability:{source:string;capacityWindowId:string|null},client:PoolClient){
+async function reserveSelectionCapacity(
+  caseId:string,
+  serviceability:{source:string;capacityWindowId:string|null;serviceTargetAt:Date},
+  client:PoolClient
+){
   if(serviceability.source!=='canonical_capacity'||!serviceability.capacityWindowId) return;
-  await reserveCanonicalCapacity(caseId,serviceability.capacityWindowId,client,1);
+  await reserveCanonicalCapacity(caseId,serviceability.capacityWindowId,client,1,serviceability.serviceTargetAt);
 }
 
 function assertSelectableCase(row:{state:string;selected_actor_id?:string|null}){
@@ -113,8 +117,8 @@ export async function authorizeExistingOfferSelection(
   await closeCompetingOffers(caseId,offer.id,actorId,client);
   await client.query(`insert into case_selections(case_id,recommended_actor_id,selected_actor_id,selection_mode,authority_role,authority_actor_id,rationale)
     values($1,$2,$3,$4,$5,$6,$7)`,[caseId,row.recommended_actor_id??null,actorId,mode,principal.role,principal.actorId??null,
-    JSON.stringify({...rationale,fromState:row.state,serviceability:{serviceCategory:capability,capacitySource:serviceability.source,capacityWindowId:serviceability.capacityWindowId,capacityUnits:serviceability.capacityUnits}})]);
-  await appendCaseEvent(caseId,'PROVIDER_SELECTED',principal,{actorId,selectionMode:mode,fromState:row.state,...rationale,serviceability:{serviceCategory:capability,capacitySource:serviceability.source,capacityWindowId:serviceability.capacityWindowId,capacityUnits:serviceability.capacityUnits}},client);
+    JSON.stringify({...rationale,fromState:row.state,serviceability:{serviceCategory:capability,capacitySource:serviceability.source,capacityWindowId:serviceability.capacityWindowId,capacityUnits:serviceability.capacityUnits,serviceTargetAt:serviceability.serviceTargetAt.toISOString()}})]);
+  await appendCaseEvent(caseId,'PROVIDER_SELECTED',principal,{actorId,selectionMode:mode,fromState:row.state,...rationale,serviceability:{serviceCategory:capability,capacitySource:serviceability.source,capacityWindowId:serviceability.capacityWindowId,capacityUnits:serviceability.capacityUnits,serviceTargetAt:serviceability.serviceTargetAt.toISOString()}},client);
   await appendCaseEvent(caseId,'CASE_PROVIDER_PENDING',principal,{from:row.state,to:'provider_pending',offerId:offer.id,providerActorId:actorId,selectionMode:mode,source:'authorized_existing_offer'},client);
   return {case:updatedCase.rows[0],serviceability};
 }
@@ -198,9 +202,9 @@ export async function selectCaseActor(principal: Principal, caseId: string, acto
     await client.query(
       `insert into case_selections(case_id,recommended_actor_id,selected_actor_id,selection_mode,authority_role,authority_actor_id,rationale)
        values($1,$2,$3,$4,$5,$6,$7)`,
-      [caseId,row.recommended_actor_id ?? null,actorId,mode,principal.role,principal.actorId ?? null,JSON.stringify({...rationale,serviceability:{serviceCategory:capability,capacitySource:serviceability.source,capacityWindowId:serviceability.capacityWindowId,capacityUnits:serviceability.capacityUnits}})]
+      [caseId,row.recommended_actor_id ?? null,actorId,mode,principal.role,principal.actorId ?? null,JSON.stringify({...rationale,serviceability:{serviceCategory:capability,capacitySource:serviceability.source,capacityWindowId:serviceability.capacityWindowId,capacityUnits:serviceability.capacityUnits,serviceTargetAt:serviceability.serviceTargetAt.toISOString()}})]
     );
-    await appendCaseEvent(caseId,'PROVIDER_SELECTED',principal,{actorId,selectionMode:mode,...rationale,serviceability:{serviceCategory:capability,capacitySource:serviceability.source,capacityWindowId:serviceability.capacityWindowId,capacityUnits:serviceability.capacityUnits}},client);
+    await appendCaseEvent(caseId,'PROVIDER_SELECTED',principal,{actorId,selectionMode:mode,...rationale,serviceability:{serviceCategory:capability,capacitySource:serviceability.source,capacityWindowId:serviceability.capacityWindowId,capacityUnits:serviceability.capacityUnits,serviceTargetAt:serviceability.serviceTargetAt.toISOString()}},client);
     await appendCaseEvent(caseId,'CASE_PROVIDER_PENDING',principal,{from:'provider_selection',to:'provider_pending',offerId:offer.id,providerActorId:actorId,selectionMode:mode,source:'authorized_provider_selection'},client);
     await client.query('commit');
     return {caseId,selectedActorId:actorId,selectionMode:mode,serviceability:serviceability.decision,offer,case:updatedCase.rows[0]};
@@ -242,14 +246,14 @@ export async function autoDispatchCase(caseId: string, actorId: string, routingD
     await client.query(
       `insert into case_selections(case_id,recommended_actor_id,selected_actor_id,selection_mode,authority_role,routing_decision_id,rationale)
        values($1,$2,$3,'auto_dispatch','system',$4,$5)`,
-      [caseId,c.rows[0].recommended_actor_id ?? null,actorId,routingDecisionId,JSON.stringify({...rationale,serviceability:{serviceCategory:capability,capacitySource:serviceability.source,capacityWindowId:serviceability.capacityWindowId,capacityUnits:serviceability.capacityUnits}})]
+      [caseId,c.rows[0].recommended_actor_id ?? null,actorId,routingDecisionId,JSON.stringify({...rationale,serviceability:{serviceCategory:capability,capacitySource:serviceability.source,capacityWindowId:serviceability.capacityWindowId,capacityUnits:serviceability.capacityUnits,serviceTargetAt:serviceability.serviceTargetAt.toISOString()}})]
     );
     await client.query(
       `insert into events(aggregate_type,aggregate_id,event_type,payload)
        values('service_case',$1,'PROVIDER_AUTO_DISPATCHED',$2),
              ('service_case',$1,'CASE_PROVIDER_PENDING',$3)`,
       [caseId,
-       JSON.stringify({actorId,routingDecisionId,...rationale,serviceability:{serviceCategory:capability,capacitySource:serviceability.source,capacityWindowId:serviceability.capacityWindowId,capacityUnits:serviceability.capacityUnits}}),
+       JSON.stringify({actorId,routingDecisionId,...rationale,serviceability:{serviceCategory:capability,capacitySource:serviceability.source,capacityWindowId:serviceability.capacityWindowId,capacityUnits:serviceability.capacityUnits,serviceTargetAt:serviceability.serviceTargetAt.toISOString()}}),
        JSON.stringify({from:'provider_selection',to:'provider_pending',providerActorId:actorId,selectionMode:'auto_dispatch',routingDecisionId})]
     );
     await client.query('commit');
