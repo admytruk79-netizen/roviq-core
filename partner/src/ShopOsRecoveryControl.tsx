@@ -1,6 +1,6 @@
 import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
 import {api} from './api';
-import {isRecoverableAppointment,replacementAppointmentBody,type RecoverableAppointment} from './shop-os-recovery-model';
+import {defaultRecoveryWindow,isRecoverableAppointment,replacementAppointmentBody,type RecoverableAppointment} from './shop-os-recovery-model';
 
 type Resource={id:string;resource_type:string;display_name:string;operational_state?:'available'|'busy'|'blocked'|'offline';active?:boolean};
 type Board={appointments:RecoverableAppointment[]};
@@ -48,9 +48,10 @@ export function ShopOsRecoveryControl(){
   const availableResources=useMemo(()=>resources.filter(r=>r.active!==false&&!['blocked','offline'].includes(r.operational_state??'available')),[resources]);
 
   function openRecovery(appointment:RecoverableAppointment){
+    const window=defaultRecoveryWindow(appointment);
     setEditing(appointment);
-    setStartValue(toLocalInput(appointment.starts_at));
-    setEndValue(toLocalInput(appointment.ends_at));
+    setStartValue(toLocalInput(window.startsAt));
+    setEndValue(toLocalInput(window.endsAt));
     const current=availableResources.find(r=>r.id===appointment.resource_id)?.id??availableResources[0]?.id??'';
     setResourceValue(current);
     setMessage(null);setError(null);
@@ -61,6 +62,7 @@ export function ShopOsRecoveryControl(){
     if(!resourceValue){setError('Choose an available resource before creating the replacement appointment.');return;}
     if(!startValue||!endValue){setError('Choose both a new start and end time.');return;}
     const startsAt=fromLocalInput(startValue),endsAt=fromLocalInput(endValue);
+    if(new Date(startsAt).getTime()<=Date.now()){setError('Choose a future start time for the replacement appointment.');return;}
     if(new Date(endsAt).getTime()<=new Date(startsAt).getTime()){setError('End time must be after start time.');return;}
     setBusy(editing.id);setMessage(null);setError(null);
     try{
