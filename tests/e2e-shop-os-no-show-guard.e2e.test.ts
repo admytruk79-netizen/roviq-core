@@ -39,6 +39,24 @@ describe('Shop OS no-show timing guard',()=>{
     `,[appointment.rows[0].id])).rejects.toMatchObject({message:'appointment_no_show_before_start'});
   });
 
+  it('uses wall-clock time inside a long transaction once the appointment becomes due',async()=>{
+    const client=await pool.connect();
+    try{
+      await client.query('begin');
+      const appointment=await client.query(`
+        insert into roviq_appointments(appointment_status,starts_at,ends_at,service_category)
+        values('held',clock_timestamp()+interval '150 milliseconds',clock_timestamp()+interval '60 minutes','repair')
+        returning id`);
+      await client.query(`select pg_sleep(0.2)`);
+      const updated=await client.query(`
+        update roviq_appointments set appointment_status='no_show',updated_at=clock_timestamp() where id=$1
+        returning appointment_status
+      `,[appointment.rows[0].id]);
+      expect(updated.rows[0].appointment_status).toBe('no_show');
+      await client.query('commit');
+    }catch(error){await client.query('rollback');throw error;}finally{client.release();}
+  });
+
   it('allows no-show once the scheduled start has been reached',async()=>{
     const appointment=await pool.query(`
       insert into roviq_appointments(appointment_status,starts_at,ends_at,service_category)
