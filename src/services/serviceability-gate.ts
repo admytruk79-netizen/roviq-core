@@ -81,13 +81,13 @@ export async function evaluateActorServiceability(
             case when $1::uuid is not null and cw.location_id=$1 then 0 else 1 end as scope_rank
        from capacity_windows cw
        left join partner_system_connections psc on psc.id=cw.source_connection_id
-      where cw.window_start<=now() and cw.window_end>now()
+      where cw.window_end>now()
         and (
           ($1::uuid is not null and cw.location_id=$1)
           or ($2::uuid is not null and cw.organization_id=$2 and cw.location_id is null)
         )
         and ($3::text is null or cw.service_category is null or cw.service_category=$3)
-      order by scope_rank asc,(cw.service_category=$3) desc nulls last,cw.updated_at desc,cw.capacity_units desc`,
+      order by scope_rank asc,(cw.service_category=$3) desc nulls last,cw.window_start asc,cw.updated_at desc,cw.capacity_units desc`,
     [a.location_id ?? null,a.organization_id ?? null,serviceCategory ?? null,caseId ?? null]
   );
 
