@@ -31,10 +31,14 @@ export function Cases() {
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
+    let activeRequest = true;
     setCases(null);
     setError(null);
     const query = stateFilter ? `?state=${stateFilter}` : '';
-    api.get<{ cases: ServiceCase[] }>(`/api/admin/cases${query}`).then((res) => setCases(res.cases)).catch(() => setError('Could not load cases. Check the connection and try again.'));
+    api.get<{ cases: ServiceCase[] }>(`/api/admin/cases${query}`)
+      .then((res) => { if (activeRequest) setCases(res.cases); })
+      .catch(() => { if (activeRequest) setError('Could not load cases. Check the connection and try again.'); });
+    return () => { activeRequest = false; };
   }, [stateFilter, refreshKey]);
 
   const critical = useMemo(() => cases?.filter(c => ['critical','emergency','high'].includes(String(c.priority).toLowerCase())).length ?? 0,[cases]);
