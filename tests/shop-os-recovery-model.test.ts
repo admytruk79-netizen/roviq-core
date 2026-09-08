@@ -13,11 +13,12 @@ const base={
 };
 
 describe('Shop OS cancelled/no-show recovery model',()=>{
-  it('treats only cancelled and no-show appointments as recoverable terminal history',()=>{
+  it('treats only unrecovered cancelled and no-show appointments as actionable',()=>{
     expect(isRecoverableAppointment(base)).toBe(true);
     expect(isRecoverableAppointment({...base,appointment_status:'no_show'})).toBe(true);
     expect(isRecoverableAppointment({...base,appointment_status:'held'})).toBe(false);
     expect(isRecoverableAppointment({...base,appointment_status:'completed'})).toBe(false);
+    expect(isRecoverableAppointment({...base,active_replacement_appointment_id:'55555555-5555-4555-8555-555555555555'})).toBe(false);
   });
 
   it('moves an elapsed appointment to the next future half-hour slot while preserving duration',()=>{
@@ -30,7 +31,7 @@ describe('Shop OS cancelled/no-show recovery model',()=>{
     expect(window).toEqual({startsAt:base.starts_at,endsAt:base.ends_at});
   });
 
-  it('creates a new held booking payload without mutating the terminal appointment',()=>{
+  it('creates a new held booking payload linked to its terminal source',()=>{
     const body=replacementAppointmentBody(
       base,
       '44444444-4444-4444-8444-444444444444',
@@ -45,7 +46,8 @@ describe('Shop OS cancelled/no-show recovery model',()=>{
       serviceCategory:'maintenance',
       status:'held',
       customerVisibleSummary:'Brake service',
-      internalNotes:`Replacement appointment for cancelled appointment ${base.id}`
+      internalNotes:`Replacement appointment for cancelled appointment ${base.id}`,
+      recoverySourceAppointmentId:base.id
     });
     expect(base.appointment_status).toBe('cancelled');
   });
