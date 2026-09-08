@@ -81,7 +81,8 @@ export async function evaluateActorServiceability(
             case when $1::uuid is not null and cw.location_id=$1 then 0 else 1 end as scope_rank
        from capacity_windows cw
        left join partner_system_connections psc on psc.id=cw.source_connection_id
-      where cw.window_end>now()
+      where cw.window_start<=now()
+        and cw.window_end>now()
         and (
           ($1::uuid is not null and cw.location_id=$1)
           or ($2::uuid is not null and cw.organization_id=$2 and cw.location_id is null)
