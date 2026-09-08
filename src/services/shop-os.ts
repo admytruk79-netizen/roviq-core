@@ -89,9 +89,14 @@ async function assertManageableServiceCase(principal:Principal,serviceCaseId:str
         where sc.id=$1 and owner.organization_id=$2
       )
       or exists(
+        select 1 from service_cases sc
+        join actors selected on selected.id=sc.selected_actor_id
+        where sc.id=$1 and selected.organization_id=$2
+      )
+      or exists(
         select 1 from matches_offers mo
         join actors provider on provider.id=mo.actor_id
-        where mo.case_id=$1 and provider.organization_id=$2
+        where mo.case_id=$1 and mo.outcome='accepted' and provider.organization_id=$2
       )
     ) as linked`,[serviceCaseId,organizationId]);
   if(!linked.rows[0]?.linked) throw httpError('service_case_tenant_mismatch',409);
@@ -223,6 +228,11 @@ async function consumeMatchingCaseReservation(serviceCaseId:string|null|undefine
       and capacity_window_id=$2
       and state='held'
       and expires_at>now()`,[serviceCaseId,capacityWindowId]);
+  await db.query(`update capacity_reservations
+    set state='released',released_at=coalesce(released_at,now()),updated_at=now()
+    where service_case_id=$1
+      and capacity_window_id<>$2
+      and state='held'`,[serviceCaseId,capacityWindowId]);
 }
 
 export async function rebuildShopOsCapacity(resourceId:string,db:Queryable){
