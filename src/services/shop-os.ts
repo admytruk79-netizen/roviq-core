@@ -330,12 +330,12 @@ export async function createShopOsAppointment(principal:Principal,input:{
       recoverySource=source.rows[0];
       if(!['cancelled','no_show'].includes(recoverySource.appointment_status)) throw httpError('recovery_source_not_terminal',409);
       if((recoverySource.service_case_id??null)!==(input.serviceCaseId??null)) throw httpError('recovery_source_case_mismatch',409);
-      const activeReplacement=await client.query(`
+      const satisfyingReplacement=await client.query(`
         select id from roviq_appointments
         where recovery_source_appointment_id=$1
-          and appointment_status in ('held','confirmed','in_progress')
+          and appointment_status in ('held','confirmed','in_progress','completed')
         order by created_at asc,id asc limit 1`,[input.recoverySourceAppointmentId]);
-      if(activeReplacement.rowCount) throw httpError('appointment_recovery_already_exists',409);
+      if(satisfyingReplacement.rowCount) throw httpError('appointment_recovery_already_exists',409);
     }
 
     const resource=await loadManageableResource(principal,input.resourceId,client);
