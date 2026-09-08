@@ -110,14 +110,14 @@ export async function updateShopWaitlistEntry(principal:Principal,entryId:string
     let canonicalOfferExpiry:string|Date|null=null;
     if(input.action==='offer'){
       if(row.state!=='waiting') throw httpError('waitlist_transition_invalid',409);
-      const expiry=await client.query(`select now()+interval '30 minutes' as expires_at`);
+      const expiry=await client.query(`select clock_timestamp()+interval '30 minutes' as expires_at`);
       canonicalOfferExpiry=expiry.rows[0].expires_at;
       nextState='offered';
     }else if(input.action==='book'){
       if(!['waiting','offered'].includes(row.state)) throw httpError('waitlist_transition_invalid',409);
       if(!input.appointmentId) throw httpError('appointment_id_required',400);
       if(row.state==='offered'){
-        const active=await client.query(`select $1::timestamptz>now() as active`,[row.offer_expires_at]);
+        const active=await client.query(`select $1::timestamptz>clock_timestamp() as active`,[row.offer_expires_at]);
         if(!active.rows[0]?.active) throw httpError('waitlist_offer_expired',409);
       }
       const appointment=await client.query(`
