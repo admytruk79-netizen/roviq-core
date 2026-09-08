@@ -32,7 +32,7 @@ export function ShopOsWaitlistControl(){
     const requestId=++requestSequence.current;
     setLoading(true);setError(null);
     try{
-      const response=await api.get<{entries:WaitlistEntry[]}>('/api/shop-os/waitlist');
+      const response=await api.get<{entries:WaitlistEntry[]}>('/api/shop-os/waitlist?states=waiting,offered,expired,booked,cancelled');
       if(requestId!==requestSequence.current)return;
       setEntries(response.entries??[]);
     }catch(e){
@@ -47,7 +47,7 @@ export function ShopOsWaitlistControl(){
 
   const ordered=useMemo(()=>[...entries].sort((a,b)=>{
     const rank:Record<string,number>={offered:0,waiting:1,expired:2,booked:3,cancelled:4};
-    return (rank[a.state]??9)-(rank[b.state]??9)||(b.priority??0)-(a.priority??0);
+    return (rank[a.state]??9)-(rank[b.state]??9)||(a.priority??0)-(b.priority??0);
   }),[entries]);
 
   async function act(entry:WaitlistEntry,action:'offer'|'book'|'cancel'|'expire'|'requeue'){
