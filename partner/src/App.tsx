@@ -10,6 +10,7 @@ import { ShopOsScheduleControl } from './ShopOsScheduleControl';
 import { ShopOsWaitlistControl } from './ShopOsWaitlistControl';
 import { ShopOsRecoveryControl } from './ShopOsRecoveryControl';
 import { ShopOsDeferredServiceControl } from './ShopOsDeferredServiceControl';
+import { ShopOsRepairOrderDetailControl } from './ShopOsRepairOrderDetailControl';
 
 function Portal() {
   const { principal } = useAuth();
@@ -46,6 +47,7 @@ function Portal() {
         <ShopOsWorkspace />
         <ShopOsRecoveryControl />
         <ShopOsWaitlistControl />
+        <ShopOsRepairOrderDetailControl />
         <ShopOsDviControl />
         <ShopOsFloorControl />
         <ShopOsDeferredServiceControl />
