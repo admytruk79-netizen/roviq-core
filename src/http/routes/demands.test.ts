@@ -1,5 +1,5 @@
 import { describe,expect,it } from 'vitest';
-import { createDemandSchema } from './demands.js';
+import { createDemandSchema } from './demand-schema.js';
 
 describe('maintenance demand schedule validation',()=>{
   it('accepts the legacy attributes timestamp only after validating and canonicalizing it',()=>{
