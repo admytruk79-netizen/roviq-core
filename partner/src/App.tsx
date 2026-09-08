@@ -9,6 +9,7 @@ import { ShopOsFloorControl } from './ShopOsFloorControl';
 import { ShopOsScheduleControl } from './ShopOsScheduleControl';
 import { ShopOsWaitlistControl } from './ShopOsWaitlistControl';
 import { ShopOsRecoveryControl } from './ShopOsRecoveryControl';
+import { ShopOsDeferredServiceControl } from './ShopOsDeferredServiceControl';
 
 function Portal() {
   const { principal } = useAuth();
@@ -47,6 +48,7 @@ function Portal() {
         <ShopOsWaitlistControl />
         <ShopOsDviControl />
         <ShopOsFloorControl />
+        <ShopOsDeferredServiceControl />
       </section>
       <LocalMap />
     </Dashboard>
