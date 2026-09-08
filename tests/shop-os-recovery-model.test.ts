@@ -1,5 +1,5 @@
 import {describe,expect,it} from 'vitest';
-import {isRecoverableAppointment,replacementAppointmentBody} from '../partner/src/shop-os-recovery-model.js';
+import {defaultRecoveryWindow,isRecoverableAppointment,replacementAppointmentBody} from '../partner/src/shop-os-recovery-model.js';
 
 const base={
   id:'11111111-1111-4111-8111-111111111111',
@@ -18,6 +18,16 @@ describe('Shop OS cancelled/no-show recovery model',()=>{
     expect(isRecoverableAppointment({...base,appointment_status:'no_show'})).toBe(true);
     expect(isRecoverableAppointment({...base,appointment_status:'held'})).toBe(false);
     expect(isRecoverableAppointment({...base,appointment_status:'completed'})).toBe(false);
+  });
+
+  it('moves an elapsed appointment to the next future half-hour slot while preserving duration',()=>{
+    const window=defaultRecoveryWindow(base,new Date('2026-09-08T18:05:00.000Z').getTime());
+    expect(window).toEqual({startsAt:'2026-09-08T19:00:00.000Z',endsAt:'2026-09-08T20:00:00.000Z'});
+  });
+
+  it('keeps an already-future original slot when it remains safely ahead of now',()=>{
+    const window=defaultRecoveryWindow(base,new Date('2026-09-08T14:00:00.000Z').getTime());
+    expect(window).toEqual({startsAt:base.starts_at,endsAt:base.ends_at});
   });
 
   it('creates a new held booking payload without mutating the terminal appointment',()=>{
