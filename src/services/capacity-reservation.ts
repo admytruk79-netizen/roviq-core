@@ -27,7 +27,8 @@ export async function reserveCanonicalCapacity(
   if(['blocked','unknown','full'].includes(row.capacity_state)) throw new Error('capacity_no_longer_available');
   if(!['current','manual'].includes(row.sync_state)) throw new Error('capacity_no_longer_available');
   if(row.connection_status&&row.connection_status!=='active') throw new Error('capacity_no_longer_available');
-  if(new Date(row.window_end).getTime()<=Date.now()) throw new Error('capacity_no_longer_available');
+  const now=Date.now();
+  if(new Date(row.window_start).getTime()>now||new Date(row.window_end).getTime()<=now) throw new Error('capacity_no_longer_available');
 
   await db.query(
     `update capacity_reservations
@@ -64,9 +65,6 @@ export async function reserveCanonicalCapacity(
 }
 
 export async function confirmCaseCapacity(caseId:string,db:Queryable):Promise<void>{
-  // Canonical selections have a reservation and need it extended through the
-  // capacity window after acceptance. Legacy-capacity selections intentionally
-  // have no canonical reservation, so this is a no-op for that compatibility path.
   await db.query(`
     update capacity_reservations cr
        set expires_at=cw.window_end,updated_at=now()
