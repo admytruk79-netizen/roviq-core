@@ -64,7 +64,10 @@ export async function reserveCanonicalCapacity(
 }
 
 export async function confirmCaseCapacity(caseId:string,db:Queryable):Promise<void>{
-  const result=await db.query(`
+  // Canonical selections have a reservation and need it extended through the
+  // capacity window after acceptance. Legacy-capacity selections intentionally
+  // have no canonical reservation, so this is a no-op for that compatibility path.
+  await db.query(`
     update capacity_reservations cr
        set expires_at=cw.window_end,updated_at=now()
       from capacity_windows cw
@@ -72,9 +75,7 @@ export async function confirmCaseCapacity(caseId:string,db:Queryable):Promise<vo
        and cr.service_case_id=$1
        and cr.state='held'
        and cr.expires_at>now()
-       and cw.window_end>now()
-     returning cr.id`,[caseId]);
-  if(!result.rowCount) throw new Error('capacity_reservation_missing');
+       and cw.window_end>now()`,[caseId]);
 }
 
 export async function releaseCaseCapacity(caseId:string,db:Queryable):Promise<void>{
