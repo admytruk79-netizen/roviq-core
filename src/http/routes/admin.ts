@@ -73,11 +73,24 @@ export async function adminRoutes(app: FastifyInstance) {
       offer=r.rows[0];
 
       const isPartnerRepairActor=actor.rows[0].can_repair&&partnerRepairActorTypes.has(String(actor.rows[0].actor_type));
-      if(serviceCase?.state==='provider_selection'&&isPartnerRepairActor){
-        await authorizeExistingOfferSelection(req.principal,serviceCase.id,body.actorId,offer,client,{
-          ruleBasis:body.ruleBasis,
-          source:'admin_manual_offer'
-        });
+      if(serviceCase&&isPartnerRepairActor){
+        let allowedFromStates:string[]=[];
+        if(serviceCase.state==='provider_selection'){
+          allowedFromStates=['provider_selection'];
+        }else if(serviceCase.state==='tow_in_progress'){
+          const delivered=await client.query(`
+            select 1 from transport_dispatches
+             where case_id=$1 and status='delivered'
+             order by completed_at desc nulls last,updated_at desc,id desc
+             limit 1`,[serviceCase.id]);
+          if(delivered.rowCount) allowedFromStates=['tow_in_progress'];
+        }
+        if(allowedFromStates.length){
+          await authorizeExistingOfferSelection(req.principal,serviceCase.id,body.actorId,offer,client,{
+            ruleBasis:body.ruleBasis,
+            source:'admin_manual_offer'
+          },allowedFromStates);
+        }
       }
       await client.query('commit');
     }catch(error){
