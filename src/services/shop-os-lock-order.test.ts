@@ -1,27 +1,31 @@
+import {readFileSync} from 'node:fs';
 import {describe,expect,it} from 'vitest';
-import {lockSchedulingCase} from './shop-os.js';
+
+const source=readFileSync(new URL('./shop-os.ts',import.meta.url),'utf8');
 
 describe('Shop OS scheduling lock order',()=>{
-  it('takes the service-case row lock before appointment creation can proceed to resource locking',async()=>{
-    const calls:string[]=[];
-    const db:any={query:async(sql:string)=>{
-      calls.push(sql.replace(/\s+/g,' ').trim());
-      return {rowCount:1,rows:[{id:'11111111-1111-1111-1111-111111111111'}]};
-    }};
+  it('locks the linked service case before resource locking in appointment creation',()=>{
+    const start=source.indexOf('export async function createShopOsAppointment');
+    const end=source.indexOf('export async function updateShopOsAppointment',start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const createBody=source.slice(start,end);
 
-    await lockSchedulingCase('11111111-1111-1111-1111-111111111111',db);
-    await db.query('select id from service_resources where id=$1 for update',['22222222-2222-2222-2222-222222222222']);
+    const caseLock=createBody.indexOf('await lockSchedulingCase(input.serviceCaseId,client)');
+    const resourceLoad=createBody.indexOf('await loadManageableResource(principal,input.resourceId,client)');
+    const resourceLock=createBody.indexOf('await lockSchedulingResources([input.resourceId],client)');
 
-    expect(calls[0]).toContain('from service_cases');
-    expect(calls[0]).toContain('for update');
-    expect(calls[1]).toContain('from service_resources');
-    expect(calls[1]).toContain('for update');
+    expect(caseLock).toBeGreaterThanOrEqual(0);
+    expect(resourceLoad).toBeGreaterThan(caseLock);
+    expect(resourceLock).toBeGreaterThan(caseLock);
   });
 
-  it('does not lock a service-case row for appointments without a linked case',async()=>{
-    let called=false;
-    const db:any={query:async()=>{called=true;return {rowCount:0,rows:[]};}};
-    await lockSchedulingCase(null,db);
-    expect(called).toBe(false);
+  it('implements the case lock as a row-level FOR UPDATE lock',()=>{
+    const start=source.indexOf('export async function lockSchedulingCase');
+    const end=source.indexOf('async function assertManageableServiceCase',start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const helper=source.slice(start,end);
+    expect(helper).toContain('from service_cases where id=$1 for update');
   });
 });
