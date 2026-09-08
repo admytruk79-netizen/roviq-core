@@ -14,13 +14,20 @@ export async function reserveCanonicalCapacity(
   units=1
 ):Promise<void>{
   const window=await db.query(
-    `select id,capacity_units,window_end
-       from capacity_windows
-      where id=$1
-      for update`,
+    `select cw.id,cw.capacity_units,cw.capacity_state,cw.sync_state,cw.window_start,cw.window_end,
+            psc.connection_status
+       from capacity_windows cw
+       left join partner_system_connections psc on psc.id=cw.source_connection_id
+      where cw.id=$1
+      for update of cw`,
     [capacityWindowId]
   );
   if(!window.rowCount) throw new Error('capacity_window_not_found');
+  const row=window.rows[0];
+  if(['blocked','unknown','full'].includes(row.capacity_state)) throw new Error('capacity_no_longer_available');
+  if(!['current','manual'].includes(row.sync_state)) throw new Error('capacity_no_longer_available');
+  if(row.connection_status&&row.connection_status!=='active') throw new Error('capacity_no_longer_available');
+  if(new Date(row.window_end).getTime()<=Date.now()) throw new Error('capacity_no_longer_available');
 
   await db.query(
     `update capacity_reservations
@@ -43,7 +50,7 @@ export async function reserveCanonicalCapacity(
       where capacity_window_id=$1 and state='held' and expires_at>now()`,
     [capacityWindowId]
   );
-  const total=Number(window.rows[0].capacity_units ?? 0);
+  const total=Number(row.capacity_units ?? 0);
   const heldUnits=Number(held.rows[0]?.units ?? 0);
   if(!Number.isFinite(total)||!Number.isFinite(heldUnits)||total-heldUnits<units){
     throw new Error('capacity_no_longer_available');
@@ -52,8 +59,22 @@ export async function reserveCanonicalCapacity(
   await db.query(
     `insert into capacity_reservations(service_case_id,capacity_window_id,units,state,expires_at)
      values($1,$2,$3,'held',least($4::timestamptz,now()+interval '30 minutes'))`,
-    [caseId,capacityWindowId,units,window.rows[0].window_end]
+    [caseId,capacityWindowId,units,row.window_end]
   );
+}
+
+export async function confirmCaseCapacity(caseId:string,db:Queryable):Promise<void>{
+  const result=await db.query(`
+    update capacity_reservations cr
+       set expires_at=cw.window_end,updated_at=now()
+      from capacity_windows cw
+     where cr.capacity_window_id=cw.id
+       and cr.service_case_id=$1
+       and cr.state='held'
+       and cr.expires_at>now()
+       and cw.window_end>now()
+     returning cr.id`,[caseId]);
+  if(!result.rowCount) throw new Error('capacity_reservation_missing');
 }
 
 export async function releaseCaseCapacity(caseId:string,db:Queryable):Promise<void>{
