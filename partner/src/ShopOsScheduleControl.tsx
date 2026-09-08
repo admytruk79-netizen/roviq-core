@@ -42,7 +42,7 @@ function statusLabel(status:string){
 }
 
 function nextAction(status:string){
-  if(status==='held')return 'Check in vehicle or mark no-show';
+  if(status==='held')return 'Check in vehicle or mark no-show after the scheduled start';
   if(status==='confirmed')return 'Start work';
   if(status==='in_progress')return 'Complete work';
   if(status==='cancelled')return 'Reschedule if customer still needs service';
@@ -91,6 +91,7 @@ export function ShopOsScheduleControl(){
   const[startValue,setStartValue]=useState('');
   const[endValue,setEndValue]=useState('');
   const[resourceValue,setResourceValue]=useState('');
+  const[clockMs,setClockMs]=useState(()=>Date.now());
   const requestSequence=useRef(0);
 
   const load=useCallback(async()=>{
@@ -115,11 +116,14 @@ export function ShopOsScheduleControl(){
   },[mode]);
 
   useEffect(()=>{void load()},[load]);
+  useEffect(()=>{
+    const timer=window.setInterval(()=>setClockMs(Date.now()),30_000);
+    return()=>window.clearInterval(timer);
+  },[]);
 
   const resourceNames=useMemo(()=>new Map(resources.map(r=>[r.id,r.display_name])),[resources]);
   const appointments=useMemo(()=>[...(board?.appointments??[])].sort((a,b)=>new Date(a.starts_at).getTime()-new Date(b.starts_at).getTime()),[board]);
-  const nowMs=Date.now();
-  const active=appointments.filter(a=>isAppointmentActiveNow(a,nowMs));
+  const active=appointments.filter(a=>isAppointmentActiveNow(a,clockMs));
   const exceptions=appointments.filter(a=>['cancelled','no_show'].includes(a.appointment_status));
 
   function openReschedule(appointment:Appointment){
@@ -214,7 +218,7 @@ export function ShopOsScheduleControl(){
             <div className="flex flex-wrap gap-2">
               {['held','confirmed'].includes(a.appointment_status)&&<button className="secondary" type="button" disabled={busy===a.id} onClick={()=>openReschedule(a)}>Reschedule</button>}
               {['held','confirmed'].includes(a.appointment_status)&&<button className="secondary" type="button" disabled={busy===a.id} onClick={()=>void appointmentAction(a,'cancel')}>Cancel</button>}
-              {a.appointment_status==='held'&&new Date(a.starts_at).getTime()<=Date.now()+15*60_000&&<button className="secondary" type="button" disabled={busy===a.id} onClick={()=>void appointmentAction(a,'no_show')}>No show</button>}
+              {a.appointment_status==='held'&&new Date(a.starts_at).getTime()<=clockMs&&<button className="secondary" type="button" disabled={busy===a.id} onClick={()=>void appointmentAction(a,'no_show')}>No show</button>}
             </div>
           </div>
         </article>)}
