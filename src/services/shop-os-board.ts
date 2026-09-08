@@ -41,8 +41,17 @@ export async function listShopOsBoard(principal:Principal,input:{
         and c.connection_status not in ('revoked','failed')
       order by r.resource_type,r.display_name,r.id`,params.slice(0,2)),
     pool.query(`
-      select a.*
+      select a.*,
+             recovery.id as active_replacement_appointment_id
       from roviq_appointments a
+      left join lateral (
+        select replacement.id
+        from roviq_appointments replacement
+        where replacement.recovery_source_appointment_id=a.id
+          and replacement.appointment_status in ('held','confirmed','in_progress')
+        order by replacement.created_at asc,replacement.id asc
+        limit 1
+      ) recovery on true
       where a.organization_id=$1
         and ($2::uuid is null or a.location_id=$2::uuid)
         and a.starts_at<$4::timestamptz
