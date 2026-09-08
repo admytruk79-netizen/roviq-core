@@ -5,13 +5,15 @@ type Queryable = Pick<PoolClient,'query'>;
 /**
  * Reserve one canonical capacity unit for a case inside the caller's transaction.
  * The capacity-window row is locked so concurrent selections serialize on the
- * same authoritative inventory record.
+ * same authoritative inventory record. serviceTargetAt is the requested service
+ * instant; freshness and hold expiry still use the current clock.
  */
 export async function reserveCanonicalCapacity(
   caseId:string,
   capacityWindowId:string,
   db:Queryable,
-  units=1
+  units=1,
+  serviceTargetAt=new Date()
 ):Promise<void>{
   const window=await db.query(
     `select cw.id,cw.capacity_units,cw.capacity_state,cw.sync_state,cw.window_start,cw.window_end,
@@ -28,7 +30,13 @@ export async function reserveCanonicalCapacity(
   if(!['current','manual'].includes(row.sync_state)) throw new Error('capacity_no_longer_available');
   if(row.connection_status&&row.connection_status!=='active') throw new Error('capacity_no_longer_available');
   const now=Date.now();
-  if(new Date(row.window_start).getTime()>now||new Date(row.window_end).getTime()<=now) throw new Error('capacity_no_longer_available');
+  const targetMs=serviceTargetAt.getTime();
+  const startMs=new Date(row.window_start).getTime();
+  const endMs=new Date(row.window_end).getTime();
+  if(!Number.isFinite(targetMs)||!Number.isFinite(startMs)||!Number.isFinite(endMs)||startMs>targetMs||endMs<=targetMs){
+    throw new Error('capacity_no_longer_available');
+  }
+  if(endMs<=now) throw new Error('capacity_no_longer_available');
 
   await db.query(
     `update capacity_reservations
