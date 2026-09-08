@@ -2,7 +2,10 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { pool } from '../../db/pool.js';
 import { audit } from '../../services/audit.js';
+import { authorizeExistingOfferSelection } from '../../services/selection-authority.js';
 import { requireRole } from '../middleware/principal.js';
+
+const partnerRepairActorTypes=new Set(['shop','repair_shop','service_provider','dealer','dealership']);
 
 export async function adminRoutes(app: FastifyInstance) {
   app.post('/api/admin/actors', { preHandler: requireRole('admin') }, async (req, reply) => {
@@ -69,32 +72,19 @@ export async function adminRoutes(app: FastifyInstance) {
       );
       offer=r.rows[0];
 
-      // A manual repair offer created while the case is awaiting provider selection is
-      // itself the authoritative admin selection. Advance the case atomically so only
-      // that selected provider can accept it. Diagnostic/tow/parts offer workflows keep
-      // their existing role-specific transitions.
-      if(serviceCase?.state==='provider_selection'&&actor.rows[0].can_repair){
-        if(serviceCase.selected_actor_id&&serviceCase.selected_actor_id!==body.actorId){
-          throw Object.assign(new Error('case_selection_conflict'),{statusCode:409});
-        }
-        await client.query(`update service_cases
-          set selected_actor_id=$1,selection_source='ops_override',selected_at=coalesce(selected_at,now()),
-              state='provider_pending',version=version+1,updated_at=now()
-          where id=$2 and state='provider_selection' and (selected_actor_id is null or selected_actor_id=$1)`,[body.actorId,caseId]);
-        await client.query(`update matches_offers
-          set outcome='declined',responded_at=coalesce(responded_at,now())
-          where case_id=$1 and id<>$2 and outcome='offered'`,[caseId,offer.id]);
-        await client.query(`insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload)
-          values('service_case',$1,'PROVIDER_SELECTED',$2,$3),
-                ('service_case',$1,'CASE_PROVIDER_PENDING',$2,$4)`,[
-          caseId,req.principal.actorId??null,
-          JSON.stringify({actorId:body.actorId,selectionMode:'ops_override',offerId:offer.id,ruleBasis:body.ruleBasis}),
-          JSON.stringify({from:'provider_selection',to:'provider_pending',providerActorId:body.actorId,offerId:offer.id,selectionMode:'ops_override'})
-        ]);
+      const isPartnerRepairActor=actor.rows[0].can_repair&&partnerRepairActorTypes.has(String(actor.rows[0].actor_type));
+      if(serviceCase?.state==='provider_selection'&&isPartnerRepairActor){
+        await authorizeExistingOfferSelection(req.principal,serviceCase.id,body.actorId,offer,client,{
+          ruleBasis:body.ruleBasis,
+          source:'admin_manual_offer'
+        });
       }
       await client.query('commit');
     }catch(error){
       await client.query('rollback');
+      if(error instanceof Error&&['actor_not_serviceable','case_not_selectable','selection_already_recorded'].includes(error.message)){
+        return reply.code(409).send({error:error.message});
+      }
       throw error;
     }finally{client.release();}
     await audit(req.principal,'create_offer','match_offer',offer.id,body.ruleBasis,{ demandId:body.demandId, caseId, actorId:body.actorId });
