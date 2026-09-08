@@ -96,7 +96,6 @@ export async function listShopWaitlist(principal:Principal,input:{organizationId
 export async function updateShopWaitlistEntry(principal:Principal,entryId:string,input:{
   action:ShopWaitlistAction;
   appointmentId?:string;
-  offerExpiresAt?:string|null;
 }){
   const client=await pool.connect();
   try{
@@ -108,11 +107,11 @@ export async function updateShopWaitlistEntry(principal:Principal,entryId:string
     await assertCase(principal,row.service_case_id,row.organization_id,client);
 
     let nextState:string;
+    let canonicalOfferExpiry:string|Date|null=null;
     if(input.action==='offer'){
       if(row.state!=='waiting') throw httpError('waitlist_transition_invalid',409);
-      if(!input.offerExpiresAt) throw httpError('offer_expires_at_required',400);
-      const future=await client.query(`select $1::timestamptz>now() as future`,[input.offerExpiresAt]);
-      if(!future.rows[0]?.future) throw httpError('offer_expiry_invalid',400);
+      const expiry=await client.query(`select now()+interval '30 minutes' as expires_at`);
+      canonicalOfferExpiry=expiry.rows[0].expires_at;
       nextState='offered';
     }else if(input.action==='book'){
       if(!['waiting','offered'].includes(row.state)) throw httpError('waitlist_transition_invalid',409);
@@ -161,7 +160,7 @@ export async function updateShopWaitlistEntry(principal:Principal,entryId:string
       offer_expires_at=case when $2='offered' then $3::timestamptz else null end,
       booked_appointment_id=case when $2='booked' then $4::uuid else booked_appointment_id end,
       updated_at=now()
-      where id=$1 returning *`,[entryId,nextState,input.offerExpiresAt??null,input.appointmentId??null]);
+      where id=$1 returning *`,[entryId,nextState,canonicalOfferExpiry,input.appointmentId??null]);
     await client.query('commit');
     return updated.rows[0];
   }catch(error){await client.query('rollback');throw error;}finally{client.release();}
