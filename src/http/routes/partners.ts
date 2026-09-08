@@ -85,28 +85,61 @@ export async function partnerRoutes(app: FastifyInstance) {
     const body = z.object({ outcome: z.enum(['accepted','declined']) }).parse(req.body);
 
     // Decline, reservation release, selection clearing and state reset are one transaction.
-    // This prevents a provider_pending case from retaining selected_actor_id and becoming
-    // permanently unselectable after the offered provider declines.
+    // Use the same lock order as acceptance (service_cases -> matches_offers) so concurrent
+    // responses serialize instead of deadlocking.
     if (body.outcome === 'declined') {
       const client=await pool.connect();
       try{
         await client.query('begin');
-        const r=await client.query(
-          `update matches_offers set outcome='declined',responded_at=now()
-           where id=$1 and actor_id=$2 and outcome='offered' returning *`,
+
+        // Read immutable case identity without locking, then establish the canonical lock order.
+        const offerIdentity=await client.query(
+          `select id,case_id from matches_offers where id=$1 and actor_id=$2`,
           [id,req.principal.actorId]
         );
-        if(!r.rowCount){
+        if(!offerIdentity.rowCount){
           await client.query('rollback');
           return reply.code(404).send({error:'offer_not_found_or_not_owned'});
         }
-        const offer=r.rows[0];
+        const caseId=offerIdentity.rows[0].case_id as string|null;
+
         let serviceCase=null;
-        if(offer.case_id){
-          const c=await client.query('select * from service_cases where id=$1 for update',[offer.case_id]);
-          serviceCase=c.rows[0]??null;
-          if(serviceCase&&serviceCase.state==='provider_pending'&&serviceCase.selected_actor_id===req.principal.actorId){
-            await releaseCaseCapacity(offer.case_id,client);
+        if(caseId){
+          const caseResult=await client.query('select * from service_cases where id=$1 for update',[caseId]);
+          if(!caseResult.rowCount){
+            await client.query('rollback');
+            return reply.code(409).send({error:'offer_case_missing'});
+          }
+          serviceCase=caseResult.rows[0];
+        }
+
+        const offerResult=await client.query(
+          `select * from matches_offers where id=$1 and actor_id=$2 for update`,
+          [id,req.principal.actorId]
+        );
+        if(!offerResult.rowCount){
+          await client.query('rollback');
+          return reply.code(404).send({error:'offer_not_found_or_not_owned'});
+        }
+        const offer=offerResult.rows[0];
+        if(offer.outcome!=='offered'||offer.case_id!==caseId){
+          await client.query('rollback');
+          return reply.code(409).send({error:'offer_already_responded'});
+        }
+
+        const declined=(await client.query(
+          `update matches_offers set outcome='declined',responded_at=now()
+           where id=$1 and actor_id=$2 and outcome='offered' returning *`,
+          [id,req.principal.actorId]
+        )).rows[0];
+        if(!declined){
+          await client.query('rollback');
+          return reply.code(409).send({error:'offer_already_responded'});
+        }
+
+        if(caseId&&serviceCase){
+          if(serviceCase.state==='provider_pending'&&serviceCase.selected_actor_id===req.principal.actorId){
+            await releaseCaseCapacity(caseId,client);
             const updated=await client.query(`
               update service_cases
                  set state='provider_selection',
@@ -116,26 +149,26 @@ export async function partnerRoutes(app: FastifyInstance) {
                      version=version+1,
                      updated_at=now()
                where id=$1 and state='provider_pending' and selected_actor_id=$2
-               returning *`,[offer.case_id,req.principal.actorId]);
+               returning *`,[caseId,req.principal.actorId]);
             if(!updated.rowCount) throw new Error('case_not_selectable');
             serviceCase=updated.rows[0];
             await client.query(`insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload)
               values('service_case',$1,'PROVIDER_DECLINED',$2,$3),
                     ('service_case',$1,'CASE_PROVIDER_SELECTION',$2,$4)`,[
-              offer.case_id,req.principal.actorId,
+              caseId,req.principal.actorId,
               JSON.stringify({offerId:id,actorId:req.principal.actorId,from:'provider_pending'}),
               JSON.stringify({from:'provider_pending',to:'provider_selection',declinedOfferId:id,declinedActorId:req.principal.actorId})
             ]);
           }else{
             await client.query(`insert into case_exceptions(case_id,exception_code,severity,summary,metadata)
               values($1,'OFFER_DECLINED','warning',$2,$3)`,[
-              offer.case_id,`${req.principal.role} declined an assigned offer.`,JSON.stringify({offerId:id,actorId:req.principal.actorId})
+              caseId,`${req.principal.role} declined an assigned offer.`,JSON.stringify({offerId:id,actorId:req.principal.actorId})
             ]);
           }
         }
         await client.query('commit');
-        await audit(req.principal,'respond_offer','match_offer',id,'actor_scoped_offer',{outcome:'declined',caseId:offer.case_id??null});
-        return {offer,case:serviceCase};
+        await audit(req.principal,'respond_offer','match_offer',id,'actor_scoped_offer',{outcome:'declined',caseId:caseId??null});
+        return {offer:declined,case:serviceCase};
       }catch(error){
         await client.query('rollback');
         throw error;
