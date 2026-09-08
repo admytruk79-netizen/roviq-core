@@ -12,7 +12,7 @@ type WaitlistEntry={
   priority?:number;
   notes?:string|null;
   offer_expires_at?:string|null;
-  appointment_id?:string|null;
+  booked_appointment_id?:string|null;
 };
 
 function human(value:string|null|undefined){return value?value.replaceAll('_',' ').replace(/\b\w/g,c=>c.toUpperCase()):'General service'}
@@ -83,8 +83,8 @@ export function ShopOsWaitlistControl(){
             {entry.state==='waiting'&&<button className="primary" type="button" disabled={busy===entry.id} onClick={()=>void act(entry,'offer')}>{busy===entry.id?'Updating…':'Offer recovered slot'}</button>}
             {entry.state==='offered'&&<><label className="text-xs"><span className="muted">Created appointment ID</span><input className="input mt-1 w-full" value={appointmentValue[entry.id]??''} onChange={e=>setAppointmentValue(current=>({...current,[entry.id]:e.target.value}))} placeholder="Appointment UUID"/></label><button className="primary" type="button" disabled={busy===entry.id} onClick={()=>void act(entry,'book')}>Mark booked</button><button className="secondary" type="button" disabled={busy===entry.id} onClick={()=>void act(entry,'expire')}>Expire offer</button></>}
             {entry.state==='expired'&&<button className="primary" type="button" disabled={busy===entry.id} onClick={()=>void act(entry,'requeue')}>Return to waitlist</button>}
-            {['waiting','offered','expired'].includes(entry.state)&&<button className="secondary" type="button" disabled={busy===entry.id} onClick={()=>void act(entry,'cancel')}>Cancel request</button>}
-            {entry.state==='booked'&&<p className="muted text-xs">Booked{entry.appointment_id?` · ${entry.appointment_id}`:''}. Continue from the day schedule.</p>}
+            {['waiting','offered'].includes(entry.state)&&<button className="secondary" type="button" disabled={busy===entry.id} onClick={()=>void act(entry,'cancel')}>Cancel request</button>}
+            {entry.state==='booked'&&<p className="muted text-xs">Booked{entry.booked_appointment_id?` · ${entry.booked_appointment_id}`:''}. Continue from the day schedule.</p>}
           </div>
         </div>
       </article>)}
