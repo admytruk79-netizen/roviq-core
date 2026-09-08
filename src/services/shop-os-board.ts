@@ -48,7 +48,7 @@ export async function listShopOsBoard(principal:Principal,input:{
         select replacement.id
         from roviq_appointments replacement
         where replacement.recovery_source_appointment_id=a.id
-          and replacement.appointment_status in ('held','confirmed','in_progress')
+          and replacement.appointment_status in ('held','confirmed','in_progress','completed')
         order by replacement.created_at asc,replacement.id asc
         limit 1
       ) recovery on true
