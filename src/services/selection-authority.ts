@@ -15,6 +15,36 @@ function canSelect(principal: Principal, mode: SelectionMode, relationshipOwnerA
   return false;
 }
 
+function capabilityForOverrideCase(row:{case_type?:string|null;drivability?:string|null}){
+  if(row.drivability==='non_drivable') return 'tow';
+  const type=String(row.case_type??'').toLowerCase();
+  if(type.includes('diagnostic')) return 'diagnostics';
+  if(type.includes('tow')) return 'tow';
+  if(type.includes('part')) return 'parts_supply';
+  return 'repair';
+}
+
+async function ensureOverrideDemand(row:{id:string;demand_id?:string|null;case_type?:string|null;drivability?:string|null;priority?:string|null;customer_actor_id?:string|null},client:PoolClient){
+  if(row.demand_id) return {demandId:row.demand_id as string,capability:null as string|null};
+  const capability=capabilityForOverrideCase(row);
+  const created=await client.query(`
+    insert into demand_requests(domain_id,requester_actor_id,demand_type,urgency,attributes,state)
+    select d.id,$1,$2,$3,$4,'open'
+      from domains d
+     where d.code='maintenance'
+     limit 1
+    returning id`,[
+    row.customer_actor_id??null,
+    row.case_type||'repair',
+    row.priority||'normal',
+    JSON.stringify({source:'ops_override_selection',requiredCapability:capability,drivability:row.drivability??'unknown'})
+  ]);
+  if(!created.rowCount) throw new Error('maintenance_domain_missing');
+  const demandId=created.rows[0].id as string;
+  await client.query(`update service_cases set demand_id=$1,updated_at=now() where id=$2 and demand_id is null`,[demandId,row.id]);
+  return {demandId,capability};
+}
+
 export async function recordRecommendation(caseId: string, actorId: string | null, routingDecisionId?: string | null, client?: PoolClient) {
   const db = client ?? pool;
   await db.query(
@@ -58,7 +88,9 @@ export async function selectCaseActor(principal: Principal, caseId: string, acto
   try {
     await client.query('begin');
     const c = await client.query(
-      `select id,demand_id,state,selection_mode,relationship_owner_actor_id,recommended_actor_id,selected_actor_id from service_cases where id=$1 for update`,
+      `select id,demand_id,state,selection_mode,relationship_owner_actor_id,recommended_actor_id,selected_actor_id,
+              case_type,drivability,priority,customer_actor_id
+         from service_cases where id=$1 for update`,
       [caseId]
     );
     if (!c.rowCount) throw new Error('case_not_found');
@@ -66,22 +98,32 @@ export async function selectCaseActor(principal: Principal, caseId: string, acto
     assertSelectableCase(row);
     const mode = row.selection_mode as SelectionMode;
     if (!canSelect(principal,mode,row.relationship_owner_actor_id)) throw new Error('selection_forbidden');
-    if (!row.demand_id) throw new Error('case_demand_missing');
 
-    const eligible = await client.query(
-      `select 1
-         from routing_decisions
-        where id=(
-          select id from routing_decisions
-           where demand_id=$1
-           order by evaluated_at desc,id desc limit 1
-        )
-          and eligible_actor_ids @> to_jsonb(array[$2::uuid]::uuid[])`,
-      [row.demand_id,actorId]
-    );
-    if (!eligible.rowCount && mode !== 'ops_override') throw new Error('actor_not_eligible');
+    let demandId=row.demand_id as string|null;
+    let overrideCapability:string|null=null;
+    if(!demandId){
+      if(mode!=='ops_override'||principal.role!=='admin') throw new Error('case_demand_missing');
+      const ensured=await ensureOverrideDemand(row,client);
+      demandId=ensured.demandId;
+      overrideCapability=ensured.capability;
+    }
 
-    const {capability}=await resolveRequestedCapabilityForDemand(row.demand_id,client);
+    if(mode!=='ops_override'){
+      const eligible = await client.query(
+        `select 1
+           from routing_decisions
+          where id=(
+            select id from routing_decisions
+             where demand_id=$1
+             order by evaluated_at desc,id desc limit 1
+          )
+            and eligible_actor_ids @> to_jsonb(array[$2::uuid]::uuid[])`,
+        [demandId,actorId]
+      );
+      if (!eligible.rowCount) throw new Error('actor_not_eligible');
+    }
+
+    const capability=overrideCapability ?? (await resolveRequestedCapabilityForDemand(demandId,client)).capability;
     const serviceability=await evaluateActorServiceability(caseId,actorId,capability,'confirm',client);
     if(!serviceabilityAllows('confirm',serviceability.decision)) {
       const error=new Error('actor_not_serviceable');
@@ -107,7 +149,7 @@ export async function selectCaseActor(principal: Principal, caseId: string, acto
     const offer=offerResult.rowCount
       ? offerResult.rows[0]
       : (await client.query(`insert into matches_offers(demand_id,case_id,actor_id,rank,rule_basis)
-          values($1,$2,$3,1,'authorized_provider_selection') returning *`,[row.demand_id,caseId,actorId])).rows[0];
+          values($1,$2,$3,1,'authorized_provider_selection') returning *`,[demandId,caseId,actorId])).rows[0];
 
     const updatedCase=await client.query(`update service_cases set
       selected_actor_id=$1,selection_source=$2,selected_at=now(),state='provider_pending',version=version+1,updated_at=now()
