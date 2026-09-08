@@ -5,7 +5,7 @@ import { audit } from '../../services/audit.js';
 import { authorizeExistingOfferSelection } from '../../services/selection-authority.js';
 import { requireRole } from '../middleware/principal.js';
 
-const partnerRepairActorTypes=new Set(['shop','repair_shop','service_provider','dealer','dealership']);
+const partnerRepairActorTypes=new Set(['partner','shop','repair_shop','service_provider','dealer','dealership']);
 
 export async function adminRoutes(app: FastifyInstance) {
   app.post('/api/admin/actors', { preHandler: requireRole('admin') }, async (req, reply) => {
