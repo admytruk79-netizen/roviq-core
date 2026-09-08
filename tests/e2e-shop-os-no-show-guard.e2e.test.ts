@@ -18,6 +18,27 @@ describe('Shop OS no-show timing guard',()=>{
     expect(current.rows[0].appointment_status).toBe('held');
   });
 
+  it('rejects a direct future no-show insert',async()=>{
+    await expect(pool.query(`
+      insert into roviq_appointments(appointment_status,starts_at,ends_at,service_category)
+      values('no_show',now()+interval '30 minutes',now()+interval '90 minutes','repair')
+    `)).rejects.toMatchObject({message:'appointment_no_show_before_start'});
+  });
+
+  it('rejects moving an existing no-show before its new scheduled start',async()=>{
+    const appointment=await pool.query(`
+      insert into roviq_appointments(appointment_status,starts_at,ends_at,service_category)
+      values('held',now()-interval '60 minutes',now()-interval '30 minutes','repair')
+      returning id`);
+    await pool.query(`update roviq_appointments set appointment_status='no_show' where id=$1`,[appointment.rows[0].id]);
+
+    await expect(pool.query(`
+      update roviq_appointments
+         set starts_at=now()+interval '30 minutes',ends_at=now()+interval '90 minutes',updated_at=now()
+       where id=$1
+    `,[appointment.rows[0].id])).rejects.toMatchObject({message:'appointment_no_show_before_start'});
+  });
+
   it('allows no-show once the scheduled start has been reached',async()=>{
     const appointment=await pool.query(`
       insert into roviq_appointments(appointment_status,starts_at,ends_at,service_category)
