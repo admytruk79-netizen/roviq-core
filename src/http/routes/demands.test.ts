@@ -26,6 +26,16 @@ describe('maintenance demand schedule validation',()=>{
     })).toThrow();
   });
 
+  it('accepts equivalent top-level and legacy timestamps with different fractional formatting',()=>{
+    const parsed=createDemandSchema.parse({
+      demandType:'repair',
+      requestedServiceAt:'2026-09-12T17:30:00Z',
+      attributes:{requestedServiceAt:'2026-09-12T17:30:00.000Z',note:'same-instant'}
+    });
+    expect(parsed.requestedServiceAt).toBe('2026-09-12T17:30:00Z');
+    expect(parsed.attributes).toEqual({note:'same-instant'});
+  });
+
   it('uses the top-level timestamp as the single persisted source when both paths agree',()=>{
     const parsed=createDemandSchema.parse({
       demandType:'repair',
