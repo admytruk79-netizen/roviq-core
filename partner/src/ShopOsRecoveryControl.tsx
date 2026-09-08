@@ -16,7 +16,7 @@ export function ShopOsRecoveryControl(){
   const[appointments,setAppointments]=useState<RecoverableAppointment[]>([]);
   const[resources,setResources]=useState<Resource[]>([]);
   const[loading,setLoading]=useState(true);
-  const[busy,setBusy]=useState<string|null>(null);
+  const[pending,setPending]=useState<Set<string>>(()=>new Set());
   const[editing,setEditing]=useState<RecoverableAppointment|null>(null);
   const[startValue,setStartValue]=useState('');
   const[endValue,setEndValue]=useState('');
@@ -48,6 +48,7 @@ export function ShopOsRecoveryControl(){
   const availableResources=useMemo(()=>resources.filter(r=>r.active!==false&&!['blocked','offline'].includes(r.operational_state??'available')),[resources]);
 
   function openRecovery(appointment:RecoverableAppointment){
+    if(pending.has(appointment.id))return;
     const window=defaultRecoveryWindow(appointment);
     setEditing(appointment);
     setStartValue(toLocalInput(window.startsAt));
@@ -58,13 +59,14 @@ export function ShopOsRecoveryControl(){
   }
 
   async function createReplacement(){
-    if(!editing)return;
+    if(!editing||pending.has(editing.id))return;
     if(!resourceValue){setError('Choose an available resource before creating the replacement appointment.');return;}
     if(!startValue||!endValue){setError('Choose both a new start and end time.');return;}
     const startsAt=fromLocalInput(startValue),endsAt=fromLocalInput(endValue);
     if(new Date(startsAt).getTime()<=Date.now()){setError('Choose a future start time for the replacement appointment.');return;}
     if(new Date(endsAt).getTime()<=new Date(startsAt).getTime()){setError('End time must be after start time.');return;}
-    setBusy(editing.id);setMessage(null);setError(null);
+    const sourceId=editing.id;
+    setPending(current=>{const next=new Set(current);next.add(sourceId);return next});setMessage(null);setError(null);
     try{
       await api.post('/api/shop-os/appointments',replacementAppointmentBody(editing,resourceValue,startsAt,endsAt));
       setMessage('Replacement appointment created. The cancelled/no-show record remains intact for audit history.');
@@ -72,7 +74,9 @@ export function ShopOsRecoveryControl(){
       await load();
     }catch(e){
       setError(`Replacement was not created. ${human(e instanceof Error?e.message:'request failed')}. Choose another time/resource or refresh verified capacity.`);
-    }finally{setBusy(null)}
+    }finally{
+      setPending(current=>{const next=new Set(current);next.delete(sourceId);return next});
+    }
   }
 
   return <section className="mt-8" aria-labelledby="shop-os-recovery-heading">
@@ -83,9 +87,9 @@ export function ShopOsRecoveryControl(){
     {message&&<div className="mt-4 rounded-xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100" role="status" aria-live="polite">{message}</div>}
     {error&&<div className="mt-4 rounded-xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-100" role="alert">{error}</div>}
     <div className="mt-5 space-y-3">
-      {!loading&&appointments.length===0&&<div className="panel p-6"><p className="font-semibold">No appointments need recovery</p><p className="muted mt-1 text-sm">Cancelled and no-show work from the recovery window will appear here.</p></div>}
-      {appointments.map(a=><article key={a.id} className="panel p-4"><div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-center"><div><div className="flex flex-wrap items-center gap-2"><span className="rounded-full border border-amber-400/20 bg-amber-500/10 px-2.5 py-1 text-[11px] font-bold uppercase text-amber-200">{human(a.appointment_status)}</span><span className="muted text-xs">{when(a.starts_at)} – {when(a.ends_at)}</span></div><h3 className="mt-2 font-bold">{a.customer_visible_summary?.trim()||human(a.service_category)}</h3><p className="muted mt-1 text-xs">Original appointment {a.id}</p></div><button className="primary" type="button" disabled={busy===a.id} onClick={()=>openRecovery(a)}>Create replacement</button></div></article>)}
+      {!loading&&appointments.length===0&&<div className="panel p-6"><p className="font-semibold">No appointments need recovery</p><p className="muted mt-1 text-sm">Cancelled and no-show work from the recovery window will appear here until an active replacement exists.</p></div>}
+      {appointments.map(a=>{const busy=pending.has(a.id);return <article key={a.id} className="panel p-4"><div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-center"><div><div className="flex flex-wrap items-center gap-2"><span className="rounded-full border border-amber-400/20 bg-amber-500/10 px-2.5 py-1 text-[11px] font-bold uppercase text-amber-200">{human(a.appointment_status)}</span><span className="muted text-xs">{when(a.starts_at)} – {when(a.ends_at)}</span></div><h3 className="mt-2 font-bold">{a.customer_visible_summary?.trim()||human(a.service_category)}</h3><p className="muted mt-1 text-xs">Original appointment {a.id}</p></div><button className="primary" type="button" disabled={busy} onClick={()=>openRecovery(a)}>{busy?'Creating replacement…':'Create replacement'}</button></div></article>})}
     </div>
-    {editing&&<div className="mt-5 panel p-5" role="region" aria-labelledby="replacement-heading"><div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start"><div><p className="kicker">Replacement booking</p><h3 id="replacement-heading" className="mt-1 text-lg font-bold">Create a new appointment</h3><p className="muted mt-1 text-sm">The original {human(editing.appointment_status).toLowerCase()} appointment stays unchanged. New capacity is validated before booking.</p></div><button className="secondary" type="button" onClick={()=>setEditing(null)}>Close</button></div><div className="mt-4 grid gap-3 md:grid-cols-3"><label className="text-sm"><span className="muted">Start</span><input className="input mt-1 w-full" type="datetime-local" value={startValue} onChange={e=>setStartValue(e.target.value)}/></label><label className="text-sm"><span className="muted">End</span><input className="input mt-1 w-full" type="datetime-local" value={endValue} onChange={e=>setEndValue(e.target.value)}/></label><label className="text-sm"><span className="muted">Resource</span><select className="input mt-1 w-full" value={resourceValue} onChange={e=>setResourceValue(e.target.value)}><option value="">Choose resource</option>{availableResources.map(r=><option key={r.id} value={r.id}>{r.display_name} · {human(r.resource_type)}</option>)}</select></label></div><div className="mt-4 flex flex-wrap gap-2"><button className="primary" type="button" disabled={busy===editing.id} onClick={()=>void createReplacement()}>{busy===editing.id?'Checking capacity…':'Create replacement appointment'}</button><button className="secondary" type="button" onClick={()=>setEditing(null)}>Cancel</button></div></div>}
+    {editing&&<div className="mt-5 panel p-5" role="region" aria-labelledby="replacement-heading"><div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start"><div><p className="kicker">Replacement booking</p><h3 id="replacement-heading" className="mt-1 text-lg font-bold">Create a new appointment</h3><p className="muted mt-1 text-sm">The original {human(editing.appointment_status).toLowerCase()} appointment stays unchanged. New capacity is validated before booking.</p></div><button className="secondary" type="button" disabled={pending.has(editing.id)} onClick={()=>setEditing(null)}>Close</button></div><div className="mt-4 grid gap-3 md:grid-cols-3"><label className="text-sm"><span className="muted">Start</span><input className="input mt-1 w-full" disabled={pending.has(editing.id)} type="datetime-local" value={startValue} onChange={e=>setStartValue(e.target.value)}/></label><label className="text-sm"><span className="muted">End</span><input className="input mt-1 w-full" disabled={pending.has(editing.id)} type="datetime-local" value={endValue} onChange={e=>setEndValue(e.target.value)}/></label><label className="text-sm"><span className="muted">Resource</span><select className="input mt-1 w-full" disabled={pending.has(editing.id)} value={resourceValue} onChange={e=>setResourceValue(e.target.value)}><option value="">Choose resource</option>{availableResources.map(r=><option key={r.id} value={r.id}>{r.display_name} · {human(r.resource_type)}</option>)}</select></label></div><div className="mt-4 flex flex-wrap gap-2"><button className="primary" type="button" disabled={pending.has(editing.id)} onClick={()=>void createReplacement()}>{pending.has(editing.id)?'Checking capacity…':'Create replacement appointment'}</button><button className="secondary" type="button" disabled={pending.has(editing.id)} onClick={()=>setEditing(null)}>Cancel</button></div></div>}
   </section>;
 }
