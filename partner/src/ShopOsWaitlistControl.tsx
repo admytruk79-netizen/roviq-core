@@ -1,9 +1,10 @@
 import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
 import {api} from './api';
+import {bookedAppointmentText,canCancelWaitlistEntry,type ShopWaitlistState} from './shop-os-waitlist-model';
 
 type WaitlistEntry={
   id:string;
-  state:'waiting'|'offered'|'booked'|'expired'|'cancelled';
+  state:ShopWaitlistState;
   requested_service_category?:string|null;
   requested_after?:string|null;
   requested_before?:string|null;
@@ -76,18 +77,18 @@ export function ShopOsWaitlistControl(){
     {error&&<div className="mt-4 rounded-xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-100" role="alert">{error}</div>}
     <div className="mt-5 space-y-3">
       {!loading&&ordered.length===0&&<div className="panel p-6"><p className="font-semibold">No overflow work waiting</p><p className="muted mt-1 text-sm">When demand exceeds verified capacity, recoverable work will appear here.</p></div>}
-      {ordered.map(entry=><article key={entry.id} className="panel p-4">
+      {ordered.map(entry=>{const bookedLabel=bookedAppointmentText(entry);return <article key={entry.id} className="panel p-4">
         <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
           <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="rounded-full border border-white/10 bg-white/[.04] px-2.5 py-1 text-[11px] font-bold uppercase tracking-[.1em]">{human(entry.state)}</span>{entry.priority!==undefined&&<span className="muted text-xs">Priority {entry.priority}</span>}</div><h3 className="mt-2 font-bold">{human(entry.requested_service_category)}</h3><p className="muted mt-1 text-sm">Window: {when(entry.requested_after)}{entry.requested_before?` → ${when(entry.requested_before)}`:''}</p>{entry.estimated_duration_minutes&&<p className="muted mt-1 text-xs">Estimated {entry.estimated_duration_minutes} minutes</p>}{entry.preferred_resource_types?.length?<p className="muted mt-1 text-xs">Needs: {entry.preferred_resource_types.map(human).join(', ')}</p>:null}{entry.state==='offered'&&entry.offer_expires_at&&<p className="mt-2 text-xs text-amber-100">Offer expires {when(entry.offer_expires_at)}</p>}</div>
           <div className="flex min-w-[15rem] flex-col gap-2">
             {entry.state==='waiting'&&<button className="primary" type="button" disabled={busy===entry.id} onClick={()=>void act(entry,'offer')}>{busy===entry.id?'Updating…':'Offer recovered slot'}</button>}
             {entry.state==='offered'&&<><label className="text-xs"><span className="muted">Created appointment ID</span><input className="input mt-1 w-full" value={appointmentValue[entry.id]??''} onChange={e=>setAppointmentValue(current=>({...current,[entry.id]:e.target.value}))} placeholder="Appointment UUID"/></label><button className="primary" type="button" disabled={busy===entry.id} onClick={()=>void act(entry,'book')}>Mark booked</button><button className="secondary" type="button" disabled={busy===entry.id} onClick={()=>void act(entry,'expire')}>Expire offer</button></>}
             {entry.state==='expired'&&<button className="primary" type="button" disabled={busy===entry.id} onClick={()=>void act(entry,'requeue')}>Return to waitlist</button>}
-            {['waiting','offered'].includes(entry.state)&&<button className="secondary" type="button" disabled={busy===entry.id} onClick={()=>void act(entry,'cancel')}>Cancel request</button>}
-            {entry.state==='booked'&&<p className="muted text-xs">Booked{entry.booked_appointment_id?` · ${entry.booked_appointment_id}`:''}. Continue from the day schedule.</p>}
+            {canCancelWaitlistEntry(entry)&&<button className="secondary" type="button" disabled={busy===entry.id} onClick={()=>void act(entry,'cancel')}>Cancel request</button>}
+            {bookedLabel&&<p className="muted text-xs">{bookedLabel}. Continue from the day schedule.</p>}
           </div>
         </div>
-      </article>)}
+      </article>})}
     </div>
   </section>;
 }
