@@ -37,7 +37,12 @@ export type CanonicalWindowRow = {
   scope_rank?:number|string;
 };
 
-export async function resolveServiceTargetAt(caseId:string|null|undefined,db:Queryable,now=new Date()):Promise<Date>{
+export async function resolveServiceTargetAt(
+  caseId:string|null|undefined,
+  db:Queryable,
+  now=new Date(),
+  serviceCategory:string|null|undefined=null
+):Promise<Date>{
   if(!caseId) return now;
   const result=await db.query(`
     select coalesce(
@@ -45,8 +50,16 @@ export async function resolveServiceTargetAt(caseId:string|null|undefined,db:Que
         select ra.starts_at::text
           from roviq_appointments ra
          where ra.service_case_id=sc.id
+           and $2::text is not null
+           and ra.service_category=$2::text
            and ra.appointment_status in ('held','confirmed','in_progress')
-         order by ra.updated_at desc,ra.id desc
+         order by case ra.appointment_status
+                    when 'in_progress' then 0
+                    when 'confirmed' then 1
+                    else 2
+                  end,
+                  ra.starts_at asc,
+                  ra.id asc
          limit 1
       ),
       nullif(sc.attributes->>'requestedServiceAt',''),
@@ -54,7 +67,7 @@ export async function resolveServiceTargetAt(caseId:string|null|undefined,db:Que
     ) as service_target_at
     from service_cases sc
     left join demand_requests dr on dr.id=sc.demand_id
-    where sc.id=$1`,[caseId]);
+    where sc.id=$1`,[caseId,serviceCategory??null]);
   const raw=result.rows[0]?.service_target_at;
   if(!raw) return now;
   const parsed=new Date(raw);
@@ -83,7 +96,7 @@ export async function evaluateActorServiceability(
     [actorId]
   );
 
-  const serviceTargetAt=await resolveServiceTargetAt(caseId,db,now);
+  const serviceTargetAt=await resolveServiceTargetAt(caseId,db,now,serviceCategory);
   if (!actor.rowCount) {
     return { decision:evaluateServiceability({capacity:null,requirementsProjected:false}), source:'missing', capacityWindowId:null, capacityUnits:0, serviceTargetAt };
   }
@@ -189,16 +202,11 @@ export function deriveCanonicalSyncState(row:CanonicalWindowRow,now=new Date()):
   if(row.connection_status==='failed'||row.connection_status==='revoked') return 'failed';
   if(row.connection_status==='degraded'||row.connection_status==='paused'||row.connection_status==='planned') return 'degraded';
 
-  // ROVIQ-native Shop OS capacity is authoritative and carries its own state.
   if(row.connection_mode==='roviq_native') return row.sync_state;
 
-  // Never promote a window that ingestion already marked stale/degraded/failed merely
-  // because a connection-level health check succeeded later.
   if(row.sync_state==='failed') return 'failed';
   if(row.sync_state==='degraded') return 'degraded';
 
-  // Capacity freshness is per-window. Connection heartbeats are health signals, not
-  // evidence that this specific availability window was refreshed.
   const anchor=row.updated_at;
   if(!anchor) return 'degraded';
   const anchorMs=new Date(anchor).getTime();
