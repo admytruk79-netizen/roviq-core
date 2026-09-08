@@ -17,8 +17,12 @@ export const createDemandSchema = z.object({
     ctx.addIssue({code:z.ZodIssueCode.custom,path:['attributes','requestedServiceAt'],message:'Invalid datetime'});
     return;
   }
-  if(value.requestedServiceAt!==undefined&&value.requestedServiceAt!==parsed.data){
-    ctx.addIssue({code:z.ZodIssueCode.custom,path:['requestedServiceAt'],message:'Conflicts with attributes.requestedServiceAt'});
+  if(value.requestedServiceAt!==undefined){
+    const topLevelMs=new Date(value.requestedServiceAt).getTime();
+    const legacyMs=new Date(parsed.data).getTime();
+    if(topLevelMs!==legacyMs){
+      ctx.addIssue({code:z.ZodIssueCode.custom,path:['requestedServiceAt'],message:'Conflicts with attributes.requestedServiceAt'});
+    }
   }
 }).transform((value)=>{
   const legacy=value.attributes.requestedServiceAt;
