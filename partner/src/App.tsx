@@ -7,6 +7,7 @@ import { ShopOsWorkspace } from './ShopOsWorkspace';
 import { ShopOsDviControl } from './ShopOsDviControl';
 import { ShopOsFloorControl } from './ShopOsFloorControl';
 import { ShopOsScheduleControl } from './ShopOsScheduleControl';
+import { ShopOsWaitlistControl } from './ShopOsWaitlistControl';
 
 function Portal() {
   const { principal } = useAuth();
@@ -41,6 +42,7 @@ function Portal() {
         </div>
         <ShopOsScheduleControl />
         <ShopOsWorkspace />
+        <ShopOsWaitlistControl />
         <ShopOsDviControl />
         <ShopOsFloorControl />
       </section>
