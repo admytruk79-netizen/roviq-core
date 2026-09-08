@@ -89,13 +89,15 @@ export async function authorizeExistingOfferSelection(
   actorId:string,
   offer:any,
   client:PoolClient,
-  rationale:Record<string,unknown>={}
+  rationale:Record<string,unknown>={},
+  allowedFromStates:string[]=['provider_selection']
 ){
   const c=await client.query(`select id,demand_id,state,selection_mode,relationship_owner_actor_id,recommended_actor_id,selected_actor_id,
     case_type,drivability,priority,customer_actor_id from service_cases where id=$1 for update`,[caseId]);
   if(!c.rowCount) throw new Error('case_not_found');
   const row=c.rows[0];
-  assertSelectableCase(row);
+  if(!allowedFromStates.includes(row.state)) throw new Error('case_not_selectable');
+  if(row.selected_actor_id) throw new Error('selection_already_recorded');
   const mode=row.selection_mode as SelectionMode;
   if(!canSelect(principal,mode,row.relationship_owner_actor_id)) throw new Error('selection_forbidden');
   if(!row.demand_id) throw new Error('case_demand_missing');
@@ -106,14 +108,14 @@ export async function authorizeExistingOfferSelection(
   catch(error){ if(error instanceof Error&&error.message==='capacity_no_longer_available') throw new Error('actor_not_serviceable'); throw error; }
   const updatedCase=await client.query(`update service_cases set
     selected_actor_id=$1,selection_source=$2,selected_at=now(),state='provider_pending',version=version+1,updated_at=now()
-    where id=$3 and state='provider_selection' and selected_actor_id is null returning *`,[actorId,mode,caseId]);
+    where id=$3 and state=any($4::text[]) and selected_actor_id is null returning *`,[actorId,mode,caseId,allowedFromStates]);
   if(!updatedCase.rowCount) throw new Error('case_not_selectable');
   await closeCompetingOffers(caseId,offer.id,actorId,client);
   await client.query(`insert into case_selections(case_id,recommended_actor_id,selected_actor_id,selection_mode,authority_role,authority_actor_id,rationale)
     values($1,$2,$3,$4,$5,$6,$7)`,[caseId,row.recommended_actor_id??null,actorId,mode,principal.role,principal.actorId??null,
-    JSON.stringify({...rationale,serviceability:{serviceCategory:capability,capacitySource:serviceability.source,capacityWindowId:serviceability.capacityWindowId,capacityUnits:serviceability.capacityUnits}})]);
-  await appendCaseEvent(caseId,'PROVIDER_SELECTED',principal,{actorId,selectionMode:mode,...rationale,serviceability:{serviceCategory:capability,capacitySource:serviceability.source,capacityWindowId:serviceability.capacityWindowId,capacityUnits:serviceability.capacityUnits}},client);
-  await appendCaseEvent(caseId,'CASE_PROVIDER_PENDING',principal,{from:'provider_selection',to:'provider_pending',offerId:offer.id,providerActorId:actorId,selectionMode:mode,source:'authorized_existing_offer'},client);
+    JSON.stringify({...rationale,fromState:row.state,serviceability:{serviceCategory:capability,capacitySource:serviceability.source,capacityWindowId:serviceability.capacityWindowId,capacityUnits:serviceability.capacityUnits}})]);
+  await appendCaseEvent(caseId,'PROVIDER_SELECTED',principal,{actorId,selectionMode:mode,fromState:row.state,...rationale,serviceability:{serviceCategory:capability,capacitySource:serviceability.source,capacityWindowId:serviceability.capacityWindowId,capacityUnits:serviceability.capacityUnits}},client);
+  await appendCaseEvent(caseId,'CASE_PROVIDER_PENDING',principal,{from:row.state,to:'provider_pending',offerId:offer.id,providerActorId:actorId,selectionMode:mode,source:'authorized_existing_offer'},client);
   return {case:updatedCase.rows[0],serviceability};
 }
 
