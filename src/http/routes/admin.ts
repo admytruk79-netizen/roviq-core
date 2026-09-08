@@ -78,12 +78,13 @@ export async function adminRoutes(app: FastifyInstance) {
         if(serviceCase.state==='provider_selection'){
           allowedFromStates=['provider_selection'];
         }else if(serviceCase.state==='tow_in_progress'){
-          const delivered=await client.query(`
-            select 1 from transport_dispatches
-             where case_id=$1 and status='delivered'
-             order by completed_at desc nulls last,updated_at desc,id desc
+          const latestDispatch=await client.query(`
+            select status
+              from transport_dispatches
+             where case_id=$1 and status<>'cancelled'
+             order by dispatch_sequence desc
              limit 1`,[serviceCase.id]);
-          if(delivered.rowCount) allowedFromStates=['tow_in_progress'];
+          if(latestDispatch.rows[0]?.status==='delivered') allowedFromStates=['tow_in_progress'];
         }
         if(allowedFromStates.length){
           await authorizeExistingOfferSelection(req.principal,serviceCase.id,body.actorId,offer,client,{
