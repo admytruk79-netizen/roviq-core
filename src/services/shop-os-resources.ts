@@ -68,7 +68,7 @@ export async function listShopResources(principal:Principal,input:{
   try{
     const scope=await resolveShopScope(principal,input,client);
     const result=await client.query(`
-      select r.*
+      select r.*,c.connection_status
       from service_resources r
       join partner_system_connections c
         on c.id=r.source_connection_id
