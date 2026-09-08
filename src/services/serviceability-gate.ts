@@ -37,12 +37,7 @@ export type CanonicalWindowRow = {
   scope_rank?:number|string;
 };
 
-export async function resolveServiceTargetAt(
-  caseId:string|null|undefined,
-  db:Queryable,
-  now=new Date(),
-  serviceCategory:string|null|undefined=null
-):Promise<Date>{
+export async function resolveServiceTargetAt(caseId:string|null|undefined,db:Queryable,now=new Date(),serviceCategory:string|null|undefined=null):Promise<Date>{
   if(!caseId) return now;
   const result=await db.query(`
     select coalesce(
@@ -51,15 +46,11 @@ export async function resolveServiceTargetAt(
           from roviq_appointments ra
          where ra.service_case_id=sc.id
            and $2::text is not null
-           and ra.service_category=$2::text
+           and (ra.service_category is null or ra.service_category=$2::text)
            and ra.appointment_status in ('held','confirmed','in_progress')
-         order by case ra.appointment_status
-                    when 'in_progress' then 0
-                    when 'confirmed' then 1
-                    else 2
-                  end,
-                  ra.starts_at asc,
-                  ra.id asc
+         order by
+           case ra.appointment_status when 'in_progress' then 0 when 'confirmed' then 1 else 2 end,
+           ra.starts_at asc,ra.id asc
          limit 1
       ),
       nullif(sc.attributes->>'requestedServiceAt',''),
@@ -120,9 +111,11 @@ export async function evaluateActorServiceability(
             case when $1::uuid is not null and cw.location_id=$1 then 0 else 1 end as scope_rank
        from capacity_windows cw
        left join partner_system_connections psc on psc.id=cw.source_connection_id
+       left join service_resources sr on sr.id=cw.resource_id
       where cw.window_start<=$5::timestamptz
         and cw.window_end>$5::timestamptz
         and cw.window_end>now()
+        and (cw.resource_id is null or (sr.id is not null and sr.active=true and sr.operational_state not in ('blocked','offline')))
         and (
           ($1::uuid is not null and cw.location_id=$1)
           or ($2::uuid is not null and cw.organization_id=$2 and cw.location_id is null)
@@ -201,12 +194,9 @@ export function evaluateCanonicalWindows(
 export function deriveCanonicalSyncState(row:CanonicalWindowRow,now=new Date()):SyncState {
   if(row.connection_status==='failed'||row.connection_status==='revoked') return 'failed';
   if(row.connection_status==='degraded'||row.connection_status==='paused'||row.connection_status==='planned') return 'degraded';
-
   if(row.connection_mode==='roviq_native') return row.sync_state;
-
   if(row.sync_state==='failed') return 'failed';
   if(row.sync_state==='degraded') return 'degraded';
-
   const anchor=row.updated_at;
   if(!anchor) return 'degraded';
   const anchorMs=new Date(anchor).getTime();
