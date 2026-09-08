@@ -1,0 +1,37 @@
+/* Nielsen + Universal Design interaction layer for the Parts portal. */
+:root{--focus-ring:rgba(240,131,75,.78)}
+:where(button,a[href],input,select,textarea,[role="button"]){min-height:44px}
+:where(button,a[href],[role="button"]){touch-action:manipulation}
+:where(button,a[href],input,select,textarea,[role="button"]):focus-visible{outline:3px solid var(--focus-ring);outline-offset:3px}
+:where(button,[role="button"]):disabled,[aria-disabled="true"]{cursor:not-allowed;opacity:.58}
+[aria-busy="true"]{cursor:progress}
+main>p,.inventory-panel>p,.spatial>p{max-width:72ch;line-height:1.55}
+.order-select,.item-row{min-height:48px}
+.order-card.active{position:relative}
+.order-card.active::before{content:"Selected";position:absolute;top:10px;right:12px;padding:3px 7px;border:1px solid rgba(240,131,75,.45);border-radius:999px;background:#0b1624;color:#f4f2ed;font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
+.item-row.active{box-shadow:inset 4px 0 0 #f0834b}
+.error{border-left:4px solid #ef4444;background:rgba(127,29,29,.16)}
+.success{border-left:4px solid #4fb477}
+.spatial-empty{line-height:1.5}
+@media(max-width:700px){
+  :where(button,a[href],input,select,textarea,[role="button"]){min-height:48px}
+  .order-select,.item-row{min-height:52px}
+  .actions{gap:8px}
+  .primary,.secondary{font-size:14px}
+  .spatial-grid{grid-template-columns:1fr}
+  .spatial-grid>div{min-height:auto}
+}
+@media(prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto!important}
+  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;transition-delay:0s!important}
+}
+@media(prefers-contrast:more){
+  :root{--line:rgba(244,242,237,.42);--muted:#d2d9e2}
+  .panel,.card,.item-row{border-width:2px}
+  .primary,.secondary{border-width:2px}
+}
+@media(forced-colors:active){
+  :where(.panel,.card,.item-row){border:1px solid CanvasText!important}
+  :where(button,a[href],input,select,textarea,[role="button"]):focus-visible{outline:2px solid Highlight!important}
+  .order-card.active::before{border:1px solid Highlight;color:CanvasText;background:Canvas}
+}

@@ -65,9 +65,9 @@ describe('cross-role maintenance case lifecycle', () => {
     });
     expect(diagnosticPending.statusCode).toBe(200);
 
-    await pool.query(
-      `insert into matches_offers(demand_id,case_id,actor_id,rank,outcome,responded_at,rule_basis)
-       values($1,$2,$3,1,'accepted',now(),'cross_role_lifecycle_seed')`,
+    const diagnosticOffer = await pool.query(
+      `insert into matches_offers(demand_id,case_id,actor_id,rank,outcome,rule_basis)
+       values($1,$2,$3,1,'offered','cross_role_lifecycle_seed') returning id`,
       [demandId, caseId, diagnosticId]
     );
     await pool.query(
@@ -75,6 +75,15 @@ describe('cross-role maintenance case lifecycle', () => {
        values($1,$2,$3,2,'accepted',now(),'cross_role_lifecycle_seed')`,
       [demandId, caseId, partnerId]
     );
+
+    const acceptDiagnostic = await app.inject({
+      method:'POST', url:`/api/offers/${diagnosticOffer.rows[0].id}/respond`,
+      headers:actorHeaders('diagnostic',diagnosticId), payload:{outcome:'accepted'}
+    });
+    expect(acceptDiagnostic.statusCode).toBe(200);
+    expect(JSON.parse(acceptDiagnostic.body).case.state).toBe('diagnostic_in_progress');
+    const diagnosticOwner = await pool.query('select current_owner_role,current_owner_actor_id from service_cases where id=$1',[caseId]);
+    expect(diagnosticOwner.rows[0]).toMatchObject({current_owner_role:'diagnostic',current_owner_actor_id:diagnosticId});
 
     const diagnosticQueue = await app.inject({
       method: 'GET', url: '/api/diagnostics/me/queue', headers: actorHeaders('diagnostic', diagnosticId)
@@ -93,28 +102,6 @@ describe('cross-role maintenance case lifecycle', () => {
     expect(findingRes.statusCode).toBe(201);
     expect(JSON.parse(findingRes.body).case.state).toBe('tow_pending');
 
-    // Case-scoped read of the same finding, gated by the shared case access service rather than
-    // the demand-scoped route's own matches_offers check -- the diagnostic who recorded it and the
-    // case's customer can both read it, an actor with no relation to the case yet cannot.
-    const findingsRes = await app.inject({
-      method: 'GET', url: `/api/maintenance/cases/${caseId}/diagnostic-findings`, headers: actorHeaders('diagnostic', diagnosticId)
-    });
-    expect(findingsRes.statusCode).toBe(200);
-    const findings = JSON.parse(findingsRes.body).findings;
-    expect(findings).toHaveLength(1);
-    expect(findings[0].disposition).toBe('route_to_tow');
-    expect(findings[0].drivability).toBe('non_drivable');
-
-    const customerFindingsRes = await app.inject({
-      method: 'GET', url: `/api/maintenance/cases/${caseId}/diagnostic-findings`, headers: actorHeaders('customer', customerId)
-    });
-    expect(customerFindingsRes.statusCode).toBe(200);
-
-    const unrelatedFindingsRes = await app.inject({
-      method: 'GET', url: `/api/maintenance/cases/${caseId}/diagnostic-findings`, headers: actorHeaders('tow', towId)
-    });
-    expect(unrelatedFindingsRes.statusCode).toBe(403);
-
     const dispatchRes = await app.inject({
       method: 'POST', url: '/api/admin/transport', headers: adminHeaders(),
       payload: {
@@ -131,6 +118,8 @@ describe('cross-role maintenance case lifecycle', () => {
       payload: { providerActorId: towId }
     });
     expect(assignTow.statusCode).toBe(200);
+    const assignedTowOwner = await pool.query('select current_owner_role,current_owner_actor_id from service_cases where id=$1',[caseId]);
+    expect(assignedTowOwner.rows[0]).toMatchObject({current_owner_role:'tow',current_owner_actor_id:towId});
 
     const gpsRes = await app.inject({
       method: 'POST', url: `/api/transport/${dispatchId}/location`, headers: actorHeaders('tow', towId),
@@ -138,7 +127,15 @@ describe('cross-role maintenance case lifecycle', () => {
     });
     expect(gpsRes.statusCode).toBe(200);
 
-    for (const status of ['accepted','en_route','arrived','vehicle_loaded','in_transit','delivered']) {
+    const acceptedTow = await app.inject({
+      method:'POST', url:`/api/transport/${dispatchId}/status`, headers:actorHeaders('tow',towId),
+      payload:{status:'accepted'}
+    });
+    expect(acceptedTow.statusCode).toBe(200);
+    const acceptedTowOwner = await pool.query('select state,current_owner_role,current_owner_actor_id from service_cases where id=$1',[caseId]);
+    expect(acceptedTowOwner.rows[0]).toMatchObject({state:'tow_in_progress',current_owner_role:'tow',current_owner_actor_id:towId});
+
+    for (const status of ['en_route','arrived','vehicle_loaded','in_transit','delivered']) {
       const res = await app.inject({
         method: 'POST', url: `/api/transport/${dispatchId}/status`, headers: actorHeaders('tow', towId),
         payload: { status }

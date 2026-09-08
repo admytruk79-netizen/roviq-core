@@ -1,8 +1,11 @@
+import type { PoolClient } from 'pg';
 import { pool } from '../db/pool.js';
 import { evaluateAssessmentAuthority, type AiDeploymentMode } from './ai-authority.js';
 
 export type { AiDeploymentMode } from './ai-authority.js';
 export { evaluateAssessmentAuthority } from './ai-authority.js';
+
+type Queryable = Pick<PoolClient, 'query'>;
 
 export type CaseIntelligence = {
   caseId: string | null;
@@ -27,8 +30,8 @@ export type CaseIntelligence = {
  * may influence normalized routing inputs. Shadow and advisory assessments are
  * persisted and traceable but never alter automatic provider coordination.
  */
-export async function loadCaseIntelligenceForDemand(demandId: string): Promise<CaseIntelligence> {
-  const result = await pool.query(
+export async function loadCaseIntelligenceForDemand(demandId: string, queryable: Queryable = pool): Promise<CaseIntelligence> {
+  const result = await queryable.query(
     `select sc.id as case_id,
             ai.id as assessment_id,
             ai.model_provider,
@@ -108,4 +111,34 @@ export function capabilityFromCaseIntelligence(intelligence: CaseIntelligence): 
   if (intelligence.suggestedDrivability === 'non_drivable') return 'tow';
   const supported = new Set(['tow', 'diagnostics', 'parts_supply', 'repair']);
   return intelligence.suggestedCapabilities.find((value) => supported.has(value)) ?? null;
+}
+
+/** Single capability derivation used by routing and point-of-commit selection checks. */
+export async function resolveRequestedCapabilityForDemand(demandId: string, queryable: Queryable = pool): Promise<{
+  capability: string;
+  intelligence: CaseIntelligence;
+}> {
+  const demandResult = await queryable.query(
+    `select demand_type,attributes from demand_requests where id=$1`,
+    [demandId]
+  );
+  if (!demandResult.rowCount) throw new Error('demand_not_found');
+  const demand = demandResult.rows[0];
+  const intelligence = await loadCaseIntelligenceForDemand(demandId,queryable);
+  const aiCapability = capabilityFromCaseIntelligence(intelligence);
+  const explicit = typeof demand.attributes?.requiredCapability === 'string' && demand.attributes.requiredCapability
+    ? demand.attributes.requiredCapability
+    : null;
+  return {
+    capability: explicit ?? aiCapability ?? capabilityForDemand(String(demand.demand_type),demand.attributes ?? {}),
+    intelligence
+  };
+}
+
+function capabilityForDemand(demandType:string,attributes:any):string {
+  if(attributes?.drivability==='non_drivable') return 'tow';
+  if(demandType.includes('diagnostic')||attributes?.requiresDiagnostic===true) return 'diagnostics';
+  if(demandType.includes('tow')) return 'tow';
+  if(demandType.includes('part')) return 'parts_supply';
+  return 'repair';
 }

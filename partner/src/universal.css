@@ -1,0 +1,35 @@
+/* Universal interaction baseline: predictable controls, visible focus, generous targets, readable text, reduced motion. */
+:root{--roviq-focus:rgba(228,111,53,.78)}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+body{line-height:1.5}
+:where(button,a[href],input,select,textarea,[role="button"]){min-height:44px}
+:where(button,a[href],[role="button"]){touch-action:manipulation}
+:where(button,a[href],input,select,textarea,[role="button"]):focus-visible{outline:3px solid var(--roviq-focus);outline-offset:3px}
+:where(button,[role="button"]):disabled,[aria-disabled="true"]{cursor:not-allowed;opacity:.62}
+[aria-busy="true"]{cursor:progress}
+:where(input,select,textarea){font:inherit;max-width:100%}
+textarea{min-height:112px;resize:vertical}
+:where(.panel,.stat,.offer,[id]){scroll-margin-top:96px}
+:where(p,.muted,.hint){overflow-wrap:anywhere}
+:where(.panel p,.panel li){max-width:72ch}
+:where(button,a[href],[role="button"]){-webkit-tap-highlight-color:transparent}
+:where([role="alert"],[role="status"]){outline:0}
+@media(max-width:640px){
+  :where(button,a[href],input,select,textarea,[role="button"]){min-height:48px}
+  :where(.panel,.stat,.offer,[id]){scroll-margin-top:112px}
+}
+@media(prefers-contrast:more){
+  :where(.panel,.stat,.offer){border-width:2px!important}
+  :where(button,a[href],input,select,textarea,[role="button"]):focus-visible{outline-width:4px}
+  .muted{opacity:1!important}
+}
+@media(prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto!important}
+  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;transition-delay:0s!important}
+  .offer:hover{transform:none!important}
+}
+@media(forced-colors:active){
+  :where(.panel,.stat,.offer){border:1px solid CanvasText!important}
+  :where(button,a[href],input,select,textarea,[role="button"]):focus-visible{outline:2px solid Highlight!important}
+  :where(button,[role="button"]):disabled,[aria-disabled="true"]{opacity:1}
+}

@@ -1,14 +1,8 @@
-import { Link, Outlet, useNavigate } from 'react-router-dom';
+import { Link, Outlet } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 
 export function Layout() {
   const { principal, logout } = useAuth();
-  const navigate = useNavigate();
-
-  function handleLogout() {
-    logout();
-    navigate('/login');
-  }
 
   return (
     <div className="roviq-shell">
@@ -20,9 +14,8 @@ export function Layout() {
           </Link>
           {principal && (
             <nav className="roviq-customer-nav" aria-label="Customer navigation">
-              <Link to="/" className="roviq-nav-link">My cases</Link>
               <Link to="/cases/new" className="roviq-nav-link roviq-nav-primary">Start service</Link>
-              <button onClick={handleLogout} className="roviq-nav-link" type="button">Sign out</button>
+              <button onClick={logout} className="roviq-nav-link roviq-account-action" type="button" aria-label="Sign out">Sign out</button>
             </nav>
           )}
         </div>
