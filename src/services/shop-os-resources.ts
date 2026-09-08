@@ -67,12 +67,19 @@ export async function listShopResources(principal:Principal,input:{
   const client=await pool.connect();
   try{
     const scope=await resolveShopScope(principal,input,client);
-    const result=await client.query(`select * from service_resources
-      where organization_id=$1
-        and ($2::uuid is null or location_id=$2::uuid)
-        and ($3::text is null or resource_type=$3)
-        and ($4::boolean=true or active=true)
-      order by resource_type,display_name,id`,[
+    const result=await client.query(`
+      select r.*
+      from service_resources r
+      join partner_system_connections c
+        on c.id=r.source_connection_id
+       and c.mode='roviq_native'
+      where r.organization_id=$1
+        and c.organization_id=$1
+        and ($2::uuid is null or r.location_id=$2::uuid)
+        and ($2::uuid is null or c.location_id=$2::uuid)
+        and ($3::text is null or r.resource_type=$3)
+        and ($4::boolean=true or r.active=true)
+      order by r.resource_type,r.display_name,r.id`,[
       scope.organizationId,scope.locationId,input.resourceType??null,input.includeInactive??false
     ]);
     return {scope,resources:result.rows};
@@ -86,7 +93,12 @@ export async function updateShopResource(principal:Principal,resourceId:string,i
   const client=await pool.connect();
   try{
     await client.query('begin');
-    const current=await client.query(`select * from service_resources where id=$1 for update`,[resourceId]);
+    const current=await client.query(`
+      select r.*
+      from service_resources r
+      join partner_system_connections c on c.id=r.source_connection_id and c.mode='roviq_native'
+      where r.id=$1
+      for update of r`,[resourceId]);
     if(!current.rowCount) throw httpError('shop_os_resource_not_found',404);
     const row=current.rows[0];
     await resolveShopScope(principal,{organizationId:row.organization_id,locationId:row.location_id},client);
