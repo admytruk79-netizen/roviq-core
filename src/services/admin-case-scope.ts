@@ -41,6 +41,7 @@ export async function assertAdminCaseScope(principal:Principal,caseId:string,db:
           select 1 from matches_offers mo
           join actors provider on provider.id=mo.actor_id
           where mo.case_id=sc.id
+            and mo.outcome='accepted'
             and provider.organization_id=$2
             and ($3::uuid is null or provider.location_id=$3)
         )
@@ -70,6 +71,7 @@ export async function assertExceptionOwnerScope(ownerActorId:string,caseId:strin
           select 1 from matches_offers mo
           join actors provider on provider.id=mo.actor_id
           where mo.case_id=sc.id
+            and mo.outcome='accepted'
             and provider.organization_id=$2
             and ($3::uuid is null or provider.location_id=$3)
         )
