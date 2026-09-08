@@ -159,23 +159,22 @@ export function deriveCanonicalSyncState(row:CanonicalWindowRow,now=new Date()):
   if(row.connection_status==='failed'||row.connection_status==='revoked') return 'failed';
   if(row.connection_status==='degraded'||row.connection_status==='paused'||row.connection_status==='planned') return 'degraded';
 
-  // Shop OS owns its native capacity state directly. Never upgrade stale/degraded
-  // windows to current merely because the connection itself remains active.
+  // ROVIQ-native Shop OS capacity is authoritative and carries its own state.
   if(row.connection_mode==='roviq_native') return row.sync_state;
 
-  const anchor=row.connection_mode==='native_integration'
-    ? row.connection_last_success_at
-    : row.connection_mode==='bridge'
-      ? row.updated_at
-      : row.source_connection_id
-        ? row.connection_last_success_at
-        : row.updated_at;
+  // Never promote a window that ingestion already marked stale/degraded/failed merely
+  // because a connection-level health check succeeded later.
+  if(row.sync_state==='failed') return 'failed';
+  if(row.sync_state==='degraded') return 'degraded';
 
+  // Capacity freshness is per-window. Connection heartbeats are health signals, not
+  // evidence that this specific availability window was refreshed.
+  const anchor=row.updated_at;
   if(!anchor) return 'degraded';
   const anchorMs=new Date(anchor).getTime();
   if(!Number.isFinite(anchorMs)) return 'degraded';
   const ageMs=Math.max(0,now.getTime()-anchorMs);
-  if(ageMs<=CAPACITY_CURRENT_MAX_AGE_MS) return row.sync_state==='manual'?'manual':'current';
+  if(ageMs<=CAPACITY_CURRENT_MAX_AGE_MS) return row.sync_state==='manual'?'manual':row.sync_state==='stale'?'stale':'current';
   if(ageMs<=CAPACITY_STALE_MAX_AGE_MS) return 'stale';
   return 'degraded';
 }
