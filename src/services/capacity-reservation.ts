@@ -2,6 +2,30 @@ import type { PoolClient } from 'pg';
 
 type Queryable = Pick<PoolClient,'query'>;
 
+async function resolveReservationTarget(caseId:string,db:Queryable,explicit?:Date):Promise<Date>{
+  if(explicit) return explicit;
+  const result=await db.query(`
+    select coalesce(
+      (
+        select ra.starts_at::text
+          from roviq_appointments ra
+         where ra.service_case_id=sc.id
+           and ra.appointment_status in ('held','confirmed','in_progress')
+         order by ra.updated_at desc,ra.id desc
+         limit 1
+      ),
+      nullif(sc.attributes->>'requestedServiceAt',''),
+      nullif(dr.attributes->>'requestedServiceAt','')
+    ) as service_target_at
+    from service_cases sc
+    left join demand_requests dr on dr.id=sc.demand_id
+    where sc.id=$1`,[caseId]);
+  const raw=result.rows[0]?.service_target_at;
+  if(!raw) return new Date();
+  const parsed=new Date(raw);
+  return Number.isFinite(parsed.getTime())?parsed:new Date();
+}
+
 /**
  * Reserve one canonical capacity unit for a case inside the caller's transaction.
  * The capacity-window row is locked so concurrent selections serialize on the
@@ -13,8 +37,9 @@ export async function reserveCanonicalCapacity(
   capacityWindowId:string,
   db:Queryable,
   units=1,
-  serviceTargetAt=new Date()
+  serviceTargetAt?:Date
 ):Promise<void>{
+  const targetAt=await resolveReservationTarget(caseId,db,serviceTargetAt);
   const window=await db.query(
     `select cw.id,cw.capacity_units,cw.capacity_state,cw.sync_state,cw.window_start,cw.window_end,
             psc.connection_status
@@ -30,7 +55,7 @@ export async function reserveCanonicalCapacity(
   if(!['current','manual'].includes(row.sync_state)) throw new Error('capacity_no_longer_available');
   if(row.connection_status&&row.connection_status!=='active') throw new Error('capacity_no_longer_available');
   const now=Date.now();
-  const targetMs=serviceTargetAt.getTime();
+  const targetMs=targetAt.getTime();
   const startMs=new Date(row.window_start).getTime();
   const endMs=new Date(row.window_end).getTime();
   if(!Number.isFinite(targetMs)||!Number.isFinite(startMs)||!Number.isFinite(endMs)||startMs>targetMs||endMs<=targetMs){
