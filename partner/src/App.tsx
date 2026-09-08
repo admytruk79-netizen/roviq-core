@@ -8,6 +8,7 @@ import { ShopOsDviControl } from './ShopOsDviControl';
 import { ShopOsFloorControl } from './ShopOsFloorControl';
 import { ShopOsScheduleControl } from './ShopOsScheduleControl';
 import { ShopOsWaitlistControl } from './ShopOsWaitlistControl';
+import { ShopOsRecoveryControl } from './ShopOsRecoveryControl';
 
 function Portal() {
   const { principal } = useAuth();
@@ -42,6 +43,7 @@ function Portal() {
         </div>
         <ShopOsScheduleControl />
         <ShopOsWorkspace />
+        <ShopOsRecoveryControl />
         <ShopOsWaitlistControl />
         <ShopOsDviControl />
         <ShopOsFloorControl />
