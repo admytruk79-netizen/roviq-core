@@ -2,18 +2,9 @@ import type { PoolClient } from 'pg';
 
 type Queryable = Pick<PoolClient,'query'>;
 
-async function resolveReservationTarget(caseId:string,db:Queryable,explicit?:Date):Promise<Date>{
-  if(explicit) return explicit;
+async function resolveReservationFallback(caseId:string,db:Queryable):Promise<Date>{
   const result=await db.query(`
     select coalesce(
-      (
-        select ra.starts_at::text
-          from roviq_appointments ra
-         where ra.service_case_id=sc.id
-           and ra.appointment_status in ('held','confirmed','in_progress')
-         order by ra.updated_at desc,ra.id desc
-         limit 1
-      ),
       nullif(sc.attributes->>'requestedServiceAt',''),
       nullif(dr.attributes->>'requestedServiceAt','')
     ) as service_target_at
@@ -29,8 +20,10 @@ async function resolveReservationTarget(caseId:string,db:Queryable,explicit?:Dat
 /**
  * Reserve one canonical capacity unit for a case inside the caller's transaction.
  * The capacity-window row is locked so concurrent selections serialize on the
- * same authoritative inventory record. serviceTargetAt is the requested service
- * instant; freshness and hold expiry still use the current clock.
+ * same authoritative inventory record. Callers that evaluated serviceability
+ * must pass that evaluation's exact serviceTargetAt so evaluation and reservation
+ * validate the same instant. The fallback intentionally uses only canonical
+ * case/demand requestedServiceAt and never guesses from unrelated appointments.
  */
 export async function reserveCanonicalCapacity(
   caseId:string,
@@ -39,7 +32,7 @@ export async function reserveCanonicalCapacity(
   units=1,
   serviceTargetAt?:Date
 ):Promise<void>{
-  const targetAt=await resolveReservationTarget(caseId,db,serviceTargetAt);
+  const targetAt=serviceTargetAt ?? await resolveReservationFallback(caseId,db);
   const window=await db.query(
     `select cw.id,cw.capacity_units,cw.capacity_state,cw.sync_state,cw.window_start,cw.window_end,
             psc.connection_status
