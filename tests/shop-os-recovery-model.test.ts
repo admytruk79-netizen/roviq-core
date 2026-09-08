@@ -13,12 +13,24 @@ const base={
 };
 
 describe('Shop OS cancelled/no-show recovery model',()=>{
-  it('treats only unrecovered cancelled and no-show appointments as actionable',()=>{
+  it('treats only unrecovered cancelled and no-show root appointments as actionable',()=>{
     expect(isRecoverableAppointment(base)).toBe(true);
     expect(isRecoverableAppointment({...base,appointment_status:'no_show'})).toBe(true);
     expect(isRecoverableAppointment({...base,appointment_status:'held'})).toBe(false);
     expect(isRecoverableAppointment({...base,appointment_status:'completed'})).toBe(false);
     expect(isRecoverableAppointment({...base,active_replacement_appointment_id:'55555555-5555-4555-8555-555555555555'})).toBe(false);
+  });
+
+  it.each(['cancelled','no_show'])('does not let a %s replacement become an independent recovery source',appointmentStatus=>{
+    const failedReplacement={
+      ...base,
+      id:'66666666-6666-4666-8666-666666666666',
+      appointment_status:appointmentStatus,
+      recovery_source_appointment_id:base.id,
+      active_replacement_appointment_id:null
+    };
+    expect(isRecoverableAppointment(failedReplacement)).toBe(false);
+    expect(isRecoverableAppointment({...base,active_replacement_appointment_id:null})).toBe(true);
   });
 
   it('moves an elapsed appointment to the next future half-hour slot while preserving duration',()=>{
