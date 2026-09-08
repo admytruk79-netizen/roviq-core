@@ -1,4 +1,4 @@
-import {useCallback,useEffect,useMemo,useState} from 'react';
+import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
 import {api} from './api';
 
 type Appointment={
@@ -54,12 +54,19 @@ function formatDateTime(value:string){
   return new Intl.DateTimeFormat(undefined,{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}).format(new Date(value));
 }
 
-function rangeFor(mode:RangeMode){
-  const from=new Date();
+export function rangeFor(mode:RangeMode,now=new Date()){
+  const from=new Date(now);
   from.setHours(0,0,0,0);
   const to=new Date(from);
   to.setDate(to.getDate()+(mode==='day'?1:7));
   return{from:from.toISOString(),to:to.toISOString()};
+}
+
+export function isAppointmentActiveNow(appointment:Appointment,nowMs=Date.now()){
+  if(!['held','confirmed','in_progress'].includes(appointment.appointment_status))return false;
+  const startsAt=new Date(appointment.starts_at).getTime();
+  const endsAt=new Date(appointment.ends_at).getTime();
+  return Number.isFinite(startsAt)&&Number.isFinite(endsAt)&&startsAt<=nowMs&&endsAt>nowMs;
 }
 
 function toLocalInput(value:string){
@@ -84,10 +91,11 @@ export function ShopOsScheduleControl(){
   const[startValue,setStartValue]=useState('');
   const[endValue,setEndValue]=useState('');
   const[resourceValue,setResourceValue]=useState('');
-
-  const range=useMemo(()=>rangeFor(mode),[mode]);
+  const requestSequence=useRef(0);
 
   const load=useCallback(async()=>{
+    const requestId=++requestSequence.current;
+    const range=rangeFor(mode);
     setLoading(true);
     setError(null);
     try{
@@ -95,20 +103,23 @@ export function ShopOsScheduleControl(){
         api.get<Board>(`/api/shop-os/board?from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}`),
         api.get<ResourceResponse>('/api/shop-os/resources')
       ]);
+      if(requestId!==requestSequence.current)return;
       setBoard(b);
       setResources(r.resources??[]);
     }catch(e){
+      if(requestId!==requestSequence.current)return;
       setError(`Schedule could not load. ${human(e instanceof Error?e.message:'Request failed')}. Refresh and try again.`);
     }finally{
-      setLoading(false);
+      if(requestId===requestSequence.current)setLoading(false);
     }
-  },[range.from,range.to]);
+  },[mode]);
 
   useEffect(()=>{void load()},[load]);
 
   const resourceNames=useMemo(()=>new Map(resources.map(r=>[r.id,r.display_name])),[resources]);
   const appointments=useMemo(()=>[...(board?.appointments??[])].sort((a,b)=>new Date(a.starts_at).getTime()-new Date(b.starts_at).getTime()),[board]);
-  const active=appointments.filter(a=>['held','confirmed','in_progress'].includes(a.appointment_status));
+  const nowMs=Date.now();
+  const active=appointments.filter(a=>isAppointmentActiveNow(a,nowMs));
   const exceptions=appointments.filter(a=>['cancelled','no_show'].includes(a.appointment_status));
 
   function openReschedule(appointment:Appointment){
@@ -182,7 +193,7 @@ export function ShopOsScheduleControl(){
 
     <div className="mt-5 grid gap-3 sm:grid-cols-3">
       <div className="stat"><p className="muted text-xs uppercase tracking-[.12em]">Scheduled</p><p className="mt-2 text-3xl font-black">{appointments.length}</p><p className="muted mt-1 text-xs">in selected range</p></div>
-      <div className="stat"><p className="muted text-xs uppercase tracking-[.12em]">Active now</p><p className="mt-2 text-3xl font-black text-[var(--green)]">{active.length}</p><p className="muted mt-1 text-xs">arrival / ready / work</p></div>
+      <div className="stat"><p className="muted text-xs uppercase tracking-[.12em]">Active now</p><p className="mt-2 text-3xl font-black text-[var(--green)]">{active.length}</p><p className="muted mt-1 text-xs">happening at this moment</p></div>
       <div className="stat"><p className="muted text-xs uppercase tracking-[.12em]">Needs recovery</p><p className="mt-2 text-3xl font-black text-amber-300">{exceptions.length}</p><p className="muted mt-1 text-xs">cancelled / no-show</p></div>
     </div>
 
