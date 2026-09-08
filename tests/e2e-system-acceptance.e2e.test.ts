@@ -46,6 +46,11 @@ describe('ROVIQ system acceptance journey', () => {
        on conflict do nothing`,
       [partnerId]
     );
+    await pool.query(
+      `insert into capacity_snapshots(actor_id,capacity_type,quantity,start_at,end_at,source,confidence)
+       values($1,'repair',1,now()-interval '5 minutes',now()+interval '2 hours','system_acceptance',1)`,
+      [partnerId]
+    );
   });
 
   afterAll(async () => {

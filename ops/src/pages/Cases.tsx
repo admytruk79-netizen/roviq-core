@@ -28,24 +28,36 @@ export function Cases() {
   const [cases, setCases] = useState<ServiceCase[] | null>(null);
   const [stateFilter, setStateFilter] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
+    let activeRequest = true;
     setCases(null);
+    setError(null);
     const query = stateFilter ? `?state=${stateFilter}` : '';
-    api.get<{ cases: ServiceCase[] }>(`/api/admin/cases${query}`).then((res) => setCases(res.cases)).catch(() => setError('Could not load cases.'));
-  }, [stateFilter]);
+    api.get<{ cases: ServiceCase[] }>(`/api/admin/cases${query}`)
+      .then((res) => { if (activeRequest) setCases(res.cases); })
+      .catch(() => { if (activeRequest) setError('Could not load cases. Check the connection and try again.'); });
+    return () => { activeRequest = false; };
+  }, [stateFilter, refreshKey]);
 
   const critical = useMemo(() => cases?.filter(c => ['critical','emergency','high'].includes(String(c.priority).toLowerCase())).length ?? 0,[cases]);
   const active = useMemo(() => cases?.filter(c => !['closed','completed','cancelled'].includes(String(c.state).toLowerCase())).length ?? 0,[cases]);
+  const loading = cases === null && !error;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5" aria-busy={loading}>
       <section className="ops-hero">
         <div><p className="roviq-kicker">Network control</p><h1>Operations cases</h1><p className="roviq-muted">Monitor active cases, priority and exceptions from one control surface.</p></div>
-        <select value={stateFilter} onChange={(e) => setStateFilter(e.target.value)} className="roviq-input ops-filter" aria-label="Filter cases by state">
-          <option value="">All states</option>
-          {CASE_STATES.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
-        </select>
+        <div className="flex flex-wrap items-center gap-2">
+          <select value={stateFilter} onChange={(e) => setStateFilter(e.target.value)} className="roviq-input ops-filter" aria-label="Filter cases by state">
+            <option value="">All states</option>
+            {CASE_STATES.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
+          </select>
+          <button type="button" className="roviq-btn-secondary" onClick={() => setRefreshKey(key => key + 1)} disabled={loading} aria-busy={loading}>
+            {loading ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
       </section>
 
       <section className="ops-stats" aria-label="Operations summary">
@@ -54,18 +66,18 @@ export function Cases() {
         <div><span>Priority watch</span><strong>{critical}</strong></div>
       </section>
 
-      {error && <div className="ops-error">{error}</div>}
-      {cases === null && !error && <div className="roviq-panel p-5 text-sm roviq-muted">Loading operational cases…</div>}
-      {cases !== null && cases.length === 0 && <div className="roviq-panel ops-empty">No cases match this filter.</div>}
+      {error && <div className="ops-error flex flex-wrap items-center justify-between gap-3" role="alert"><span>{error}</span><button type="button" className="roviq-btn-secondary" onClick={() => setRefreshKey(key => key + 1)}>Try again</button></div>}
+      {loading && <div className="roviq-panel p-5 text-sm roviq-muted" role="status" aria-live="polite">Loading operational cases…</div>}
+      {cases !== null && cases.length === 0 && <div className="roviq-panel ops-empty" role="status">No cases match this filter.</div>}
 
       {cases !== null && cases.length > 0 && (
-        <section className="ops-case-grid">
+        <section className="ops-case-grid" aria-label="Operational cases">
           {cases.map((c) => (
             <Link to={`/cases/${c.id}`} key={c.id} className="ops-case-card">
               <div className="ops-case-top"><div><p className="roviq-kicker">{String(c.case_type).replaceAll('_',' ')} case</p><h2>Case {c.id.slice(0,8)}</h2></div><StatusBadge state={c.state} /></div>
               <div className="ops-case-meta"><span className={`ops-priority priority-${String(c.priority).toLowerCase()}`}>{c.priority}</span><span>Updated {formatDateTime(c.updated_at)}</span></div>
               <p className="roviq-muted text-sm"><strong className="text-slate-700">Next action:</strong> {nextAction(c.state)}</p>
-              <div className="ops-open-row"><span>Open case control</span><strong>›</strong></div>
+              <div className="ops-open-row"><span>Open case control</span><strong aria-hidden="true">›</strong></div>
             </Link>
           ))}
         </section>

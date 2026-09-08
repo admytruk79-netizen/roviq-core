@@ -82,6 +82,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(null);
     localStorage.removeItem(PRINCIPAL_KEY);
     setPrincipal(null);
+    // Hard replace prevents stale protected-route or browser history state from
+    // making the user appear signed in after the token has been cleared.
+    queueMicrotask(() => window.location.replace('/login'));
   }
 
   return <AuthContext.Provider value={{ principal, loading, error, login, logout }}>{children}</AuthContext.Provider>;
