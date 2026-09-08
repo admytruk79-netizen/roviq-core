@@ -6,6 +6,7 @@ import { Login } from './Login';
 import { ShopOsWorkspace } from './ShopOsWorkspace';
 import { ShopOsDviControl } from './ShopOsDviControl';
 import { ShopOsFloorControl } from './ShopOsFloorControl';
+import { ShopOsScheduleControl } from './ShopOsScheduleControl';
 
 function Portal() {
   const { principal } = useAuth();
@@ -38,6 +39,7 @@ function Portal() {
           <h2 id="shop-os-heading" className="mt-1 text-2xl font-bold">Run today’s service work</h2>
           <p className="muted mt-1 max-w-2xl text-sm">Move from coordinated demand to repair execution without leaving the partner workspace.</p>
         </div>
+        <ShopOsScheduleControl />
         <ShopOsWorkspace />
         <ShopOsDviControl />
         <ShopOsFloorControl />
