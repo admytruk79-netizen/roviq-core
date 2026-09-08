@@ -7,11 +7,13 @@ export type RecoverableAppointment={
   ends_at:string;
   service_category?:string|null;
   customer_visible_summary?:string|null;
+  recovery_source_appointment_id?:string|null;
   active_replacement_appointment_id?:string|null;
 };
 
 export function isRecoverableAppointment(appointment:RecoverableAppointment){
   return (appointment.appointment_status==='cancelled'||appointment.appointment_status==='no_show')
+    && !appointment.recovery_source_appointment_id
     && !appointment.active_replacement_appointment_id;
 }
 
