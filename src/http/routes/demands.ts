@@ -1,29 +1,25 @@
 import type { FastifyInstance } from 'fastify';
-import { z } from 'zod';
 import { pool } from '../../db/pool.js';
 import { audit } from '../../services/audit.js';
 import { createServiceCase, transitionCase } from '../../services/orchestration.js';
 import { requireRole } from '../middleware/principal.js';
-
-const createDemand = z.object({
-  domain: z.string().default('maintenance'),
-  demandType: z.string().min(1),
-  location: z.object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) }).optional(),
-  urgency: z.enum(['normal','urgent','emergency']).default('normal'),
-  attributes: z.record(z.unknown()).default({})
-});
+import { createDemandSchema } from './demand-schema.js';
 
 export async function demandRoutes(app: FastifyInstance) {
   app.post('/api/demands', { preHandler: requireRole('customer','admin') }, async (req, reply) => {
-    const body = createDemand.parse(req.body);
+    const body = createDemandSchema.parse(req.body);
     const domain = await pool.query('select id from domains where code=$1 and status=$2', [body.domain, 'active']);
     if (!domain.rowCount) return reply.code(400).send({ error: 'unknown_domain' });
 
     const requester = req.principal.role === 'admin' ? null : req.principal.actorId;
+    const attributes = {
+      ...body.attributes,
+      ...(body.requestedServiceAt ? { requestedServiceAt:body.requestedServiceAt } : {})
+    };
     const result = await pool.query(
       `insert into demand_requests(domain_id, requester_actor_id, demand_type, location, urgency, attributes, state)
        values ($1,$2,$3,$4,$5,$6,'open') returning *`,
-      [domain.rows[0].id, requester, body.demandType, body.location ? JSON.stringify(body.location) : null, body.urgency, JSON.stringify(body.attributes)]
+      [domain.rows[0].id, requester, body.demandType, body.location ? JSON.stringify(body.location) : null, body.urgency, JSON.stringify(attributes)]
     );
     const demand = result.rows[0];
     await audit(req.principal, 'create', 'demand_request', demand.id, 'customer_intake');
@@ -33,7 +29,7 @@ export async function demandRoutes(app: FastifyInstance) {
       const serviceCase = await createServiceCase(req.principal, {
         demandId:demand.id,
         priority,
-        attributes:{ demandType:body.demandType, intakeLocation:body.location ?? null, ...body.attributes }
+        attributes:{ demandType:body.demandType, intakeLocation:body.location ?? null, ...attributes }
       });
 
       if (body.location) {

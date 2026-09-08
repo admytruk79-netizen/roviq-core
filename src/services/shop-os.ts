@@ -72,6 +72,12 @@ async function loadExistingResource(principal:Principal,resourceId:string,db:Que
   return row;
 }
 
+export async function lockSchedulingCase(serviceCaseId:string|null|undefined,db:Queryable){
+  if(!serviceCaseId)return;
+  const locked=await db.query(`select id from service_cases where id=$1 for update`,[serviceCaseId]);
+  if(!locked.rowCount) throw httpError('service_case_not_found',404);
+}
+
 async function assertManageableServiceCase(principal:Principal,serviceCaseId:string|null|undefined,organizationId:string,db:Queryable){
   if(!serviceCaseId)return;
   try{
@@ -311,6 +317,10 @@ export async function createShopOsAppointment(principal:Principal,input:{
   try{
     await client.query('begin');
     assertInterval(input.startsAt,input.endsAt);
+    // Global scheduling/selection lock order is service case -> resource -> capacity window.
+    // Selection already holds the case before reserving capacity; appointment creation must
+    // do the same before any resource lock so the two transactions cannot deadlock.
+    await lockSchedulingCase(input.serviceCaseId,client);
     const resource=await loadManageableResource(principal,input.resourceId,client);
     await assertManageableServiceCase(principal,input.serviceCaseId,resource.organization_id,client);
     await lockSchedulingResources([input.resourceId],client);

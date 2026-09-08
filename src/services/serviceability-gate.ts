@@ -19,6 +19,7 @@ export type ActorServiceability = {
   source: 'canonical_capacity' | 'legacy_capacity' | 'missing';
   capacityWindowId: string | null;
   capacityUnits: number;
+  serviceTargetAt: Date;
 };
 
 export type CanonicalWindowRow = {
@@ -35,6 +36,34 @@ export type CanonicalWindowRow = {
   service_category:string|null;
   scope_rank?:number|string;
 };
+
+export async function resolveServiceTargetAt(caseId:string|null|undefined,db:Queryable,now=new Date(),serviceCategory:string|null|undefined=null):Promise<Date>{
+  if(!caseId) return now;
+  const result=await db.query(`
+    select coalesce(
+      (
+        select ra.starts_at::text
+          from roviq_appointments ra
+         where ra.service_case_id=sc.id
+           and $2::text is not null
+           and (ra.service_category is null or ra.service_category=$2::text)
+           and ra.appointment_status in ('held','confirmed','in_progress')
+         order by
+           case ra.appointment_status when 'in_progress' then 0 when 'confirmed' then 1 else 2 end,
+           ra.starts_at asc,ra.id asc
+         limit 1
+      ),
+      nullif(sc.attributes->>'requestedServiceAt',''),
+      nullif(dr.attributes->>'requestedServiceAt','')
+    ) as service_target_at
+    from service_cases sc
+    left join demand_requests dr on dr.id=sc.demand_id
+    where sc.id=$1`,[caseId,serviceCategory??null]);
+  const raw=result.rows[0]?.service_target_at;
+  if(!raw) return now;
+  const parsed=new Date(raw);
+  return Number.isFinite(parsed.getTime())?parsed:now;
+}
 
 export async function evaluateActorServiceability(
   caseId: string | null | undefined,
@@ -58,8 +87,9 @@ export async function evaluateActorServiceability(
     [actorId]
   );
 
+  const serviceTargetAt=await resolveServiceTargetAt(caseId,db,now,serviceCategory);
   if (!actor.rowCount) {
-    return { decision:evaluateServiceability({capacity:null,requirementsProjected:false}), source:'missing', capacityWindowId:null, capacityUnits:0 };
+    return { decision:evaluateServiceability({capacity:null,requirementsProjected:false}), source:'missing', capacityWindowId:null, capacityUnits:0, serviceTargetAt };
   }
 
   const a = actor.rows[0];
@@ -81,25 +111,28 @@ export async function evaluateActorServiceability(
             case when $1::uuid is not null and cw.location_id=$1 then 0 else 1 end as scope_rank
        from capacity_windows cw
        left join partner_system_connections psc on psc.id=cw.source_connection_id
-      where cw.window_start<=now()
+       left join service_resources sr on sr.id=cw.resource_id
+      where cw.window_start<=$5::timestamptz
+        and cw.window_end>$5::timestamptz
         and cw.window_end>now()
+        and (cw.resource_id is null or (sr.id is not null and sr.active=true and sr.operational_state not in ('blocked','offline')))
         and (
           ($1::uuid is not null and cw.location_id=$1)
           or ($2::uuid is not null and cw.organization_id=$2 and cw.location_id is null)
         )
         and ($3::text is null or cw.service_category is null or cw.service_category=$3)
       order by scope_rank asc,(cw.service_category=$3) desc nulls last,cw.window_start asc,cw.updated_at desc,cw.capacity_units desc`,
-    [a.location_id ?? null,a.organization_id ?? null,serviceCategory ?? null,caseId ?? null]
+    [a.location_id ?? null,a.organization_id ?? null,serviceCategory ?? null,caseId ?? null,serviceTargetAt.toISOString()]
   );
 
-  const canonicalEvaluation=evaluateCanonicalWindows(canonical.rows,constraints,intent,serviceCategory ?? null,now,requirementsProjected);
+  const canonicalEvaluation=evaluateCanonicalWindows(canonical.rows,constraints,intent,serviceCategory ?? null,now,requirementsProjected,serviceTargetAt);
   if(canonicalEvaluation) return canonicalEvaluation;
 
   if (!a.has_connection_model) {
     const legacy=await db.query(
       `select coalesce(sum(quantity),0)::float as units
-       from capacity_snapshots where actor_id=$1 and start_at<=now() and end_at>now()`,
-      [actorId]
+       from capacity_snapshots where actor_id=$1 and start_at<=$2::timestamptz and end_at>$2::timestamptz and end_at>now()`,
+      [actorId,serviceTargetAt.toISOString()]
     );
     const units=Number(legacy.rows[0]?.units ?? 0);
     const decision=evaluateServiceability({
@@ -109,10 +142,10 @@ export async function evaluateActorServiceability(
       allowManualVerified:false,
       allowStaleHold:intent==='hold'
     });
-    return {decision,source:'legacy_capacity',capacityWindowId:null,capacityUnits:units};
+    return {decision,source:'legacy_capacity',capacityWindowId:null,capacityUnits:units,serviceTargetAt};
   }
 
-  return { decision:evaluateServiceability({capacity:null,constraints,requirementsProjected}), source:'missing', capacityWindowId:null, capacityUnits:0 };
+  return { decision:evaluateServiceability({capacity:null,constraints,requirementsProjected}), source:'missing', capacityWindowId:null, capacityUnits:0, serviceTargetAt };
 }
 
 export function evaluateCanonicalWindows(
@@ -121,7 +154,8 @@ export function evaluateCanonicalWindows(
   intent:ServiceabilityIntent,
   serviceCategory:string|null=null,
   now=new Date(),
-  requirementsProjected=true
+  requirementsProjected=true,
+  serviceTargetAt=now
 ):ActorServiceability|null {
   let firstRejected:ActorServiceability|null=null;
   let sawRelevant=false;
@@ -148,7 +182,8 @@ export function evaluateCanonicalWindows(
       decision,
       source:'canonical_capacity',
       capacityWindowId:row.id,
-      capacityUnits:Number.isFinite(capacityUnits)?capacityUnits:0
+      capacityUnits:Number.isFinite(capacityUnits)?capacityUnits:0,
+      serviceTargetAt
     };
     if(serviceabilityAllows(intent,decision)) return result;
     if(!firstRejected) firstRejected=result;
@@ -159,17 +194,9 @@ export function evaluateCanonicalWindows(
 export function deriveCanonicalSyncState(row:CanonicalWindowRow,now=new Date()):SyncState {
   if(row.connection_status==='failed'||row.connection_status==='revoked') return 'failed';
   if(row.connection_status==='degraded'||row.connection_status==='paused'||row.connection_status==='planned') return 'degraded';
-
-  // ROVIQ-native Shop OS capacity is authoritative and carries its own state.
   if(row.connection_mode==='roviq_native') return row.sync_state;
-
-  // Never promote a window that ingestion already marked stale/degraded/failed merely
-  // because a connection-level health check succeeded later.
   if(row.sync_state==='failed') return 'failed';
   if(row.sync_state==='degraded') return 'degraded';
-
-  // Capacity freshness is per-window. Connection heartbeats are health signals, not
-  // evidence that this specific availability window was refreshed.
   const anchor=row.updated_at;
   if(!anchor) return 'degraded';
   const anchorMs=new Date(anchor).getTime();

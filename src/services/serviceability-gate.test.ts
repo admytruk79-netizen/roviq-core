@@ -3,6 +3,7 @@ import {
   deriveCanonicalSyncState,
   evaluateActorServiceability,
   evaluateCanonicalWindows,
+  resolveServiceTargetAt,
   type CanonicalWindowRow
 } from './serviceability-gate.js';
 
@@ -81,6 +82,39 @@ describe('canonical serviceability gate',()=>{
     expect(result?.source).toBe('canonical_capacity');
     expect(result?.capacityUnits).toBe(4);
     expect(result?.decision.eligible).toBe(true);
+  });
+
+  it('resolves the requested category appointment and ignores simultaneous unrelated appointments',async()=>{
+    let sql=''; let params:unknown[]=[];
+    const db:any={query:async(query:string,values:unknown[])=>{
+      sql=query;params=values;
+      return {rowCount:1,rows:[{service_target_at:'2026-09-12T17:30:00.000Z'}]};
+    }};
+    const target=await resolveServiceTargetAt(
+      '11111111-1111-1111-1111-111111111111',
+      db,
+      new Date('2026-09-07T20:00:00.000Z'),
+      'repair'
+    );
+    expect(target.toISOString()).toBe('2026-09-12T17:30:00.000Z');
+    expect(params[1]).toBe('repair');
+    expect(sql).toContain('ra.service_category=$2::text');
+    expect(sql).toContain("when 'in_progress' then 0");
+  });
+
+  it('falls back to canonical case/demand requested service time when no matching category appointment exists',async()=>{
+    const db:any={query:async()=>({rowCount:1,rows:[{service_target_at:'2026-09-14T15:00:00.000Z'}]})};
+    const target=await resolveServiceTargetAt(
+      '11111111-1111-1111-1111-111111111111',db,new Date('2026-09-07T20:00:00.000Z'),'diagnostics'
+    );
+    expect(target.toISOString()).toBe('2026-09-14T15:00:00.000Z');
+  });
+
+  it('falls back to immediate service when no valid scheduled target exists',async()=>{
+    const now=new Date('2026-09-07T20:00:00.000Z');
+    const db:any={query:async()=>({rowCount:1,rows:[{service_target_at:'not-a-date'}]})};
+    const target=await resolveServiceTargetAt('11111111-1111-1111-1111-111111111111',db,now,'repair');
+    expect(target).toBe(now);
   });
 
   it('allows a location actor to use organization-global canonical capacity',async()=>{
