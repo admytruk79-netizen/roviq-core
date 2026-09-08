@@ -4,7 +4,7 @@ import { pool } from '../../db/pool.js';
 import { audit } from '../../services/audit.js';
 import { transitionCase } from '../../services/orchestration.js';
 import { publishIntegrationEvent } from '../../services/integration-gateway.js';
-import { releaseCaseCapacity } from '../../services/capacity-reservation.js';
+import { confirmCaseCapacity, releaseCaseCapacity } from '../../services/capacity-reservation.js';
 import { requireRole } from '../middleware/principal.js';
 
 const capacityBody = z.object({
@@ -84,15 +84,10 @@ export async function partnerRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const body = z.object({ outcome: z.enum(['accepted','declined']) }).parse(req.body);
 
-    // Decline, reservation release, selection clearing and state reset are one transaction.
-    // Use the same lock order as acceptance (service_cases -> matches_offers) so concurrent
-    // responses serialize instead of deadlocking.
     if (body.outcome === 'declined') {
       const client=await pool.connect();
       try{
         await client.query('begin');
-
-        // Read immutable case identity without locking, then establish the canonical lock order.
         const offerIdentity=await client.query(
           `select id,case_id from matches_offers where id=$1 and actor_id=$2`,
           [id,req.principal.actorId]
@@ -175,8 +170,6 @@ export async function partnerRoutes(app: FastifyInstance) {
       }finally{client.release();}
     }
 
-    // Provider acceptance is guarded by canonical selection. Lock order is always
-    // service_cases -> matches_offers, matching selection authority and avoiding deadlocks.
     if(req.principal.role==='partner'){
       const client=await pool.connect();
       let committedCaseId:string|null=null;
@@ -184,8 +177,6 @@ export async function partnerRoutes(app: FastifyInstance) {
       let acceptedCase:any=null;
       try{
         await client.query('begin');
-
-        // Read immutable case identity without locking, then establish the canonical lock order.
         const offerIdentity=await client.query(
           `select id,case_id from matches_offers where id=$1 and actor_id=$2`,
           [id,req.principal.actorId]
@@ -214,7 +205,6 @@ export async function partnerRoutes(app: FastifyInstance) {
           await client.query('rollback');
           return reply.code(404).send({error:'offer_not_found_or_not_owned'});
         }
-        const offer=offerResult.rows[0];
         const current=caseResult.rows[0];
         if(current.state!=='provider_pending'||current.selected_actor_id!==req.principal.actorId){
           await client.query('rollback');
@@ -234,10 +224,13 @@ export async function partnerRoutes(app: FastifyInstance) {
            where id=$1 and actor_id=$2 and outcome='offered' returning *`,
           [id,req.principal.actorId]
         )).rows[0];
+        if(!acceptedOffer) throw new Error('offer_already_responded');
 
         await client.query(`
           update matches_offers set outcome='declined',responded_at=coalesce(responded_at,now())
           where case_id=$1 and id<>$2 and outcome='offered'`,[caseId,id]);
+
+        await confirmCaseCapacity(caseId,client);
 
         const updated=await client.query(`
           update service_cases
@@ -247,13 +240,21 @@ export async function partnerRoutes(app: FastifyInstance) {
         if(!updated.rowCount) throw new Error('offer_not_current_selection');
         acceptedCase=updated.rows[0];
 
+        const integrationPayload={from:'provider_pending',to:'repair_in_progress',offerId:id,providerActorId:req.principal.actorId};
         await client.query(`insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload)
           values('service_case',$1,'PROVIDER_ACCEPTED',$2,$3),
                 ('service_case',$1,'CASE_REPAIR_IN_PROGRESS',$2,$4)`,[
           caseId,req.principal.actorId,
           JSON.stringify({offerId:id,actorId:req.principal.actorId,from:'provider_pending'}),
-          JSON.stringify({from:'provider_pending',to:'repair_in_progress',offerId:id,providerActorId:req.principal.actorId})
+          JSON.stringify(integrationPayload)
         ]);
+        await publishIntegrationEvent({
+          aggregateType:'service_case',
+          aggregateId:caseId,
+          eventType:'CASE_REPAIR_IN_PROGRESS',
+          actorId:req.principal.actorId ?? undefined,
+          payload:integrationPayload
+        },client);
         await client.query('commit');
         committedCaseId=caseId;
       }catch(error){
@@ -262,27 +263,9 @@ export async function partnerRoutes(app: FastifyInstance) {
       }finally{client.release();}
 
       await audit(req.principal,'respond_offer','match_offer',id,'actor_scoped_offer',{outcome:'accepted',caseId:committedCaseId});
-      if(committedCaseId){
-        try{
-          await publishIntegrationEvent({
-            aggregateType:'service_case',
-            aggregateId:committedCaseId,
-            eventType:'CASE_REPAIR_IN_PROGRESS',
-            actorId:req.principal.actorId ?? undefined,
-            payload:{from:'provider_pending',to:'repair_in_progress',offerId:id,providerActorId:req.principal.actorId}
-          });
-        }catch(error){
-          console.error('integration_event_publish_failed',{
-            eventType:'CASE_REPAIR_IN_PROGRESS',
-            caseId:committedCaseId,
-            message:error instanceof Error?error.message:String(error)
-          });
-        }
-      }
       return {offer:acceptedOffer,case:acceptedCase};
     }
 
-    // Non-provider actor offers retain their role-specific transition flow.
     const r = await pool.query(
       `update matches_offers set outcome=$1, responded_at=now()
        where id=$2 and actor_id=$3 and outcome='offered' returning *`,
