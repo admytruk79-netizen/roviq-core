@@ -7,10 +7,12 @@ export type RecoverableAppointment={
   ends_at:string;
   service_category?:string|null;
   customer_visible_summary?:string|null;
+  active_replacement_appointment_id?:string|null;
 };
 
 export function isRecoverableAppointment(appointment:RecoverableAppointment){
-  return appointment.appointment_status==='cancelled'||appointment.appointment_status==='no_show';
+  return (appointment.appointment_status==='cancelled'||appointment.appointment_status==='no_show')
+    && !appointment.active_replacement_appointment_id;
 }
 
 export function defaultRecoveryWindow(appointment:RecoverableAppointment,nowMs=Date.now()){
@@ -37,6 +39,7 @@ export function replacementAppointmentBody(
     serviceCategory:appointment.service_category??null,
     status:'held' as const,
     customerVisibleSummary:appointment.customer_visible_summary??null,
-    internalNotes:`Replacement appointment for ${appointment.appointment_status} appointment ${appointment.id}`
+    internalNotes:`Replacement appointment for ${appointment.appointment_status} appointment ${appointment.id}`,
+    recoverySourceAppointmentId:appointment.id
   };
 }
