@@ -42,18 +42,63 @@ export async function adminRoutes(app: FastifyInstance) {
 
   app.post('/api/admin/offers', { preHandler: requireRole('admin') }, async (req, reply) => {
     const body = z.object({ demandId:z.string().uuid(), actorId:z.string().uuid(), resourceId:z.string().uuid().optional(), rank:z.number().int().positive().default(1), score:z.number().optional(), ruleBasis:z.string().default('manual_dispatch') }).parse(req.body);
-    const caseResult = await pool.query(
-      'select id from service_cases where demand_id=$1 order by created_at desc limit 1',
-      [body.demandId]
-    );
-    const caseId = caseResult.rows[0]?.id ?? null;
-    const r = await pool.query(
-      `insert into matches_offers(demand_id,case_id,actor_id,resource_id,score,rank,rule_basis,outcome)
-       values($1,$2,$3,$4,$5,$6,$7,'offered') returning *`,
-      [body.demandId,caseId,body.actorId,body.resourceId ?? null,body.score ?? null,body.rank,body.ruleBasis]
-    );
-    await audit(req.principal,'create_offer','match_offer',r.rows[0].id,body.ruleBasis,{ demandId:body.demandId, caseId, actorId:body.actorId });
-    return reply.code(201).send({ offer:r.rows[0] });
+    const client=await pool.connect();
+    let offer:any;
+    let caseId:string|null=null;
+    try{
+      await client.query('begin');
+      const caseResult = await client.query(
+        'select * from service_cases where demand_id=$1 order by created_at desc limit 1 for update',
+        [body.demandId]
+      );
+      const serviceCase=caseResult.rows[0]??null;
+      caseId=serviceCase?.id??null;
+
+      const actor=await client.query(`select a.id,a.actor_type,a.status,
+        exists(select 1 from actor_capabilities ac join capabilities c on c.id=ac.capability_id where ac.actor_id=a.id and c.capability_code='repair') as can_repair
+        from actors a where a.id=$1`,[body.actorId]);
+      if(!actor.rowCount||actor.rows[0].status!=='active'){
+        await client.query('rollback');
+        return reply.code(409).send({error:'offer_actor_unavailable'});
+      }
+
+      const r = await client.query(
+        `insert into matches_offers(demand_id,case_id,actor_id,resource_id,score,rank,rule_basis,outcome)
+         values($1,$2,$3,$4,$5,$6,$7,'offered') returning *`,
+        [body.demandId,caseId,body.actorId,body.resourceId ?? null,body.score ?? null,body.rank,body.ruleBasis]
+      );
+      offer=r.rows[0];
+
+      // A manual repair offer created while the case is awaiting provider selection is
+      // itself the authoritative admin selection. Advance the case atomically so only
+      // that selected provider can accept it. Diagnostic/tow/parts offer workflows keep
+      // their existing role-specific transitions.
+      if(serviceCase?.state==='provider_selection'&&actor.rows[0].can_repair){
+        if(serviceCase.selected_actor_id&&serviceCase.selected_actor_id!==body.actorId){
+          throw Object.assign(new Error('case_selection_conflict'),{statusCode:409});
+        }
+        await client.query(`update service_cases
+          set selected_actor_id=$1,selection_source='ops_override',selected_at=coalesce(selected_at,now()),
+              state='provider_pending',version=version+1,updated_at=now()
+          where id=$2 and state='provider_selection' and (selected_actor_id is null or selected_actor_id=$1)`,[body.actorId,caseId]);
+        await client.query(`update matches_offers
+          set outcome='declined',responded_at=coalesce(responded_at,now())
+          where case_id=$1 and id<>$2 and outcome='offered'`,[caseId,offer.id]);
+        await client.query(`insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload)
+          values('service_case',$1,'PROVIDER_SELECTED',$2,$3),
+                ('service_case',$1,'CASE_PROVIDER_PENDING',$2,$4)`,[
+          caseId,req.principal.actorId??null,
+          JSON.stringify({actorId:body.actorId,selectionMode:'ops_override',offerId:offer.id,ruleBasis:body.ruleBasis}),
+          JSON.stringify({from:'provider_selection',to:'provider_pending',providerActorId:body.actorId,offerId:offer.id,selectionMode:'ops_override'})
+        ]);
+      }
+      await client.query('commit');
+    }catch(error){
+      await client.query('rollback');
+      throw error;
+    }finally{client.release();}
+    await audit(req.principal,'create_offer','match_offer',offer.id,body.ruleBasis,{ demandId:body.demandId, caseId, actorId:body.actorId });
+    return reply.code(201).send({ offer });
   });
 
   app.post('/api/admin/routing-policies', { preHandler: requireRole('admin') }, async (req, reply) => {
