@@ -1,6 +1,11 @@
 name: Build ROVIQ Android App
 
 on:
+  push:
+    branches: [android-release-shell]
+    paths:
+      - 'android-app/**'
+      - '.github/workflows/android-release.yml'
   pull_request:
     paths:
       - 'android-app/**'
@@ -39,7 +44,7 @@ jobs:
           gradle-version: '8.10.2'
 
       - name: Verify release signing secrets
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name != 'pull_request'
         shell: bash
         env:
           KEYSTORE_B64: ${{ secrets.ROVIQ_ANDROID_KEYSTORE_BASE64 }}
@@ -56,21 +61,21 @@ jobs:
       - name: Build release bundle
         working-directory: android-app
         env:
-          ROVIQ_ANDROID_KEYSTORE_PATH: ${{ github.event_name == 'workflow_dispatch' && format('{0}/android-app/release.jks', github.workspace) || '' }}
-          ROVIQ_ANDROID_KEYSTORE_PASSWORD: ${{ github.event_name == 'workflow_dispatch' && secrets.ROVIQ_ANDROID_KEYSTORE_PASSWORD || '' }}
-          ROVIQ_ANDROID_KEY_ALIAS: ${{ github.event_name == 'workflow_dispatch' && secrets.ROVIQ_ANDROID_KEY_ALIAS || '' }}
-          ROVIQ_ANDROID_KEY_PASSWORD: ${{ github.event_name == 'workflow_dispatch' && secrets.ROVIQ_ANDROID_KEY_PASSWORD || '' }}
+          ROVIQ_ANDROID_KEYSTORE_PATH: ${{ github.event_name != 'pull_request' && format('{0}/android-app/release.jks', github.workspace) || '' }}
+          ROVIQ_ANDROID_KEYSTORE_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.ROVIQ_ANDROID_KEYSTORE_PASSWORD || '' }}
+          ROVIQ_ANDROID_KEY_ALIAS: ${{ github.event_name != 'pull_request' && secrets.ROVIQ_ANDROID_KEY_ALIAS || '' }}
+          ROVIQ_ANDROID_KEY_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.ROVIQ_ANDROID_KEY_PASSWORD || '' }}
         run: gradle --no-daemon :app:bundleRelease
 
       - name: Verify signed release bundle
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name != 'pull_request'
         working-directory: android-app
         run: jarsigner -verify -verbose -certs app/build/outputs/bundle/release/app-release.aab
 
       - name: Upload AAB
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.event_name == 'workflow_dispatch' && format('roviq-play-{0}-{1}', inputs.version_name, inputs.version_code) || 'roviq-unsigned-pr-aab' }}
+          name: ${{ github.event_name == 'pull_request' && 'roviq-unsigned-pr-aab' || format('roviq-play-{0}-{1}', env.ROVIQ_VERSION_NAME, env.ROVIQ_VERSION_CODE) }}
           path: android-app/app/build/outputs/bundle/release/app-release.aab
           if-no-files-found: error
           retention-days: 30
