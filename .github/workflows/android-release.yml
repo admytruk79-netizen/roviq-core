@@ -1,0 +1,76 @@
+name: Build ROVIQ Android App
+
+on:
+  pull_request:
+    paths:
+      - 'android-app/**'
+      - '.github/workflows/android-release.yml'
+  workflow_dispatch:
+    inputs:
+      version_code:
+        description: Google Play version code
+        required: true
+        default: '1'
+      version_name:
+        description: User-visible version
+        required: true
+        default: '1.0.0'
+
+permissions:
+  contents: read
+
+jobs:
+  android-bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ROVIQ_VERSION_CODE: ${{ github.event_name == 'workflow_dispatch' && inputs.version_code || '1' }}
+      ROVIQ_VERSION_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.version_name || '1.0.0' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Verify release signing secrets
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          KEYSTORE_B64: ${{ secrets.ROVIQ_ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ROVIQ_ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ROVIQ_ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ROVIQ_ANDROID_KEY_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE_B64" || (echo 'ROVIQ_ANDROID_KEYSTORE_BASE64 is missing' && exit 1)
+          test -n "$STORE_PASSWORD" || (echo 'ROVIQ_ANDROID_KEYSTORE_PASSWORD is missing' && exit 1)
+          test -n "$KEY_ALIAS" || (echo 'ROVIQ_ANDROID_KEY_ALIAS is missing' && exit 1)
+          test -n "$KEY_PASSWORD" || (echo 'ROVIQ_ANDROID_KEY_PASSWORD is missing' && exit 1)
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$GITHUB_WORKSPACE/android-app/release.jks"
+
+      - name: Build release bundle
+        working-directory: android-app
+        env:
+          ROVIQ_ANDROID_KEYSTORE_PATH: ${{ github.event_name == 'workflow_dispatch' && format('{0}/android-app/release.jks', github.workspace) || '' }}
+          ROVIQ_ANDROID_KEYSTORE_PASSWORD: ${{ github.event_name == 'workflow_dispatch' && secrets.ROVIQ_ANDROID_KEYSTORE_PASSWORD || '' }}
+          ROVIQ_ANDROID_KEY_ALIAS: ${{ github.event_name == 'workflow_dispatch' && secrets.ROVIQ_ANDROID_KEY_ALIAS || '' }}
+          ROVIQ_ANDROID_KEY_PASSWORD: ${{ github.event_name == 'workflow_dispatch' && secrets.ROVIQ_ANDROID_KEY_PASSWORD || '' }}
+        run: gradle --no-daemon :app:bundleRelease
+
+      - name: Verify signed release bundle
+        if: github.event_name == 'workflow_dispatch'
+        working-directory: android-app
+        run: jarsigner -verify -verbose -certs app/build/outputs/bundle/release/app-release.aab
+
+      - name: Upload AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event_name == 'workflow_dispatch' && format('roviq-play-{0}-{1}', inputs.version_name, inputs.version_code) || 'roviq-unsigned-pr-aab' }}
+          path: android-app/app/build/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+          retention-days: 30
