@@ -3,6 +3,13 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val releaseVersionCodeRaw = System.getenv("ROVIQ_VERSION_CODE") ?: throw GradleException("ROVIQ_VERSION_CODE is required")
+val releaseVersionCode = releaseVersionCodeRaw.toIntOrNull()
+    ?: throw GradleException("ROVIQ_VERSION_CODE must be an integer")
+if (releaseVersionCode <= 0) throw GradleException("ROVIQ_VERSION_CODE must be positive")
+val releaseVersionName = System.getenv("ROVIQ_VERSION_NAME")?.takeIf { it.isNotBlank() }
+    ?: throw GradleException("ROVIQ_VERSION_NAME is required")
+
 android {
     namespace = "com.roviq.app"
     compileSdk = 35
@@ -11,8 +18,8 @@ android {
         applicationId = "com.roviq.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = System.getenv("ROVIQ_VERSION_CODE")?.toIntOrNull() ?: 1
-        versionName = System.getenv("ROVIQ_VERSION_NAME")?.takeIf { it.isNotBlank() } ?: "1.0.0"
+        versionCode = releaseVersionCode
+        versionName = releaseVersionName
     }
 
     val keystorePath = System.getenv("ROVIQ_ANDROID_KEYSTORE_PATH")
