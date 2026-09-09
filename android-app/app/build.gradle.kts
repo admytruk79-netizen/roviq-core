@@ -3,12 +3,33 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-val releaseVersionCodeRaw = System.getenv("ROVIQ_VERSION_CODE") ?: throw GradleException("ROVIQ_VERSION_CODE is required")
-val releaseVersionCode = releaseVersionCodeRaw.toIntOrNull()
-    ?: throw GradleException("ROVIQ_VERSION_CODE must be an integer")
-if (releaseVersionCode <= 0) throw GradleException("ROVIQ_VERSION_CODE must be positive")
-val releaseVersionName = System.getenv("ROVIQ_VERSION_NAME")?.takeIf { it.isNotBlank() }
-    ?: throw GradleException("ROVIQ_VERSION_NAME is required")
+val releaseTaskRequested = gradle.startParameter.taskNames.any { task ->
+    val normalized = task.lowercase()
+    normalized.contains("bundlerelease") || normalized.contains("assemblerelease") || normalized.contains("publishrelease")
+}
+
+fun validatedVersionCode(): Int {
+    val raw = System.getenv("ROVIQ_VERSION_CODE")
+    if (raw.isNullOrBlank()) {
+        if (releaseTaskRequested) throw GradleException("ROVIQ_VERSION_CODE is required for release builds")
+        return 1
+    }
+    val value = raw.toIntOrNull() ?: throw GradleException("ROVIQ_VERSION_CODE must be an integer")
+    if (value <= 0) throw GradleException("ROVIQ_VERSION_CODE must be positive")
+    return value
+}
+
+fun validatedVersionName(): String {
+    val raw = System.getenv("ROVIQ_VERSION_NAME")
+    if (raw.isNullOrBlank()) {
+        if (releaseTaskRequested) throw GradleException("ROVIQ_VERSION_NAME is required for release builds")
+        return "1.0.0-dev"
+    }
+    return raw
+}
+
+val appVersionCode = validatedVersionCode()
+val appVersionName = validatedVersionName()
 
 android {
     namespace = "com.roviq.app"
@@ -18,8 +39,8 @@ android {
         applicationId = "com.roviq.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = releaseVersionCode
-        versionName = releaseVersionName
+        versionCode = appVersionCode
+        versionName = appVersionName
     }
 
     val keystorePath = System.getenv("ROVIQ_ANDROID_KEYSTORE_PATH")
