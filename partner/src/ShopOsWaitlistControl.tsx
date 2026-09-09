@@ -17,7 +17,7 @@ type WaitlistEntry={
   booked_appointment_id?:string|null;
 };
 type Appointment={id:string;service_case_id?:string|null;appointment_status:string;starts_at:string;ends_at:string;service_category?:string|null;customer_visible_summary?:string|null;resource_id?:string|null};
-type Resource={id:string;display_name:string};
+type Resource={id:string;display_name:string;resource_type:string};
 type Board={appointments:Appointment[];resources:Resource[]};
 
 function human(value:string|null|undefined){return value?value.replaceAll('_',' ').replace(/\b\w/g,c=>c.toUpperCase()):'General service'}
@@ -61,25 +61,33 @@ export function ShopOsWaitlistControl(){
     const rank:Record<string,number>={offered:0,waiting:1,expired:2,booked:3,cancelled:4};
     return (rank[a.state]??9)-(rank[b.state]??9)||(a.priority??0)-(b.priority??0);
   }),[entries]);
-  const resourceNames=useMemo(()=>new Map(resources.map(r=>[r.id,r.display_name])),[resources]);
+  const resourceById=useMemo(()=>new Map(resources.map(r=>[r.id,r])),[resources]);
   function appointmentChoices(entry:WaitlistEntry){
     return appointments.filter(a=>{
       if(!['held','confirmed'].includes(a.appointment_status))return false;
-      if(entry.service_case_id&&a.service_case_id!==entry.service_case_id)return false;
-      if(entry.requested_service_category&&a.service_category&&a.service_category!==entry.requested_service_category)return false;
+      if((a.service_case_id??null)!==(entry.service_case_id??null))return false;
+      if(entry.requested_service_category&&a.service_category!==entry.requested_service_category)return false;
+      const startsAt=new Date(a.starts_at).getTime(),endsAt=new Date(a.ends_at).getTime();
+      if(entry.requested_after&&startsAt<new Date(entry.requested_after).getTime())return false;
+      if(entry.requested_before&&endsAt>new Date(entry.requested_before).getTime())return false;
+      if(entry.estimated_duration_minutes&&(!Number.isFinite(endsAt-startsAt)||(endsAt-startsAt)/60000<entry.estimated_duration_minutes))return false;
+      if(entry.preferred_resource_types?.length){
+        const resource=a.resource_id?resourceById.get(a.resource_id):undefined;
+        if(!resource||!entry.preferred_resource_types.includes(resource.resource_type))return false;
+      }
       return true;
     }).sort((a,b)=>new Date(a.starts_at).getTime()-new Date(b.starts_at).getTime());
   }
   function appointmentLabel(a:Appointment){
     const summary=a.customer_visible_summary?.trim()||human(a.service_category);
-    const resource=a.resource_id?resourceNames.get(a.resource_id):null;
-    return `${when(a.starts_at)} · ${summary}${resource?` · ${resource}`:''}`;
+    const resource=a.resource_id?resourceById.get(a.resource_id):null;
+    return `${when(a.starts_at)} · ${summary}${resource?` · ${resource.display_name}`:''}`;
   }
 
   async function act(entry:WaitlistEntry,action:'offer'|'book'|'cancel'|'expire'|'requeue'){
     if(pending.has(entry.id))return;
     if(action==='book'&&!appointmentValue[entry.id]?.trim()){
-      setError('Choose the appointment created for this customer before marking the waitlist entry booked.');
+      setError('Choose the matching appointment before marking the waitlist entry booked.');
       return;
     }
     setPending(current=>{const next=new Set(current);next.add(entry.id);return next});setError(null);setMessage(null);
@@ -97,7 +105,7 @@ export function ShopOsWaitlistControl(){
 
   return <section className="mt-8" aria-labelledby="shop-os-waitlist-heading">
     <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
-      <div><p className="kicker">Overflow recovery</p><h2 id="shop-os-waitlist-heading" className="mt-1 text-2xl font-bold">Waitlist</h2><p className="muted mt-1 max-w-2xl text-sm">Offer recovered capacity, requeue expired work, and explicitly link booked overflow to its appointment.</p></div>
+      <div><p className="kicker">Overflow recovery</p><h2 id="shop-os-waitlist-heading" className="mt-1 text-2xl font-bold">Waitlist</h2><p className="muted mt-1 max-w-2xl text-sm">Offer recovered capacity, requeue expired work, and explicitly link booked overflow to its matching appointment.</p></div>
       <button className="secondary self-start" type="button" disabled={loading} onClick={()=>void load()}>{loading?'Refreshing…':'Refresh waitlist'}</button>
     </div>
     {message&&<div className="mt-4 rounded-xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100" role="status" aria-live="polite">{message}</div>}
@@ -109,7 +117,7 @@ export function ShopOsWaitlistControl(){
           <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="rounded-full border border-white/10 bg-white/[.04] px-2.5 py-1 text-[11px] font-bold uppercase tracking-[.1em]">{human(entry.state)}</span>{entry.priority!==undefined&&<span className="muted text-xs">Priority {entry.priority}</span>}</div><h3 className="mt-2 font-bold">{human(entry.requested_service_category)}</h3><p className="muted mt-1 text-sm">Window: {when(entry.requested_after)}{entry.requested_before?` → ${when(entry.requested_before)}`:''}</p>{entry.estimated_duration_minutes&&<p className="muted mt-1 text-xs">Estimated {entry.estimated_duration_minutes} minutes</p>}{entry.preferred_resource_types?.length?<p className="muted mt-1 text-xs">Needs: {entry.preferred_resource_types.map(human).join(', ')}</p>:null}{entry.state==='offered'&&entry.offer_expires_at&&<p className="mt-2 text-xs text-amber-100">Offer expires {when(entry.offer_expires_at)}</p>}</div>
           <div className="flex min-w-[15rem] flex-col gap-2">
             {entry.state==='waiting'&&<button className="primary" type="button" disabled={busy} onClick={()=>void act(entry,'offer')}>{busy?'Updating…':'Offer recovered slot'}</button>}
-            {entry.state==='offered'&&<><label className="text-xs"><span className="muted">Appointment for this recovered slot</span><select className="input mt-1 w-full" disabled={busy||choices.length===0} value={appointmentValue[entry.id]??''} onChange={e=>setAppointmentValue(current=>({...current,[entry.id]:e.target.value}))}><option value="">{choices.length?'Choose appointment…':'No matching appointment yet'}</option>{choices.map(a=><option key={a.id} value={a.id}>{appointmentLabel(a)}</option>)}</select></label>{choices.length===0&&<p className="muted text-xs">Create the customer appointment first, then refresh the waitlist to link it.</p>}<button className="primary" type="button" disabled={busy||!appointmentValue[entry.id]} onClick={()=>void act(entry,'book')}>{busy?'Updating…':'Mark booked'}</button><button className="secondary" type="button" disabled={busy} onClick={()=>void act(entry,'expire')}>Expire offer</button></>}
+            {entry.state==='offered'&&<><label className="text-xs"><span className="muted">Matching appointment</span><select className="input mt-1 w-full" disabled={busy||choices.length===0} value={appointmentValue[entry.id]??''} onChange={e=>setAppointmentValue(current=>({...current,[entry.id]:e.target.value}))}><option value="">{choices.length?'Choose appointment…':'No eligible appointment yet'}</option>{choices.map(a=><option key={a.id} value={a.id}>{appointmentLabel(a)}</option>)}</select></label>{choices.length===0&&<p className="muted text-xs">Create or reschedule an appointment that matches this case, service, time window, duration, and resource need, then refresh.</p>}<button className="primary" type="button" disabled={busy||!appointmentValue[entry.id]} onClick={()=>void act(entry,'book')}>{busy?'Updating…':'Mark booked'}</button><button className="secondary" type="button" disabled={busy} onClick={()=>void act(entry,'expire')}>Expire offer</button></>}
             {entry.state==='expired'&&<button className="primary" type="button" disabled={busy} onClick={()=>void act(entry,'requeue')}>{busy?'Updating…':'Return to waitlist'}</button>}
             {canCancelWaitlistEntry(entry)&&<button className="secondary" type="button" disabled={busy} onClick={()=>void act(entry,'cancel')}>Cancel request</button>}
             {bookedLabel&&<p className="muted text-xs">{bookedLabel}. Continue from the day schedule.</p>}
