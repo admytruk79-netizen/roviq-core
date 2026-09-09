@@ -93,6 +93,37 @@ export async function listShopWaitlist(principal:Principal,input:{organizationId
   }finally{client.release();}
 }
 
+export async function listWaitlistAppointmentChoices(principal:Principal,entryId:string){
+  const client=await pool.connect();
+  try{
+    const current=await client.query(`select * from shop_waitlist_entries where id=$1`,[entryId]);
+    if(!current.rowCount) throw httpError('waitlist_entry_not_found',404);
+    const row=current.rows[0];
+    await resolveScope(principal,{organizationId:row.organization_id,locationId:row.location_id},client);
+    await assertCase(principal,row.service_case_id,row.organization_id,client);
+    const preferredResourceTypes=Array.isArray(row.preferred_resource_types)?row.preferred_resource_types.map(String):[];
+    const result=await client.query(`
+      select a.id,a.service_case_id,a.appointment_status,a.starts_at,a.ends_at,a.service_category,
+             a.customer_visible_summary,a.resource_id,r.display_name as resource_display_name,r.resource_type
+      from roviq_appointments a
+      left join service_resources r on r.id=a.resource_id
+      where a.organization_id=$1
+        and ($2::uuid is null or a.location_id=$2::uuid)
+        and a.appointment_status in ('held','confirmed')
+        and a.service_case_id is not distinct from $3::uuid
+        and ($4::text is null or a.service_category=$4::text)
+        and ($5::timestamptz is null or a.starts_at>=$5::timestamptz)
+        and ($6::timestamptz is null or a.ends_at<=$6::timestamptz)
+        and ($7::int is null or extract(epoch from (a.ends_at-a.starts_at))/60 >= $7::int)
+        and (cardinality($8::text[])=0 or r.resource_type=any($8::text[]))
+      order by a.starts_at asc,a.id asc`,[
+      row.organization_id,row.location_id,row.service_case_id,row.requested_service_category,
+      row.requested_after,row.requested_before,row.estimated_duration_minutes,preferredResourceTypes
+    ]);
+    return {entryId,appointments:result.rows};
+  }finally{client.release();}
+}
+
 export async function updateShopWaitlistEntry(principal:Principal,entryId:string,input:{
   action:ShopWaitlistAction;
   appointmentId?:string;
