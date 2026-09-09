@@ -3,33 +3,36 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-val releaseTaskRequested = gradle.startParameter.taskNames.any { task ->
-    val normalized = task.lowercase()
-    normalized.contains("bundlerelease") || normalized.contains("assemblerelease") || normalized.contains("publishrelease")
-}
+val releaseVersionCodeRaw = System.getenv("ROVIQ_VERSION_CODE")
+val releaseVersionNameRaw = System.getenv("ROVIQ_VERSION_NAME")
 
-fun validatedVersionCode(): Int {
-    val raw = System.getenv("ROVIQ_VERSION_CODE")
-    if (raw.isNullOrBlank()) {
-        if (releaseTaskRequested) throw GradleException("ROVIQ_VERSION_CODE is required for release builds")
-        return 1
-    }
-    val value = raw.toIntOrNull() ?: throw GradleException("ROVIQ_VERSION_CODE must be an integer")
+fun configuredVersionCode(): Int {
+    if (releaseVersionCodeRaw.isNullOrBlank()) return 1
+    val value = releaseVersionCodeRaw.toIntOrNull()
+        ?: throw GradleException("ROVIQ_VERSION_CODE must be an integer")
     if (value <= 0) throw GradleException("ROVIQ_VERSION_CODE must be positive")
     return value
 }
 
-fun validatedVersionName(): String {
-    val raw = System.getenv("ROVIQ_VERSION_NAME")
-    if (raw.isNullOrBlank()) {
-        if (releaseTaskRequested) throw GradleException("ROVIQ_VERSION_NAME is required for release builds")
-        return "1.0.0-dev"
-    }
-    return raw
-}
+fun configuredVersionName(): String = releaseVersionNameRaw?.takeIf { it.isNotBlank() } ?: "1.0.0-dev"
 
-val appVersionCode = validatedVersionCode()
-val appVersionName = validatedVersionName()
+val appVersionCode = configuredVersionCode()
+val appVersionName = configuredVersionName()
+
+val validateReleaseVersion by tasks.registering {
+    group = "verification"
+    description = "Fails any release-producing task unless a valid release version is configured."
+    doLast {
+        val rawCode = releaseVersionCodeRaw
+            ?: throw GradleException("ROVIQ_VERSION_CODE is required for release builds")
+        val code = rawCode.toIntOrNull()
+            ?: throw GradleException("ROVIQ_VERSION_CODE must be an integer")
+        if (code <= 0) throw GradleException("ROVIQ_VERSION_CODE must be positive")
+        if (releaseVersionNameRaw.isNullOrBlank()) {
+            throw GradleException("ROVIQ_VERSION_NAME is required for release builds")
+        }
+    }
+}
 
 android {
     namespace = "com.roviq.app"
@@ -73,6 +76,13 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+}
+
+// Every Android release-producing path, including aggregate tasks such as `build`
+// and `assemble`, flows through preReleaseBuild. Wiring validation here avoids
+// guessing from raw command-line task names and also covers Gradle abbreviations.
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn(validateReleaseVersion)
 }
 
 dependencies {
