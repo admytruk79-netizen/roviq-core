@@ -8,6 +8,8 @@
     <application
         android:allowBackup="false"
         android:usesCleartextTraffic="false"
+        android:icon="@drawable/ic_roviq"
+        android:roundIcon="@drawable/ic_roviq"
         android:label="ROVIQ"
         android:theme="@style/Theme.ROVIQ">
         <activity
