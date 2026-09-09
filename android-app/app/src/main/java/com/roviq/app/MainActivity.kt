@@ -45,16 +45,14 @@ class MainActivity : Activity() {
                 val trusted = host == "roviq-core-customer.pages.dev" || host.endsWith(".roviq.com")
                 if (trusted && uri.scheme == "https") return false
 
-                val intent = Intent(Intent.ACTION_VIEW, uri)
                 return try {
-                    if (intent.resolveActivity(packageManager) != null) {
-                        startActivity(intent)
-                    } else {
-                        Toast.makeText(this@MainActivity, "No app can open this link.", Toast.LENGTH_SHORT).show()
-                    }
+                    startActivity(Intent(Intent.ACTION_VIEW, uri))
                     true
                 } catch (_: ActivityNotFoundException) {
                     Toast.makeText(this@MainActivity, "No app can open this link.", Toast.LENGTH_SHORT).show()
+                    true
+                } catch (_: SecurityException) {
+                    Toast.makeText(this@MainActivity, "This link cannot be opened safely.", Toast.LENGTH_SHORT).show()
                     true
                 }
             }
