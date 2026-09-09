@@ -175,6 +175,24 @@ async function assertUsableShopOsCapacity(input:{
   const locked=await db.query(`select id from service_resources where id=$1 for update`,[input.resourceId]);
   if(!locked.rowCount) throw httpError('shop_os_resource_not_found',404);
 
+  // Re-read authoritative resource/connector state after the resource lock is held.
+  // This closes the race where a previously-manageable resource or its native
+  // connection becomes blocked/offline/deactivated before capacity is consumed.
+  const usable=await db.query(`
+    select r.id
+    from service_resources r
+    join partner_system_connections c
+      on c.id=r.source_connection_id
+     and c.id=$2
+     and c.mode='roviq_native'
+     and c.connection_status='active'
+    where r.id=$1
+      and r.source_connection_id=$2
+      and r.active=true
+      and r.operational_state not in ('blocked','offline')
+    for update of r,c`,[input.resourceId,input.sourceConnectionId]);
+  if(!usable.rowCount) throw httpError('shop_os_resource_unavailable',409);
+
   const windows=await db.query(`
     select cw.id,cw.nominal_capacity_units,cw.service_category,cw.window_start,cw.window_end
     from capacity_windows cw
