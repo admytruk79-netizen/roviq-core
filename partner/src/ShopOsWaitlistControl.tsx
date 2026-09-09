@@ -1,6 +1,6 @@
 import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
 import {api} from './api';
-import {bookedAppointmentText,canCancelWaitlistEntry,type ShopWaitlistState} from './shop-os-waitlist-model';
+import {appointmentEligibleForWaitlist,bookedAppointmentText,canCancelWaitlistEntry,selectedAppointmentStillEligible,type ShopWaitlistState} from './shop-os-waitlist-model';
 
 type WaitlistEntry={
   id:string;
@@ -23,7 +23,22 @@ type Board={appointments:Appointment[];resources:Resource[]};
 function human(value:string|null|undefined){return value?value.replaceAll('_',' ').replace(/\b\w/g,c=>c.toUpperCase()):'General service'}
 function when(value:string|null|undefined){return value?new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}).format(new Date(value)):'Flexible'}
 function actionError(error:unknown){const code=error instanceof Error?error.message:'request failed';return `${human(code)}. Refresh the waitlist and try again.`}
-function boardRange(){const from=new Date();from.setDate(from.getDate()-1);const to=new Date();to.setDate(to.getDate()+90);return{from:from.toISOString(),to:to.toISOString()}}
+function boardRange(entries:WaitlistEntry[]){
+  const from=new Date();from.setDate(from.getDate()-1);
+  const to=new Date();to.setDate(to.getDate()+90);
+  for(const entry of entries){
+    if(entry.state!=='offered')continue;
+    const after=entry.requested_after?new Date(entry.requested_after):null;
+    const before=entry.requested_before?new Date(entry.requested_before):null;
+    if(after&&Number.isFinite(after.getTime())&&after<from)from.setTime(after.getTime());
+    if(before&&Number.isFinite(before.getTime())&&before>to)to.setTime(before.getTime());
+    if(after&&Number.isFinite(after.getTime())&&!before&&after>to){
+      to.setTime(after.getTime());
+      to.setDate(to.getDate()+90);
+    }
+  }
+  return{from:from.toISOString(),to:to.toISOString()};
+}
 
 export function ShopOsWaitlistControl(){
   const[entries,setEntries]=useState<WaitlistEntry[]>([]);
@@ -38,15 +53,15 @@ export function ShopOsWaitlistControl(){
 
   const load=useCallback(async()=>{
     const requestId=++requestSequence.current;
-    const range=boardRange();
     setLoading(true);setError(null);
     try{
-      const[waitlist,board]=await Promise.all([
-        api.get<{entries:WaitlistEntry[]}>('/api/shop-os/waitlist?states=waiting,offered,expired,booked,cancelled'),
-        api.get<Board>(`/api/shop-os/board?from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}`)
-      ]);
+      const waitlist=await api.get<{entries:WaitlistEntry[]}>('/api/shop-os/waitlist?states=waiting,offered,expired,booked,cancelled');
       if(requestId!==requestSequence.current)return;
-      setEntries(waitlist.entries??[]);setAppointments(board.appointments??[]);setResources(board.resources??[]);
+      const nextEntries=waitlist.entries??[];
+      const range=boardRange(nextEntries);
+      const board=await api.get<Board>(`/api/shop-os/board?from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}`);
+      if(requestId!==requestSequence.current)return;
+      setEntries(nextEntries);setAppointments(board.appointments??[]);setResources(board.resources??[]);
     }catch(e){
       if(requestId!==requestSequence.current)return;
       setError(`Waitlist could not load. ${actionError(e)}`);
@@ -62,22 +77,24 @@ export function ShopOsWaitlistControl(){
     return (rank[a.state]??9)-(rank[b.state]??9)||(a.priority??0)-(b.priority??0);
   }),[entries]);
   const resourceById=useMemo(()=>new Map(resources.map(r=>[r.id,r])),[resources]);
-  function appointmentChoices(entry:WaitlistEntry){
-    return appointments.filter(a=>{
-      if(!['held','confirmed'].includes(a.appointment_status))return false;
-      if((a.service_case_id??null)!==(entry.service_case_id??null))return false;
-      if(entry.requested_service_category&&a.service_category!==entry.requested_service_category)return false;
-      const startsAt=new Date(a.starts_at).getTime(),endsAt=new Date(a.ends_at).getTime();
-      if(entry.requested_after&&startsAt<new Date(entry.requested_after).getTime())return false;
-      if(entry.requested_before&&endsAt>new Date(entry.requested_before).getTime())return false;
-      if(entry.estimated_duration_minutes&&(!Number.isFinite(endsAt-startsAt)||(endsAt-startsAt)/60000<entry.estimated_duration_minutes))return false;
-      if(entry.preferred_resource_types?.length){
-        const resource=a.resource_id?resourceById.get(a.resource_id):undefined;
-        if(!resource||!entry.preferred_resource_types.includes(resource.resource_type))return false;
+  const choicesByEntry=useMemo(()=>{
+    const result=new Map<string,Appointment[]>();
+    for(const entry of entries){
+      result.set(entry.id,appointments.filter(a=>appointmentEligibleForWaitlist(entry,a,resourceById)).sort((a,b)=>new Date(a.starts_at).getTime()-new Date(b.starts_at).getTime()));
+    }
+    return result;
+  },[appointments,entries,resourceById]);
+
+  useEffect(()=>{
+    setAppointmentValue(current=>{
+      let changed=false;const next={...current};
+      for(const[entryId,selectedId]of Object.entries(current)){
+        if(!selectedAppointmentStillEligible(selectedId,choicesByEntry.get(entryId)??[])){delete next[entryId];changed=true;}
       }
-      return true;
-    }).sort((a,b)=>new Date(a.starts_at).getTime()-new Date(b.starts_at).getTime());
-  }
+      return changed?next:current;
+    });
+  },[choicesByEntry]);
+
   function appointmentLabel(a:Appointment){
     const summary=a.customer_visible_summary?.trim()||human(a.service_category);
     const resource=a.resource_id?resourceById.get(a.resource_id):null;
@@ -86,14 +103,16 @@ export function ShopOsWaitlistControl(){
 
   async function act(entry:WaitlistEntry,action:'offer'|'book'|'cancel'|'expire'|'requeue'){
     if(pending.has(entry.id))return;
-    if(action==='book'&&!appointmentValue[entry.id]?.trim()){
-      setError('Choose the matching appointment before marking the waitlist entry booked.');
+    const selectedId=appointmentValue[entry.id]?.trim();
+    const selectedValid=selectedAppointmentStillEligible(selectedId,choicesByEntry.get(entry.id)??[]);
+    if(action==='book'&&!selectedValid){
+      setError('Choose a currently eligible matching appointment before marking the waitlist entry booked.');
       return;
     }
     setPending(current=>{const next=new Set(current);next.add(entry.id);return next});setError(null);setMessage(null);
     try{
       const body:Record<string,unknown>={action};
-      if(action==='book') body.appointmentId=appointmentValue[entry.id].trim();
+      if(action==='book') body.appointmentId=selectedId;
       await api.patch(`/api/shop-os/waitlist/${entry.id}`,body);
       const labels={offer:'Slot offered for 30 minutes.',book:'Waitlist work linked to its appointment.',cancel:'Waitlist request cancelled.',expire:'Offer expired and released for recovery.',requeue:'Work returned to the waiting queue.'};
       setMessage(labels[action]);
@@ -112,12 +131,12 @@ export function ShopOsWaitlistControl(){
     {error&&<div className="mt-4 rounded-xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-100" role="alert">{error}</div>}
     <div className="mt-5 space-y-3">
       {!loading&&ordered.length===0&&<div className="panel p-6"><p className="font-semibold">No overflow work waiting</p><p className="muted mt-1 text-sm">When demand exceeds verified capacity, recoverable work will appear here.</p></div>}
-      {ordered.map(entry=>{const bookedLabel=bookedAppointmentText(entry),busy=pending.has(entry.id),choices=appointmentChoices(entry);return <article key={entry.id} className="panel p-4">
+      {ordered.map(entry=>{const bookedLabel=bookedAppointmentText(entry),busy=pending.has(entry.id),choices=choicesByEntry.get(entry.id)??[],selectedId=appointmentValue[entry.id],selectedValid=selectedAppointmentStillEligible(selectedId,choices);return <article key={entry.id} className="panel p-4">
         <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
           <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="rounded-full border border-white/10 bg-white/[.04] px-2.5 py-1 text-[11px] font-bold uppercase tracking-[.1em]">{human(entry.state)}</span>{entry.priority!==undefined&&<span className="muted text-xs">Priority {entry.priority}</span>}</div><h3 className="mt-2 font-bold">{human(entry.requested_service_category)}</h3><p className="muted mt-1 text-sm">Window: {when(entry.requested_after)}{entry.requested_before?` → ${when(entry.requested_before)}`:''}</p>{entry.estimated_duration_minutes&&<p className="muted mt-1 text-xs">Estimated {entry.estimated_duration_minutes} minutes</p>}{entry.preferred_resource_types?.length?<p className="muted mt-1 text-xs">Needs: {entry.preferred_resource_types.map(human).join(', ')}</p>:null}{entry.state==='offered'&&entry.offer_expires_at&&<p className="mt-2 text-xs text-amber-100">Offer expires {when(entry.offer_expires_at)}</p>}</div>
           <div className="flex min-w-[15rem] flex-col gap-2">
             {entry.state==='waiting'&&<button className="primary" type="button" disabled={busy} onClick={()=>void act(entry,'offer')}>{busy?'Updating…':'Offer recovered slot'}</button>}
-            {entry.state==='offered'&&<><label className="text-xs"><span className="muted">Matching appointment</span><select className="input mt-1 w-full" disabled={busy||choices.length===0} value={appointmentValue[entry.id]??''} onChange={e=>setAppointmentValue(current=>({...current,[entry.id]:e.target.value}))}><option value="">{choices.length?'Choose appointment…':'No eligible appointment yet'}</option>{choices.map(a=><option key={a.id} value={a.id}>{appointmentLabel(a)}</option>)}</select></label>{choices.length===0&&<p className="muted text-xs">Create or reschedule an appointment that matches this case, service, time window, duration, and resource need, then refresh.</p>}<button className="primary" type="button" disabled={busy||!appointmentValue[entry.id]} onClick={()=>void act(entry,'book')}>{busy?'Updating…':'Mark booked'}</button><button className="secondary" type="button" disabled={busy} onClick={()=>void act(entry,'expire')}>Expire offer</button></>}
+            {entry.state==='offered'&&<><label className="text-xs"><span className="muted">Matching appointment</span><select className="input mt-1 w-full" disabled={busy||choices.length===0} value={selectedValid?selectedId:''} onChange={e=>setAppointmentValue(current=>({...current,[entry.id]:e.target.value}))}><option value="">{choices.length?'Choose appointment…':'No eligible appointment yet'}</option>{choices.map(a=><option key={a.id} value={a.id}>{appointmentLabel(a)}</option>)}</select></label>{choices.length===0&&<p className="muted text-xs">Create or reschedule an appointment that matches this case, service, time window, duration, and resource need, then refresh.</p>}<button className="primary" type="button" disabled={busy||!selectedValid} onClick={()=>void act(entry,'book')}>{busy?'Updating…':'Mark booked'}</button><button className="secondary" type="button" disabled={busy} onClick={()=>void act(entry,'expire')}>Expire offer</button></>}
             {entry.state==='expired'&&<button className="primary" type="button" disabled={busy} onClick={()=>void act(entry,'requeue')}>{busy?'Updating…':'Return to waitlist'}</button>}
             {canCancelWaitlistEntry(entry)&&<button className="secondary" type="button" disabled={busy} onClick={()=>void act(entry,'cancel')}>Cancel request</button>}
             {bookedLabel&&<p className="muted text-xs">{bookedLabel}. Continue from the day schedule.</p>}
