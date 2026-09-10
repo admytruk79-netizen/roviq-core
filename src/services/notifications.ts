@@ -1,3 +1,4 @@
+import { buildPushPayload } from '@block65/webcrypto-web-push';
 import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
 import { audit } from './audit.js';
@@ -60,10 +61,52 @@ async function sendResendEmail(recipientId:string, subject:string|undefined, bod
   return { success:true, providerMessageId:typeof json.id === 'string' ? json.id : undefined, response:json };
 }
 
+// Unlike Twilio/Resend, Web Push needs no third-party account -- VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY
+// are a self-generated keypair (see migrations/047_push_subscriptions.sql) that identifies this
+// server to push services, not a vendor credential. A recipient can have several live subscriptions
+// (one per browser/device it enabled push on); this fans out to all of them and reports success if
+// any one delivers, deleting subscriptions the push service reports as gone (404/410 -- the
+// standard signal a browser unsubscribed or the endpoint expired).
+async function sendWebPush(recipientId:string, subject:string|undefined, body:string, payload:Record<string,unknown>):Promise<DeliveryResult> {
+  const publicKey = process.env.VAPID_PUBLIC_KEY;
+  const privateKey = process.env.VAPID_PRIVATE_KEY;
+  const contact = process.env.VAPID_SUBJECT;
+  if (!publicKey || !privateKey || !contact) {
+    return { success:false, errorCode:'webpush_not_configured', errorMessage:'VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY/VAPID_SUBJECT are not set' };
+  }
+  const subs = await pool.query('select id,endpoint,p256dh,auth from push_subscriptions where actor_id=$1',[recipientId]);
+  if (!subs.rowCount) return { success:false, errorCode:'recipient_not_subscribed', errorMessage:'Recipient actor has no push subscription on file' };
+
+  const vapid = { subject:contact, publicKey, privateKey };
+  const data = { title: subject ?? 'ROVIQ update', body, ...payload };
+  const outcomes = await Promise.all(subs.rows.map(async (sub) => {
+    const subscription = { endpoint:sub.endpoint as string, expirationTime:null, keys:{ p256dh:sub.p256dh as string, auth:sub.auth as string } };
+    try {
+      const { headers, body:encryptedBody } = await buildPushPayload({ data }, subscription, vapid);
+      const response = await fetch(sub.endpoint, { method:'POST', headers, body:encryptedBody as BodyInit });
+      if (response.status === 404 || response.status === 410) {
+        await pool.query('delete from push_subscriptions where id=$1',[sub.id]);
+      }
+      return { endpoint:sub.endpoint as string, ok:response.ok, status:response.status };
+    } catch (e) {
+      return { endpoint:sub.endpoint as string, ok:false, status:0, error:e instanceof Error?e.message:'send_failed' };
+    }
+  }));
+  const success = outcomes.some((o) => o.ok);
+  return {
+    success,
+    providerMessageId: success ? `webpush:${recipientId}:${Date.now()}` : undefined,
+    errorCode: success ? undefined : 'webpush_delivery_failed',
+    errorMessage: success ? undefined : 'No subscribed device accepted the push',
+    response: { outcomes }
+  };
+}
+
 const adapters: Record<string,Adapter> = {
   internal: async ({ recipientId }) => ({ success:true, providerMessageId:`internal:${recipientId}:${Date.now()}` }),
   twilio: async ({ recipientId, body }) => sendTwilioSms(recipientId, body),
-  resend: async ({ recipientId, subject, body }) => sendResendEmail(recipientId, subject, body)
+  resend: async ({ recipientId, subject, body }) => sendResendEmail(recipientId, subject, body),
+  webpush: async ({ recipientId, subject, body, payload }) => sendWebPush(recipientId, subject, body, payload)
 };
 
 function render(template:string, payload:Record<string,unknown>) {

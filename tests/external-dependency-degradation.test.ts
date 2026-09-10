@@ -318,4 +318,51 @@ describe('external dependency degradation', () => {
     // The 4th sql call is the failed-attempt insert; confirm the specific, diagnosable reason.
     expect(calls[3].values).toContain('twilio_not_configured');
   });
+
+  it('delivers a customer push via Web Push when the push channel is configured for it', async () => {
+    const env = { VAPID_PUBLIC_KEY: 'BAM0JQNDRMQc6mx4hTwKegRQINSNrmq9vni7JcjQ0FLS2_9TsyfM-J1cEb17YhyOmEMHy9IKJkVBH3F0fuTOCH0', VAPID_PRIVATE_KEY: '7B32_ctnbEjFGfKFybvwpA3W_O04XNLObkLcf3464c0', VAPID_SUBJECT: 'mailto:ops@roviq.test' };
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(null, { status: 201 }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const notification = { id: 'n5', channel: 'push', recipient_id: 'actor-5', template_key: 'customer_status_update', payload: { message: 'Your diagnostic is complete.' }, attempt_count: 0, max_attempts: 5, provider: null };
+    const subscription = { id: 'sub-1', endpoint: 'https://push.example.com/device-1', p256dh: 'BDhNqLUa9onVBmAAtHUZyNa4yua13Yd3Kb9DuSLvqrUKY9JkAsUDiWi_i0krvhOcyRKyqBk3P3W4jn_MuvfYN68', auth: 'hArI4wmKK2Gr5OeUttOBWg' };
+    const { tag: sql } = fakeSql([
+      [notification],
+      [{ channel: 'push', provider: 'webpush', enabled: true }],
+      [{ body_template: '{{message}}', subject_template: 'ROVIQ update' }],
+      [subscription],
+      [],
+      [],
+      []
+    ]);
+
+    const results = await processNotificationBatchNative(sql as never, env as never, 'test-worker', 10);
+
+    expect(results).toEqual([{ id: 'n5', state: 'sent', providerMessageId: expect.stringMatching(/^webpush:actor-5:/) }]);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit & { headers: Record<string, string> }];
+    expect(url).toBe('https://push.example.com/device-1');
+    expect(init.headers.authorization).toMatch(/^vapid t=.+, k=/);
+    expect(init.headers['content-encoding']).toBe('aes128gcm');
+  });
+
+  it('retries a push notification with a specific reason when VAPID is not configured, without touching fetch', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const notification = { id: 'n6', channel: 'push', recipient_id: 'actor-6', template_key: 'customer_status_update', payload: { message: 'Hi' }, attempt_count: 0, max_attempts: 5, provider: null };
+    const { tag: sql, calls } = fakeSql([
+      [notification],
+      [{ channel: 'push', provider: 'webpush', enabled: true }],
+      [{ body_template: '{{message}}', subject_template: 'ROVIQ update' }],
+      [],
+      []
+    ]);
+
+    const results = await processNotificationBatchNative(sql as never, {} as never, 'test-worker', 10);
+
+    expect(results).toEqual([{ id: 'n6', state: 'retry' }]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(calls[3].values).toContain('webpush_not_configured');
+  });
 });

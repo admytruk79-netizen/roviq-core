@@ -1,3 +1,4 @@
+import { buildPushPayload } from '@block65/webcrypto-web-push';
 import { handleLocalCoreRequest, isLocalCorePath } from './local-adapter.js';
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
@@ -252,6 +253,46 @@ async function sendResendEmailNative(env, sql, recipientId, subject, body) {
   return { success: true, providerMessageId: typeof json.id === 'string' ? json.id : undefined, response: json };
 }
 
+// Mirrors src/services/notifications.ts's sendWebPush: same env-var contract
+// (VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY/VAPID_SUBJECT), same push_subscriptions lookup, same
+// @block65/webcrypto-web-push call -- that library is pure Web Crypto API with no Node
+// dependency, so unlike a Node-only 'web-push' package it runs unchanged in the Workers
+// runtime, which is what actually runs the cron in production.
+async function sendWebPushNative(env, sql, recipientId, subject, body, payload) {
+  const publicKey = env.VAPID_PUBLIC_KEY;
+  const privateKey = env.VAPID_PRIVATE_KEY;
+  const contact = env.VAPID_SUBJECT;
+  if (!publicKey || !privateKey || !contact) {
+    return { success: false, errorCode: 'webpush_not_configured', errorMessage: 'VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY/VAPID_SUBJECT are not set' };
+  }
+  const subs = await sql`select id,endpoint,p256dh,auth from push_subscriptions where actor_id=${recipientId}`;
+  if (!subs.length) return { success: false, errorCode: 'recipient_not_subscribed', errorMessage: 'Recipient actor has no push subscription on file' };
+
+  const vapid = { subject: contact, publicKey, privateKey };
+  const data = { title: subject || 'ROVIQ update', body, ...payload };
+  const outcomes = await Promise.all(subs.map(async (sub) => {
+    const subscription = { endpoint: sub.endpoint, expirationTime: null, keys: { p256dh: sub.p256dh, auth: sub.auth } };
+    try {
+      const { headers, body: encryptedBody } = await buildPushPayload({ data }, subscription, vapid);
+      const response = await fetch(sub.endpoint, { method: 'POST', headers, body: encryptedBody });
+      if (response.status === 404 || response.status === 410) {
+        await sql`delete from push_subscriptions where id=${sub.id}`;
+      }
+      return { endpoint: sub.endpoint, ok: response.ok, status: response.status };
+    } catch (e) {
+      return { endpoint: sub.endpoint, ok: false, status: 0, error: e instanceof Error ? e.message : 'send_failed' };
+    }
+  }));
+  const success = outcomes.some((o) => o.ok);
+  return {
+    success,
+    providerMessageId: success ? `webpush:${recipientId}:${Date.now()}` : undefined,
+    errorCode: success ? undefined : 'webpush_delivery_failed',
+    errorMessage: success ? undefined : 'No subscribed device accepted the push',
+    response: { outcomes }
+  };
+}
+
 // Mirrors src/services/notifications.ts's twilio/resend adapters -- same env-var contracts
 // (TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN/TWILIO_FROM_NUMBER, RESEND_API_KEY/RESEND_FROM_EMAIL),
 // same recipient lookups on actors.phone / principal_identities.email -- reimplemented against
@@ -302,7 +343,9 @@ export async function processNotificationBatchNative(sql, env, workerId = 'cloud
         ? await sendTwilioSmsNative(env, sql, n.recipient_id, body)
         : provider === 'resend'
           ? await sendResendEmailNative(env, sql, n.recipient_id, subject, body)
-          : { success: false, errorCode: 'provider_not_configured', errorMessage: `No adapter registered for ${provider}` };
+          : provider === 'webpush'
+            ? await sendWebPushNative(env, sql, n.recipient_id, subject, body, payload)
+            : { success: false, errorCode: 'provider_not_configured', errorMessage: `No adapter registered for ${provider}` };
 
     if (!delivery.success) {
       const message = delivery.errorMessage || 'delivery_failed';

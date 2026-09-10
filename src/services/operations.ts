@@ -35,16 +35,17 @@ export async function setCustomerSnapshot(caseId:string, status:string, message?
   // right plain-language message for this snapshot, so this is the one place that turns it into
   // actual outbound notifications instead of only something the customer portal has to be open and
   // polling to see. Queued through the same channel/outbox as everything else -- safe to ship even
-  // with no provider configured, since both channels start disabled (011_notifications_delivery.sql)
-  // and simply dead-letter until an admin enables one with real credentials (Twilio for sms,
-  // Resend for email -- see notifications.ts). Never let a failure here take down the snapshot
-  // write itself, which every caller depends on succeeding.
+  // with no provider configured: sms/email start disabled (011_notifications_delivery.sql) and
+  // simply dead-letter until an admin enables one with real credentials (Twilio for sms, Resend for
+  // email), while push starts enabled but silently dead-letters for any actor with no subscribed
+  // device on file (see notifications.ts). Never let a failure here take down the snapshot write
+  // itself, which every caller depends on succeeding.
   if (message) {
     const c = await pool.query('select customer_actor_id from service_cases where id=$1',[caseId]);
     const customerActorId = c.rows[0]?.customer_actor_id as string|undefined;
     if (customerActorId) {
       const payload = { status, message, nextAction:nextAction ?? '', etaAt:etaAt ?? '' };
-      for (const channel of ['sms','email'] as const) {
+      for (const channel of ['sms','email','push'] as const) {
         try {
           await queueNotification({ caseId, channel, recipientType:'actor', recipientId:customerActorId, templateKey:'customer_status_update', payload });
         } catch (error) {
