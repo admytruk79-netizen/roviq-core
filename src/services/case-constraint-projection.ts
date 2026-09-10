@@ -17,8 +17,24 @@ export async function syncOperationalConstraints(caseId:string,db:Queryable):Pro
   await syncTransportConstraint(caseId,db);
 }
 
+export async function syncPartsOperationalConstraint(caseId:string,db:Queryable):Promise<void>{
+  await syncPartsConstraint(caseId,db);
+}
+
+export async function syncMobilityOperationalConstraint(caseId:string,db:Queryable):Promise<void>{
+  await syncMobilityConstraint(caseId,db);
+}
+
+export async function syncCustomerTimeOperationalConstraint(caseId:string,db:Queryable):Promise<void>{
+  await syncCustomerTimeConstraint(caseId,db);
+}
+
 export async function syncApprovalOperationalConstraint(caseId:string,db:Queryable):Promise<void>{
   await syncApprovalConstraint(caseId,db);
+}
+
+export async function syncTransportOperationalConstraint(caseId:string,db:Queryable):Promise<void>{
+  await syncTransportConstraint(caseId,db);
 }
 
 export function derivePartsConstraint(counts:Record<string,number>):{status:ConstraintStatus;total:number;ready:number}{
