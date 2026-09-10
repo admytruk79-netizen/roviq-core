@@ -2,6 +2,7 @@ import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
 import { assertCaseAccess } from './case-access.js';
 import { audit } from './audit.js';
+import { syncOperationalConstraints } from './case-constraint-projection.js';
 
 export async function getServicePlan(principal:Principal, caseId:string) {
   await assertCaseAccess(principal,caseId);
@@ -78,6 +79,7 @@ export async function reviseServicePlan(principal:Principal, caseId:string, inpu
       approval = approvalResult.rows[0];
     }
 
+    await syncOperationalConstraints(caseId,client);
     await client.query(
       `insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload)
        values('service_case',$1,'SERVICE_PLAN_REVISED',$2,$3)`,
@@ -116,6 +118,7 @@ export async function decideApproval(principal:Principal, caseId:string, approva
       `update case_approvals set state=$1,decision_by_actor_id=$2,decision_reason=$3,decided_at=now() where id=$4 returning *`,
       [decision,principal.actorId ?? null,reason ?? null,approvalId]
     );
+    await syncOperationalConstraints(caseId,client);
     await client.query(
       `insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload)
        values('service_case',$1,'CASE_APPROVAL_DECIDED',$2,$3)`,
