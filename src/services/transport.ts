@@ -3,6 +3,7 @@ import type { Principal } from '../types/principal.js';
 import { appendCaseEvent, createDeadline, transitionCase } from './orchestration.js';
 import { audit } from './audit.js';
 import { queueNotification, setCustomerSnapshot } from './operations.js';
+import { syncOperationalConstraints } from './case-constraint-projection.js';
 
 export type TransportStatus = 'requested'|'assigned'|'accepted'|'en_route'|'arrived'|'vehicle_loaded'|'in_transit'|'delivered'|'declined'|'cancelled'|'failed';
 
@@ -20,32 +21,44 @@ export async function createTransportDispatch(principal: Principal, input:{
   etaAt?:string;
   metadata?:Record<string,unknown>;
 }) {
-  const c = await pool.query('select * from service_cases where id=$1',[input.caseId]);
-  if (!c.rowCount) throw new Error('case_not_found');
-  const r = await pool.query(
-    `insert into transport_dispatches(case_id,transport_type,pickup_location,dropoff_location,vehicle_context,eta_at,metadata)
-     values($1,$2,$3,$4,$5,$6,$7) returning *`,
-    [input.caseId,input.transportType,JSON.stringify(input.pickupLocation ?? {}),JSON.stringify(input.dropoffLocation ?? {}),JSON.stringify(input.vehicleContext ?? {}),input.etaAt ?? null,JSON.stringify(input.metadata ?? {})]
-  );
-  const dispatch = r.rows[0];
-
-  const spatialPickup = input.metadata?.pickupSource === 'explicit_dispatch' ? undefined : input.pickupLocation;
-  const spatialDropoff = input.metadata?.dropoffSource === 'explicit_dispatch' ? undefined : input.dropoffLocation;
-  if (spatialPickup || spatialDropoff) {
-    await pool.query(
-      `insert into case_spatial_context(case_id,origin,current_vehicle,destination,route_context,source,updated_at)
-       values($1,$2::jsonb,$2::jsonb,$3::jsonb,'{}'::jsonb,'transport_dispatch',now())
-       on conflict(case_id) do update set
-         origin=coalesce(excluded.origin,case_spatial_context.origin),
-         current_vehicle=coalesce(excluded.current_vehicle,case_spatial_context.current_vehicle),
-         destination=coalesce(excluded.destination,case_spatial_context.destination),
-         source='transport_dispatch',
-         updated_at=now()`,
-      [input.caseId,spatialPickup ? JSON.stringify(spatialPickup) : null,spatialDropoff ? JSON.stringify(spatialDropoff) : null]
+  const client=await pool.connect();
+  let dispatch:any;
+  let caseRow:any;
+  try{
+    await client.query('begin');
+    const c = await client.query('select * from service_cases where id=$1 for update',[input.caseId]);
+    if (!c.rowCount) throw new Error('case_not_found');
+    caseRow=c.rows[0];
+    const r = await client.query(
+      `insert into transport_dispatches(case_id,transport_type,pickup_location,dropoff_location,vehicle_context,eta_at,metadata)
+       values($1,$2,$3,$4,$5,$6,$7) returning *`,
+      [input.caseId,input.transportType,JSON.stringify(input.pickupLocation ?? {}),JSON.stringify(input.dropoffLocation ?? {}),JSON.stringify(input.vehicleContext ?? {}),input.etaAt ?? null,JSON.stringify(input.metadata ?? {})]
     );
-  }
+    dispatch=r.rows[0];
 
-  if (c.rows[0].state !== 'tow_pending' && c.rows[0].state !== 'tow_in_progress') {
+    const spatialPickup = input.metadata?.pickupSource === 'explicit_dispatch' ? undefined : input.pickupLocation;
+    const spatialDropoff = input.metadata?.dropoffSource === 'explicit_dispatch' ? undefined : input.dropoffLocation;
+    if (spatialPickup || spatialDropoff) {
+      await client.query(
+        `insert into case_spatial_context(case_id,origin,current_vehicle,destination,route_context,source,updated_at)
+         values($1,$2::jsonb,$2::jsonb,$3::jsonb,'{}'::jsonb,'transport_dispatch',now())
+         on conflict(case_id) do update set
+           origin=coalesce(excluded.origin,case_spatial_context.origin),
+           current_vehicle=coalesce(excluded.current_vehicle,case_spatial_context.current_vehicle),
+           destination=coalesce(excluded.destination,case_spatial_context.destination),
+           source='transport_dispatch',
+           updated_at=now()`,
+        [input.caseId,spatialPickup ? JSON.stringify(spatialPickup) : null,spatialDropoff ? JSON.stringify(spatialDropoff) : null]
+      );
+    }
+    await syncOperationalConstraints(input.caseId,client);
+    await client.query('commit');
+  }catch(e){
+    await client.query('rollback').catch(()=>{});
+    throw e;
+  }finally{client.release();}
+
+  if (caseRow.state !== 'tow_pending' && caseRow.state !== 'tow_in_progress') {
     await transitionCase(principal,input.caseId,'tow_pending',{ transportDispatchId:dispatch.id, transportType:input.transportType });
   }
 
@@ -89,6 +102,7 @@ export async function assignTransportDispatch(principal: Principal, dispatchId:s
     if (!allowed) throw new Error('provider_not_transport_capable');
     updated = await client.query(`update transport_dispatches set provider_actor_id=$1,status='assigned',assigned_at=now(),eta_at=coalesce($2,eta_at),updated_at=now() where id=$3 returning *`,[providerActorId,etaAt ?? null,dispatchId]);
     await client.query(`update service_cases set current_owner_role='tow',current_owner_actor_id=$1,updated_at=now() where id=$2`,[providerActorId,current.case_id]);
+    await syncOperationalConstraints(current.case_id,client);
     await client.query('commit');
     committed = true;
   } catch (e) {
@@ -145,6 +159,7 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
     } else if (status === 'delivered') {
       await client.query(`update workflow_deadlines set state='resolved',resolved_at=now() where case_id=$1 and deadline_type like 'transport_%' and state='open'`,[current.case_id]);
     }
+    await syncOperationalConstraints(current.case_id,client);
     await client.query(`insert into audit_log(principal_role,principal_actor_id,action,object_type,object_id,rule_basis,metadata) values($1,$2,'update_transport_status','transport_dispatch',$3,$4,$5)`,[principal.role,principal.actorId??null,dispatchId,status==='declined'?`${current.status}->declined`:`${current.status}->${status}`,JSON.stringify(metadata)]);
     await client.query('commit');
     committed = true;
