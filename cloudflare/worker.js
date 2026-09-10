@@ -231,10 +231,32 @@ async function sendTwilioSmsNative(env, sql, recipientId, body) {
   return { success: true, providerMessageId: typeof json.sid === 'string' ? json.sid : undefined, response: json };
 }
 
-// Mirrors src/services/notifications.ts's twilio adapter -- same env-var contract
-// (TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN/TWILIO_FROM_NUMBER), same recipient-phone lookup on
-// actors.phone -- reimplemented against the Neon HTTP driver and Workers' native btoa instead of
-// pg/node:buffer, since this is what actually runs the cron in production.
+async function sendResendEmailNative(env, sql, recipientId, subject, body) {
+  const apiKey = env.RESEND_API_KEY;
+  const fromEmail = env.RESEND_FROM_EMAIL;
+  if (!apiKey || !fromEmail) {
+    return { success: false, errorCode: 'resend_not_configured', errorMessage: 'RESEND_API_KEY/RESEND_FROM_EMAIL are not set' };
+  }
+  const identity = await sql`select email from principal_identities where actor_id=${recipientId} and active=true order by created_at asc limit 1`;
+  const to = identity[0]?.email;
+  if (!to) return { success: false, errorCode: 'recipient_email_missing', errorMessage: 'Recipient actor has no active login email on file' };
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ from: fromEmail, to, subject: subject || '(no subject)', text: body })
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    return { success: false, errorCode: `resend_http_${response.status}`, errorMessage: typeof json.message === 'string' ? json.message : `Resend request failed with status ${response.status}`, response: json };
+  }
+  return { success: true, providerMessageId: typeof json.id === 'string' ? json.id : undefined, response: json };
+}
+
+// Mirrors src/services/notifications.ts's twilio/resend adapters -- same env-var contracts
+// (TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN/TWILIO_FROM_NUMBER, RESEND_API_KEY/RESEND_FROM_EMAIL),
+// same recipient lookups on actors.phone / principal_identities.email -- reimplemented against
+// the Neon HTTP driver and Workers' native btoa instead of pg/node:buffer, since this is what
+// actually runs the cron in production.
 export async function processNotificationBatchNative(sql, env, workerId = 'cloudflare-cron', limit = 200) {
   const claimed = await sql`
     with candidates as (
@@ -278,7 +300,9 @@ export async function processNotificationBatchNative(sql, env, workerId = 'cloud
       ? { success: true, providerMessageId: `internal:${n.recipient_id}:${Date.now()}`, response: {} }
       : provider === 'twilio'
         ? await sendTwilioSmsNative(env, sql, n.recipient_id, body)
-        : { success: false, errorCode: 'provider_not_configured', errorMessage: `No adapter registered for ${provider}` };
+        : provider === 'resend'
+          ? await sendResendEmailNative(env, sql, n.recipient_id, subject, body)
+          : { success: false, errorCode: 'provider_not_configured', errorMessage: `No adapter registered for ${provider}` };
 
     if (!delivery.success) {
       const message = delivery.errorMessage || 'delivery_failed';

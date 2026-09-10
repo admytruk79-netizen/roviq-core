@@ -32,25 +32,25 @@ export async function setCustomerSnapshot(caseId:string, status:string, message?
   );
   // Centralized here rather than added to each of setCustomerSnapshot's ~10 call sites: every
   // existing caller (field-service.ts, transport.ts, orchestration.ts, ...) already computes the
-  // right plain-language message for this snapshot, so this is the one place that turns it into an
-  // actual outbound SMS instead of only something the customer portal has to be open and polling to
-  // see. Queued through the same 'sms' channel/outbox as everything else -- safe to ship even with
-  // no Twilio account configured, since the channel starts disabled (011_notifications_delivery.sql)
-  // and simply dead-letters until an admin enables it with real credentials. Never let a failure
-  // here take down the snapshot write itself, which every caller depends on succeeding.
+  // right plain-language message for this snapshot, so this is the one place that turns it into
+  // actual outbound notifications instead of only something the customer portal has to be open and
+  // polling to see. Queued through the same channel/outbox as everything else -- safe to ship even
+  // with no provider configured, since both channels start disabled (011_notifications_delivery.sql)
+  // and simply dead-letter until an admin enables one with real credentials (Twilio for sms,
+  // Resend for email -- see notifications.ts). Never let a failure here take down the snapshot
+  // write itself, which every caller depends on succeeding.
   if (message) {
-    try {
-      const c = await pool.query('select customer_actor_id from service_cases where id=$1',[caseId]);
-      const customerActorId = c.rows[0]?.customer_actor_id as string|undefined;
-      if (customerActorId) {
-        await queueNotification({
-          caseId, channel:'sms', recipientType:'actor', recipientId:customerActorId,
-          templateKey:'customer_status_update',
-          payload:{ status, message, nextAction:nextAction ?? '', etaAt:etaAt ?? '' }
-        });
+    const c = await pool.query('select customer_actor_id from service_cases where id=$1',[caseId]);
+    const customerActorId = c.rows[0]?.customer_actor_id as string|undefined;
+    if (customerActorId) {
+      const payload = { status, message, nextAction:nextAction ?? '', etaAt:etaAt ?? '' };
+      for (const channel of ['sms','email'] as const) {
+        try {
+          await queueNotification({ caseId, channel, recipientType:'actor', recipientId:customerActorId, templateKey:'customer_status_update', payload });
+        } catch (error) {
+          console.warn('customer_notification_queue_failed', { caseId, channel, error:error instanceof Error?error.message:'unknown_error' });
+        }
       }
-    } catch (error) {
-      console.warn('customer_sms_notification_queue_failed', { caseId, error:error instanceof Error?error.message:'unknown_error' });
     }
   }
   return r.rows[0];

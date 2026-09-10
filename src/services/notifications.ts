@@ -34,9 +34,36 @@ async function sendTwilioSms(recipientId:string, body:string):Promise<DeliveryRe
   return { success:true, providerMessageId:typeof json.sid === 'string' ? json.sid : undefined, response:json };
 }
 
+// Same reasoning as Twilio above: optional, read directly from process.env, only needed once an
+// admin enables the 'email' channel with a real Resend account.
+async function sendResendEmail(recipientId:string, subject:string|undefined, body:string):Promise<DeliveryResult> {
+  const apiKey = process.env.RESEND_API_KEY;
+  const fromEmail = process.env.RESEND_FROM_EMAIL;
+  if (!apiKey || !fromEmail) {
+    return { success:false, errorCode:'resend_not_configured', errorMessage:'RESEND_API_KEY/RESEND_FROM_EMAIL are not set' };
+  }
+  const identity = await pool.query(
+    `select email from principal_identities where actor_id=$1 and active=true order by created_at asc limit 1`,
+    [recipientId]
+  );
+  const to = identity.rows[0]?.email as string|undefined;
+  if (!to) return { success:false, errorCode:'recipient_email_missing', errorMessage:'Recipient actor has no active login email on file' };
+  const response = await fetch('https://api.resend.com/emails', {
+    method:'POST',
+    headers:{ authorization:`Bearer ${apiKey}`, 'content-type':'application/json' },
+    body:JSON.stringify({ from:fromEmail, to, subject:subject ?? '(no subject)', text:body })
+  });
+  const json = await response.json().catch(() => ({})) as Record<string,unknown>;
+  if (!response.ok) {
+    return { success:false, errorCode:`resend_http_${response.status}`, errorMessage:typeof json.message === 'string' ? json.message : `Resend request failed with status ${response.status}`, response:json };
+  }
+  return { success:true, providerMessageId:typeof json.id === 'string' ? json.id : undefined, response:json };
+}
+
 const adapters: Record<string,Adapter> = {
   internal: async ({ recipientId }) => ({ success:true, providerMessageId:`internal:${recipientId}:${Date.now()}` }),
-  twilio: async ({ recipientId, body }) => sendTwilioSms(recipientId, body)
+  twilio: async ({ recipientId, body }) => sendTwilioSms(recipientId, body),
+  resend: async ({ recipientId, subject, body }) => sendResendEmail(recipientId, subject, body)
 };
 
 function render(template:string, payload:Record<string,unknown>) {

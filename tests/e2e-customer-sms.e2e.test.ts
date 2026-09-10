@@ -22,9 +22,10 @@ describe('customer SMS notifications end-to-end', () => {
 
   afterAll(async () => {
     // notification_channel_configs is global, shared state -- other e2e files (notably
-    // e2e-notifications-delivery) assert the 'sms' channel starts disabled. Restore it so this
-    // file's setup doesn't leak into whichever test file the runner happens to execute next.
+    // e2e-notifications-delivery) assert the 'sms'/'email' channels start disabled. Restore both
+    // so this file's setup doesn't leak into whichever test file the runner happens to execute next.
     await app.inject({ method: 'PUT', url: '/api/admin/notifications/channels/sms', headers: adminHeaders(), payload: { provider: 'internal', enabled: false } });
+    await app.inject({ method: 'PUT', url: '/api/admin/notifications/channels/email', headers: adminHeaders(), payload: { provider: 'internal', enabled: false } });
     await pool.end();
   });
 
@@ -33,6 +34,8 @@ describe('customer SMS notifications end-to-end', () => {
     delete process.env.TWILIO_ACCOUNT_SID;
     delete process.env.TWILIO_AUTH_TOKEN;
     delete process.env.TWILIO_FROM_NUMBER;
+    delete process.env.RESEND_API_KEY;
+    delete process.env.RESEND_FROM_EMAIL;
   });
 
   it('lets an actor set and read its own phone number, validates format, and rejects a duplicate', async () => {
@@ -121,6 +124,49 @@ describe('customer SMS notifications end-to-end', () => {
     const attemptsRes = await app.inject({ method: 'GET', url: `/api/admin/notifications/${sent.id}/attempts`, headers: adminHeaders() });
     const attempts = JSON.parse(attemptsRes.body).attempts;
     expect(attempts.some((a: { provider_message_id: string }) => a.provider_message_id === 'SMtest123')).toBe(true);
+
+    // The same status change queues an email notification alongside sms, on the same template key.
+    const emailOutboxRes = await app.inject({ method: 'GET', url: '/api/admin/notifications/outbox?state=pending', headers: adminHeaders() });
+    const emailQueued = JSON.parse(emailOutboxRes.body).notifications.find((n: { case_id: string; channel: string; payload: { message?: string } }) => n.case_id === caseId && n.channel === 'email' && n.payload?.message === 'Your diagnostic is complete.');
+    expect(emailQueued).toBeTruthy();
+  });
+
+  it('delivers a customer status email via Resend once the email channel is configured for it', async () => {
+    const customer = await app.inject({ method: 'POST', url: '/api/admin/actors', headers: adminHeaders(), payload: { actorType: 'customer' } });
+    const customerId = JSON.parse(customer.body).actor.id;
+    await app.inject({ method: 'POST', url: '/api/admin/identities', headers: adminHeaders(), payload: { email: `resend-e2e-${customerId}@roviq.test`, password: 'CustomerPassword123!', role: 'customer', actorId: customerId } });
+
+    const demandRes = await app.inject({
+      method: 'POST', url: '/api/demands', headers: actorHeaders('customer', customerId),
+      payload: { domain: 'maintenance', demandType: 'wont_start', urgency: 'normal' }
+    });
+    const caseId = JSON.parse(demandRes.body).case.id as string;
+
+    await app.inject({ method: 'PUT', url: '/api/admin/notifications/channels/email', headers: adminHeaders(), payload: { provider: 'resend', enabled: true } });
+    process.env.RESEND_API_KEY = 'resend_test_key';
+    process.env.RESEND_FROM_EMAIL = 'updates@roviq.test';
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 'email_test123' }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const snapshotRes = await app.inject({
+      method: 'PUT', url: `/api/admin/cases/${caseId}/customer-snapshot`, headers: adminHeaders(),
+      payload: { status: 'diagnostic_finding_ready', message: 'Your diagnostic is complete.' }
+    });
+    expect(snapshotRes.statusCode).toBe(200);
+
+    const processRes = await app.inject({ method: 'POST', url: '/api/admin/notifications/process', headers: adminHeaders(), payload: { limit: 200 } });
+    const processed = JSON.parse(processRes.body).processed;
+    const outboxRes = await app.inject({ method: 'GET', url: '/api/admin/notifications/outbox?state=sent', headers: adminHeaders() });
+    const sent = JSON.parse(outboxRes.body).notifications.find((n: { case_id: string; channel: string }) => n.case_id === caseId && n.channel === 'email');
+    expect(sent).toBeTruthy();
+    expect(processed.find((p: { id: string }) => p.id === sent.id)).toMatchObject({ state: 'sent', providerMessageId: 'email_test123' });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit & { headers: Record<string, string> }];
+    expect(url).toBe('https://api.resend.com/emails');
+    expect(init.headers.authorization).toBe('Bearer resend_test_key');
+    const sentBody = JSON.parse(init.body as string);
+    expect(sentBody).toMatchObject({ from: 'updates@roviq.test', to: `resend-e2e-${customerId}@roviq.test`, text: 'Your diagnostic is complete.' });
   });
 
   it('fails delivery with a specific reason when the customer has no phone on file, instead of silently dropping the message', async () => {
