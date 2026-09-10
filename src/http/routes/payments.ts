@@ -2,8 +2,9 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { pool } from '../../db/pool.js';
 import { requireRole } from '../middleware/principal.js';
-import { createPaymentIntent, createPayout, refundPayment, updatePaymentState, updatePayoutState } from '../../services/payments.js';
+import { createPaymentIntent, createPayout, createStripeCheckoutSession, refundPayment, updatePaymentState, updatePayoutState, verifyStripeWebhookSignature } from '../../services/payments.js';
 import { loadCaseForPrincipal } from '../../services/case-access.js';
+import type { Principal } from '../../types/principal.js';
 
 export async function paymentRoutes(app: FastifyInstance) {
   app.post('/api/admin/payments', { preHandler: requireRole('admin') }, async (req, reply) => {
@@ -14,6 +15,62 @@ export async function paymentRoutes(app: FastifyInstance) {
       if (e instanceof Error && e.message==='quote_not_approved') return reply.code(409).send({ error:e.message });
       throw e;
     }
+  });
+
+  // Customer-initiated checkout for a payment an admin already recorded (createPaymentIntent,
+  // gated on the quote being approved). Scoped to the payment's own customer_actor_id rather than
+  // loadCaseForPrincipal's broader case-relation check (a partner/tow/parts actor with a relation
+  // to the case has no business paying the customer's bill).
+  app.post('/api/customers/me/payments/:id/checkout-session', { preHandler: requireRole('customer') }, async (req, reply) => {
+    const { id } = z.object({ id:z.string().uuid() }).parse(req.params);
+    const p = await pool.query('select * from payment_intents where id=$1 and customer_actor_id=$2',[id,req.principal.actorId]);
+    if (!p.rowCount) return reply.code(404).send({ error:'payment_not_found' });
+    const payment = p.rows[0];
+    if (!['created','requires_action'].includes(payment.state)) return reply.code(409).send({ error:'payment_not_payable', state:payment.state });
+    const webBase = (process.env.CUSTOMER_WEB_URL ?? '').replace(/\/$/,'');
+    if (!webBase) return reply.code(503).send({ error:'checkout_not_configured' });
+    try {
+      const session = await createStripeCheckoutSession(payment, {
+        successUrl:`${webBase}/cases/${payment.case_id}?payment=success`,
+        cancelUrl:`${webBase}/cases/${payment.case_id}?payment=cancelled`
+      });
+      await pool.query(`update payment_intents set provider='stripe',provider_intent_id=$1,updated_at=now() where id=$2`,[session.id,id]);
+      return { checkoutUrl:session.url };
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'stripe_error';
+      if (message === 'stripe_not_configured') return reply.code(503).send({ error:message });
+      return reply.code(502).send({ error:'stripe_checkout_failed', message });
+    }
+  });
+
+  // Public: Stripe calls this directly, authenticated only by the Stripe-Signature header (no
+  // ROVIQ principal exists for an inbound webhook), so it's registered with config:{public:true}
+  // to skip principalMiddleware same as /api/auth/login. Attributed to a synthetic admin principal
+  // for the audit trail, matching how the scheduled notification/deadline sweeps attribute their
+  // system-initiated actions.
+  app.post('/api/webhooks/stripe', { config:{ public:true } }, async (req, reply) => {
+    const secret = process.env.STRIPE_WEBHOOK_SECRET;
+    const signature = req.headers['stripe-signature'];
+    if (!secret || typeof signature !== 'string' || !req.rawBody || !verifyStripeWebhookSignature(req.rawBody,signature,secret)) {
+      return reply.code(400).send({ error:'invalid_signature' });
+    }
+    const event = req.body as { id:string; type:string; data:{ object:Record<string,unknown> } };
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object as { metadata?:{ roviqPaymentIntentId?:string }; payment_intent?:string; payment_status?:string };
+      const paymentIntentId = session.metadata?.roviqPaymentIntentId;
+      if (paymentIntentId && session.payment_status === 'paid') {
+        const principal:Principal = { role:'admin' };
+        try {
+          await updatePaymentState(principal,paymentIntentId,'captured',{ providerEventId:event.id, payload:{ stripePaymentIntent:session.payment_intent } });
+        } catch (e) {
+          // invalid_payment_transition means this event was already applied (Stripe retries
+          // deliveries until acknowledged) -- anything else should surface as a 500 so Stripe
+          // retries a delivery we may not have actually processed.
+          if (!(e instanceof Error && e.message === 'invalid_payment_transition')) throw e;
+        }
+      }
+    }
+    return reply.code(200).send({ received:true });
   });
 
   app.get('/api/maintenance/cases/:id/payments', async (req, reply) => {

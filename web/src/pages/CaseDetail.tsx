@@ -145,6 +145,8 @@ export function CaseDetail() {
   const [refreshing, setRefreshing] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
+  const [payingId, setPayingId] = useState<string | null>(null);
+  const [payError, setPayError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -235,6 +237,18 @@ export function CaseDetail() {
       setCancelError(message);
     } finally {
       setCancelling(false);
+    }
+  }
+
+  async function payNow(paymentId: string) {
+    setPayingId(paymentId);
+    setPayError(null);
+    try {
+      const res = await api.post<{ checkoutUrl: string }>(`/api/customers/me/payments/${paymentId}/checkout-session`);
+      window.location.href = res.checkoutUrl;
+    } catch {
+      setPayError('Could not start checkout. Please try again.');
+      setPayingId(null);
     }
   }
 
@@ -389,9 +403,29 @@ export function CaseDetail() {
 
       <section>
         <h2 className="text-sm font-semibold text-slate-800">Payments</h2>
+        {payError && <p className="mt-2 text-sm text-red-600">{payError}</p>}
         <ul className="mt-3 divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white">
           {payments.length === 0 && <li className="px-4 py-3 text-sm text-slate-400">No payment is due yet.</li>}
-          {payments.map((p) => <li key={p.id} className="flex items-center justify-between gap-4 px-4 py-3"><span className="text-sm text-slate-800">{p.description ?? 'Payment'}</span><span className="flex items-center gap-2"><StatusBadge state={p.state} /><span className="text-sm text-slate-500">{formatAmount(p.amount, p.currency)}</span></span></li>)}
+          {payments.map((p) => (
+            <li key={p.id} className="flex items-center justify-between gap-4 px-4 py-3">
+              <span className="text-sm text-slate-800">{p.description ?? 'Payment'}</span>
+              <span className="flex items-center gap-2">
+                <StatusBadge state={p.state} />
+                <span className="text-sm text-slate-500">{formatAmount(p.amount, p.currency)}</span>
+                {['created', 'requires_action'].includes(p.state) && (
+                  <button
+                    type="button"
+                    className="roviq-btn-primary"
+                    style={{ padding: '6px 14px', minHeight: 0 }}
+                    disabled={payingId === p.id}
+                    onClick={() => void payNow(p.id)}
+                  >
+                    {payingId === p.id ? 'Redirecting…' : 'Pay now'}
+                  </button>
+                )}
+              </span>
+            </li>
+          ))}
         </ul>
       </section>
 

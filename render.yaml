@@ -27,3 +27,5 @@ services:
         sync: false
       - key: BOOTSTRAP_ADMIN_PASSWORD
         sync: false
+      - key: CUSTOMER_WEB_URL
+        value: https://roviq-web-dxv.pages.dev

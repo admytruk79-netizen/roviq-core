@@ -40,8 +40,24 @@ const deferredBookingConstraintErrors = new Set([
   'deferred_service_appointment_case_mismatch'
 ]);
 
+declare module 'fastify' {
+  interface FastifyRequest { rawBody?: Buffer }
+}
+
 export async function buildApp() {
   const app = Fastify({ logger: false, disableRequestLogging: true });
+
+  // Stripe webhook signatures (src/http/routes/payments.ts) are computed over the exact raw
+  // request bytes -- verifying against a re-serialized JSON.parse/stringify round trip would
+  // reject genuine deliveries whenever key order or whitespace differs. Stash the raw buffer
+  // alongside the normal parsed body instead of replacing Fastify's default JSON parsing, so
+  // every other route keeps behaving exactly as before.
+  app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (req, body, done) => {
+    req.rawBody = body as Buffer;
+    if (!body.length) return done(null, undefined);
+    try { done(null, JSON.parse(body.toString('utf8'))); }
+    catch (err) { done(err as Error, undefined); }
+  });
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof ZodError) return reply.code(400).send({ error:'validation_error', details:err.issues });

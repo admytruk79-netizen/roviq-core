@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
 import { appendCaseEvent, transitionCase } from './orchestration.js';
@@ -109,4 +110,49 @@ export async function updatePayoutState(principal: Principal, payoutId:string, n
   await appendCaseEvent(p.case_id,`PAYOUT_${nextState.toUpperCase()}`,principal,{ payoutId, counterpartyActorId:p.counterparty_actor_id, amount:p.amount });
   await audit(principal,'payout_state_change','settlement_payout',payoutId,`${p.state}->${nextState}`);
   return r.rows[0];
+}
+
+// Real customer-initiated checkout for the amount an admin already recorded via createPaymentIntent
+// (typically once a quote is approved -- see quotes.ts/service-plans.ts). Stripe Checkout Sessions
+// are created via a plain fetch (matching the Twilio/Resend adapters in notifications.ts) rather
+// than the stripe npm SDK, so there's no new dependency and the same "optional env var, dead-letters
+// clearly if unset" shape as every other external provider in this codebase.
+export async function createStripeCheckoutSession(payment:{ id:string; amount:string|number; currency:string; description:string|null }, urls:{ successUrl:string; cancelUrl:string }) {
+  const secretKey = process.env.STRIPE_SECRET_KEY;
+  if (!secretKey) throw new Error('stripe_not_configured');
+  const unitAmount = Math.round(Number(payment.amount) * 100);
+  const params = new URLSearchParams();
+  params.set('mode','payment');
+  params.set('success_url',urls.successUrl);
+  params.set('cancel_url',urls.cancelUrl);
+  params.set('client_reference_id',payment.id);
+  params.set('metadata[roviqPaymentIntentId]',payment.id);
+  params.set('line_items[0][quantity]','1');
+  params.set('line_items[0][price_data][currency]',payment.currency.toLowerCase());
+  params.set('line_items[0][price_data][unit_amount]',String(unitAmount));
+  params.set('line_items[0][price_data][product_data][name]',payment.description ?? 'ROVIQ service payment');
+  const response = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+    method:'POST',
+    headers:{ authorization:`Bearer ${secretKey}`, 'content-type':'application/x-www-form-urlencoded' },
+    body:params.toString()
+  });
+  const json = await response.json().catch(() => ({})) as Record<string,unknown>;
+  if (!response.ok) {
+    const message = typeof json.error === 'object' && json.error && 'message' in json.error ? String((json.error as Record<string,unknown>).message) : `stripe_http_${response.status}`;
+    throw new Error(message);
+  }
+  return json as { id:string; url:string };
+}
+
+// Stripe signs each webhook delivery as "t=<unix ts>,v1=<hex hmac>" computed over
+// "<ts>.<raw request body>" with the endpoint's signing secret (STRIPE_WEBHOOK_SECRET) -- verify
+// against the exact raw bytes (see app.ts's rawBody capture), never a re-serialized JSON.parse
+// round trip, or a genuine delivery with different key order/whitespace would be rejected.
+export function verifyStripeWebhookSignature(rawBody:Buffer, signatureHeader:string, secret:string) {
+  const parts = Object.fromEntries(signatureHeader.split(',').map((p) => p.split('=') as [string,string]));
+  if (!parts.t || !parts.v1) return false;
+  const expected = createHmac('sha256',secret).update(`${parts.t}.${rawBody.toString('utf8')}`).digest('hex');
+  const expectedBuf = Buffer.from(expected,'hex');
+  const actualBuf = Buffer.from(parts.v1,'hex');
+  return expectedBuf.length === actualBuf.length && timingSafeEqual(expectedBuf,actualBuf);
 }
