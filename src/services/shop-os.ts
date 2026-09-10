@@ -408,9 +408,17 @@ export async function updateShopOsAppointment(principal:Principal,appointmentId:
     const scheduleFieldsSupplied=input.startsAt!==undefined||input.endsAt!==undefined||input.resourceId!==undefined;
     if(input.action!=='reschedule'&&scheduleFieldsSupplied) throw httpError('schedule_change_requires_reschedule',400);
 
+    // Discover the immutable case link without taking an appointment lock, then
+    // honor the global case -> appointment -> resource -> capacity lock order.
+    const preview=await client.query(`select service_case_id from roviq_appointments where id=$1`,[appointmentId]);
+    if(!preview.rowCount) throw httpError('appointment_not_found',404);
+    const previewCaseId=preview.rows[0].service_case_id??null;
+    await lockSchedulingCase(previewCaseId,client);
+
     const current=await client.query(`select * from roviq_appointments where id=$1 for update`,[appointmentId]);
     if(!current.rowCount) throw httpError('appointment_not_found',404);
     const existing=current.rows[0];
+    if((existing.service_case_id??null)!==previewCaseId) throw httpError('appointment_case_changed',409);
     const existingResource=await loadExistingResource(principal,existing.resource_id,client);
     await assertManageableServiceCase(principal,existing.service_case_id,existingResource.organization_id,client);
     const nextStatus=nextShopOsAppointmentStatus(existing.appointment_status,input.action);
