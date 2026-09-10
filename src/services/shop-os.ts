@@ -108,16 +108,18 @@ async function assertManageableServiceCase(principal:Principal,serviceCaseId:str
   if(!linked.rows[0]?.linked) throw httpError('service_case_tenant_mismatch',409);
 }
 
-async function assertConfirmableServiceCase(serviceCaseId:string|null|undefined,db:Queryable){
+async function assertOperationalServiceCase(serviceCaseId:string|null|undefined,db:Queryable,intent:'hold'|'confirm'){
   if(!serviceCaseId)return;
   await syncOperationalConstraints(serviceCaseId,db);
   const projected=await db.query(`select constraint_type,status,details from case_constraints where service_case_id=$1`,[serviceCaseId]);
-  const constraints:ServiceabilityConstraint[]=projected.rows.map((row:any)=>({
-    type:row.constraint_type,
-    status:row.status,
-    required:true,
-    details:row.details??{}
-  }));
+  const constraints:ServiceabilityConstraint[]=projected.rows
+    .filter((row:any)=>intent==='confirm'||row.constraint_type!=='customer_time')
+    .map((row:any)=>({
+      type:row.constraint_type,
+      status:row.status,
+      required:true,
+      details:row.details??{}
+    }));
   const decision=evaluateServiceability({
     capacity:{capacityState:'available',confidence:'roviq_native',syncState:'current',capacityUnits:1},
     constraints,
@@ -125,7 +127,16 @@ async function assertConfirmableServiceCase(serviceCaseId:string|null|undefined,
     allowManualVerified:false,
     allowStaleHold:false
   });
-  if(!decision.confirmable) throw httpError('service_case_not_confirmable',409);
+  const allowed=intent==='confirm'?decision.confirmable:decision.holdable;
+  if(!allowed) throw httpError(intent==='confirm'?'service_case_not_confirmable':'service_case_not_bookable',409);
+}
+
+async function assertConfirmableServiceCase(serviceCaseId:string|null|undefined,db:Queryable){
+  await assertOperationalServiceCase(serviceCaseId,db,'confirm');
+}
+
+async function assertBookableServiceCase(serviceCaseId:string|null|undefined,db:Queryable){
+  await assertOperationalServiceCase(serviceCaseId,db,'hold');
 }
 
 async function lockSchedulingResources(resourceIds:string[],db:Queryable){
@@ -175,9 +186,6 @@ async function assertUsableShopOsCapacity(input:{
   const locked=await db.query(`select id from service_resources where id=$1 for update`,[input.resourceId]);
   if(!locked.rowCount) throw httpError('shop_os_resource_not_found',404);
 
-  // Re-read authoritative resource/connector state after the resource lock is held.
-  // This closes the race where a previously-manageable resource or its native
-  // connection becomes blocked/offline/deactivated before capacity is consumed.
   const usable=await db.query(`
     select r.id
     from service_resources r
@@ -338,7 +346,6 @@ export async function createShopOsAppointment(principal:Principal,input:{
   try{
     await client.query('begin');
     assertInterval(input.startsAt,input.endsAt);
-    // Global scheduling/selection lock order is service case -> source appointment -> resource -> capacity window.
     await lockSchedulingCase(input.serviceCaseId,client);
 
     let recoverySource:any=null;
@@ -371,13 +378,15 @@ export async function createShopOsAppointment(principal:Principal,input:{
       serviceCategory:input.serviceCategory??null,
       serviceCaseId:input.serviceCaseId??null
     },client);
-    if((input.status??'held')==='confirmed') await assertConfirmableServiceCase(input.serviceCaseId,client);
+    const requestedStatus=input.status??'held';
+    if(requestedStatus==='confirmed') await assertConfirmableServiceCase(input.serviceCaseId,client);
+    else await assertBookableServiceCase(input.serviceCaseId,client);
     const created=await client.query(`insert into roviq_appointments(
       service_case_id,organization_id,location_id,resource_id,source_connection_id,appointment_status,
       starts_at,ends_at,service_category,customer_visible_summary,internal_notes,created_by_actor_id,recovery_source_appointment_id
     ) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning *`,[
       input.serviceCaseId??null,resource.organization_id,resource.location_id,input.resourceId,resource.shop_os_connection_id,
-      input.status??'held',input.startsAt,input.endsAt,input.serviceCategory??null,input.customerVisibleSummary??null,input.internalNotes??null,
+      requestedStatus,input.startsAt,input.endsAt,input.serviceCategory??null,input.customerVisibleSummary??null,input.internalNotes??null,
       principal.actorId??null,input.recoverySourceAppointmentId??null
     ]);
     const row=created.rows[0];
