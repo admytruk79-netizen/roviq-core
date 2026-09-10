@@ -60,16 +60,22 @@ export function deriveApprovalConstraint(states:string[]):{status:ConstraintStat
 
 export function deriveTransportConstraint(
   transportStatus:string,
-  dropoffLocation:unknown
-):{status:ConstraintStatus;transportStatus:string;destinationReady:boolean}{
+  dropoffLocation:unknown,
+  providerActorId:string|null=null,
+  providerStatus:string|null=null
+):{status:ConstraintStatus;transportStatus:string;destinationReady:boolean;providerReady:boolean|null}{
   const destinationReady=!!dropoffLocation && typeof dropoffLocation==='object' && Object.keys(dropoffLocation as Record<string,unknown>).length>0;
-  if(['declined','failed'].includes(transportStatus)) return {status:'blocked',transportStatus,destinationReady};
-  if(!destinationReady) return {status:'required',transportStatus,destinationReady:false};
-  if(['accepted','en_route','arrived','vehicle_loaded','in_transit','delivered'].includes(transportStatus)) {
-    return {status:'satisfied',transportStatus,destinationReady:true};
+  const providerReady=providerActorId ? providerStatus==='active' : null;
+  if(['declined','failed'].includes(transportStatus)) return {status:'blocked',transportStatus,destinationReady,providerReady};
+  if(!destinationReady) return {status:'required',transportStatus,destinationReady:false,providerReady};
+  if(transportStatus==='assigned' && providerActorId && providerReady===false) return {status:'blocked',transportStatus,destinationReady:true,providerReady:false};
+  if(['accepted','en_route','arrived','vehicle_loaded','in_transit'].includes(transportStatus)) {
+    if(!providerActorId || providerReady!==true) return {status:'blocked',transportStatus,destinationReady:true,providerReady};
+    return {status:'satisfied',transportStatus,destinationReady:true,providerReady:true};
   }
-  if(['requested','assigned'].includes(transportStatus)) return {status:'required',transportStatus,destinationReady:true};
-  return {status:'unknown',transportStatus,destinationReady};
+  if(transportStatus==='delivered') return {status:'satisfied',transportStatus,destinationReady:true,providerReady};
+  if(['requested','assigned'].includes(transportStatus)) return {status:'required',transportStatus,destinationReady:true,providerReady};
+  return {status:'unknown',transportStatus,destinationReady,providerReady};
 }
 
 async function syncPartsConstraint(caseId:string,db:Queryable){
@@ -155,10 +161,12 @@ async function syncApprovalConstraint(caseId:string,db:Queryable){
 
 async function syncTransportConstraint(caseId:string,db:Queryable){
   const result=await db.query(
-    `select id,transport_type,status,dropoff_location,provider_actor_id,eta_at,dispatch_sequence
-       from transport_dispatches
-      where case_id=$1 and status<>'cancelled'
-      order by dispatch_sequence desc
+    `select td.id,td.transport_type,td.status,td.dropoff_location,td.provider_actor_id,td.eta_at,td.dispatch_sequence,
+            a.status as provider_status
+       from transport_dispatches td
+       left join actors a on a.id=td.provider_actor_id
+      where td.case_id=$1 and td.status<>'cancelled'
+      order by td.dispatch_sequence desc
       limit 1`,
     [caseId]
   );
@@ -167,13 +175,17 @@ async function syncTransportConstraint(caseId:string,db:Queryable){
     return;
   }
   const row=result.rows[0];
-  const derived=deriveTransportConstraint(String(row.status),row.dropoff_location);
+  const providerActorId=row.provider_actor_id ? String(row.provider_actor_id) : null;
+  const providerStatus=row.provider_status ? String(row.provider_status) : null;
+  const derived=deriveTransportConstraint(String(row.status),row.dropoff_location,providerActorId,providerStatus);
   await upsertProjection(caseId,'transport','transport-readiness',derived.status,{
     dispatchId:row.id,
     transportType:row.transport_type,
     transportStatus:derived.transportStatus,
     destinationReady:derived.destinationReady,
-    providerActorId:row.provider_actor_id ?? null,
+    providerReady:derived.providerReady,
+    providerActorId,
+    providerStatus,
     etaAt:row.eta_at ?? null
   },db);
 }
