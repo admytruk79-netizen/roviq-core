@@ -80,8 +80,8 @@ class MainActivity : Activity() {
 
         if (savedInstanceState == null) {
             webView.loadUrl(APP_URL)
-        } else {
-            webView.restoreState(savedInstanceState)
+        } else if (webView.restoreState(savedInstanceState) == null) {
+            webView.loadUrl(APP_URL)
         }
     }
 
