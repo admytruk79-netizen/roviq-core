@@ -361,6 +361,10 @@ export async function updateShopOsAppointment(principal:Principal,appointmentId:
     const current=await client.query(`select * from roviq_appointments where id=$1 for update`,[appointmentId]);
     if(!current.rowCount) throw httpError('appointment_not_found',404);
     const existing=current.rows[0];
+    // Same case -> resource -> capacity window lock order as createShopOsAppointment, so a
+    // concurrent selection/cancellation on this case can't interleave with confirming or
+    // rescheduling its appointment.
+    await lockSchedulingCase(existing.service_case_id,client);
     const existingResource=await loadExistingResource(principal,existing.resource_id,client);
     await assertManageableServiceCase(principal,existing.service_case_id,existingResource.organization_id,client);
     const nextStatus=nextShopOsAppointmentStatus(existing.appointment_status,input.action);

@@ -15,7 +15,7 @@
 .partner-map-frame{display:block;width:100%;height:440px;border:0;background:#08131f}
 
 @media(max-width:700px){
- .header>div{padding:.7rem .85rem!important}.header .brand{letter-spacing:.14em}.header .mark{width:1.9rem;height:1.9rem}.header .h-7{display:none}.header .flex.items-center.gap-5{gap:.7rem!important}.header .secondary{padding:.55rem .72rem;font-size:.75rem;min-height:40px}
+ .header>div{padding:.7rem .85rem!important}.header .brand{letter-spacing:.14em}.header .mark{width:1.9rem;height:1.9rem}.header .h-7{display:none}.header .flex.items-center.gap-5{gap:.7rem!important}.header .secondary{padding:.55rem .72rem;font-size:.75rem;min-height:48px}
  .grid-glow{padding:.9rem .8rem 1.6rem!important;background-size:28px 28px}.grid-glow>div:first-child{gap:.8rem}.grid-glow h1{font-size:1.8rem!important;line-height:1.08}.grid-glow h1+.muted,.grid-glow h1+p{font-size:.83rem!important;line-height:1.45}
  .stat{padding:.8rem}.stat p.text-3xl{font-size:1.55rem!important}.panel{border-radius:.9rem}.offer{padding:1rem!important}.offer .flex.shrink-0{width:100%;display:grid!important;grid-template-columns:1fr 1fr}.offer .flex.shrink-0 button{width:100%}
  .primary,.secondary,.danger{min-height:44px}.input{min-height:44px}.partner-map-frame{height:330px}

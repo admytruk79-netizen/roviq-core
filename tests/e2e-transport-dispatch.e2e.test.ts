@@ -136,9 +136,14 @@ describe('transport dispatch end-to-end lifecycle', () => {
     expect(deadlines.rows.length).toBeGreaterThan(0);
     expect(deadlines.rows.every((row) => row.state === 'resolved')).toBe(true);
 
-    // This transport-only scenario has no repair provider pre-assigned. After delivery the
-    // tow provider returns the case to provider selection; a case with an already-related
-    // repair partner may use the explicit tow -> repair handoff covered by the cross-role test.
+    // This transport-only scenario has no repair provider pre-assigned, so delivery must
+    // automatically return the case to provider selection -- without this, the case would sit in
+    // tow_in_progress forever with no automatic advance and no alert. A case with an
+    // already-related repair partner instead uses the explicit tow -> repair handoff covered by
+    // the cross-role test and does NOT auto-advance (see the dedicated test below).
+    const autoAdvanced = await pool.query('select state from service_cases where id=$1',[caseId]);
+    expect(autoAdvanced.rows[0].state).toBe('provider_selection');
+
     const handoffRes = await app.inject({
       method: 'POST', url: `/api/maintenance/cases/${caseId}/transition`, headers: actorHeaders('tow', towActorId),
       payload: { toState: 'provider_selection' }
@@ -234,5 +239,65 @@ describe('transport dispatch end-to-end lifecycle', () => {
 
     const ownerAfterDecline = await pool.query('select current_owner_actor_id from service_cases where id=$1', [caseId]);
     expect(ownerAfterDecline.rows[0].current_owner_actor_id).toBe(secondTowActorId);
+  });
+
+  it('leaves a case with an already-related repair partner in tow_in_progress and raises a handoff deadline instead of dead-ending', async () => {
+    const partner = await app.inject({ method: 'POST', url: '/api/admin/actors', headers: adminHeaders(), payload: { actorType: 'shop', domain: 'maintenance' } });
+    const partnerActorId = JSON.parse(partner.body).actor.id as string;
+    await pool.query(
+      `insert into actor_capabilities(actor_id, capability_id) select $1,id from capabilities where capability_code='repair' on conflict do nothing`,
+      [partnerActorId]
+    );
+
+    const demandRes = await app.inject({
+      method: 'POST', url: '/api/demands', headers: actorHeaders('customer', customerActorId),
+      payload: { domain: 'maintenance', demandType: 'wont_start', urgency: 'urgent' }
+    });
+    const { case: openedCase, demand } = JSON.parse(demandRes.body);
+    const caseId = openedCase.id as string;
+
+    // A repair partner already related to this case before it ever needed a tow -- e.g. a
+    // dealer-controlled relationship, or an offer seeded ahead of dispatch.
+    await pool.query(
+      `insert into matches_offers(demand_id,case_id,actor_id,rank,outcome,rule_basis) values($1,$2,$3,1,'accepted','pre_existing_relationship')`,
+      [demand.id, caseId, partnerActorId]
+    );
+
+    await app.inject({ method: 'POST', url: `/api/maintenance/cases/${caseId}/transition`, headers: adminHeaders(), payload: { toState: 'tow_pending' } });
+    const dispatchRes = await app.inject({
+      method: 'POST', url: '/api/admin/transport', headers: adminHeaders(),
+      payload: { caseId, transportType: 'tow', pickupLocation: { lat: 1, lng: 1 }, dropoffLocation: { lat: 2, lng: 2 } }
+    });
+    const dispatchId = JSON.parse(dispatchRes.body).dispatch.id as string;
+    await app.inject({ method: 'POST', url: `/api/admin/transport/${dispatchId}/assign`, headers: adminHeaders(), payload: { providerActorId: towActorId } });
+
+    for (const status of ['accepted', 'en_route', 'arrived', 'vehicle_loaded', 'in_transit', 'delivered']) {
+      const res = await app.inject({
+        method: 'POST', url: `/api/transport/${dispatchId}/status`, headers: actorHeaders('tow', towActorId),
+        payload: { status }
+      });
+      expect(res.statusCode).toBe(200);
+    }
+
+    // Must NOT auto-advance to provider_selection -- the related partner does its own explicit
+    // tow -> repair handoff (see the cross-role test), and re-entering the selection pool here
+    // would let a different provider get offered a case that already has a repair relationship.
+    const afterDelivery = await pool.query('select state from service_cases where id=$1',[caseId]);
+    expect(afterDelivery.rows[0].state).toBe('tow_in_progress');
+
+    // But it must not silently dead-end either: a deadline is raised so an unattended handoff
+    // still gets escalated instead of sitting forever with no alert.
+    const deadlines = await pool.query(
+      `select state,fallback_action from workflow_deadlines where case_id=$1 and deadline_type='repair_handoff'`, [caseId]
+    );
+    expect(deadlines.rows).toEqual([{ state: 'open', fallback_action: 'escalate_repair_handoff' }]);
+
+    // The explicit handoff still works from here, exactly as the cross-role test exercises.
+    const handoffRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/transition`, headers: actorHeaders('partner', partnerActorId),
+      payload: { toState: 'repair_in_progress' }
+    });
+    expect(handoffRes.statusCode).toBe(200);
+    expect(JSON.parse(handoffRes.body).case.state).toBe('repair_in_progress');
   });
 });

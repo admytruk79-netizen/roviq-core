@@ -8,6 +8,30 @@ import { reserveCanonicalCapacity } from './capacity-reservation.js';
 
 export type SelectionMode = 'customer_choice' | 'dealer_controlled' | 'auto_dispatch' | 'ops_override';
 
+export const partnerRepairActorTypes = new Set(['partner','shop','repair_shop','service_provider','dealer','dealership']);
+
+// True when a repair-capable partner already has an offered/accepted relation to this case --
+// e.g. a dealer-controlled relationship, or an offer seeded before the vehicle was towed in.
+// Callers use this to decide whether a case can go straight to an explicit tow -> repair
+// handoff instead of re-entering the general provider_selection pool it never needed.
+export async function hasRelatedRepairPartner(caseId:string, client:PoolClient|{query:PoolClient['query']}) {
+  const r = await client.query(
+    `select 1
+       from matches_offers mo
+       join actors a on a.id=mo.actor_id
+      where mo.case_id=$1
+        and mo.outcome in ('offered','accepted')
+        and a.actor_type=any($2::text[])
+        and exists(
+          select 1 from actor_capabilities ac join capabilities c on c.id=ac.capability_id
+          where ac.actor_id=a.id and c.capability_code='repair'
+        )
+      limit 1`,
+    [caseId,[...partnerRepairActorTypes]]
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
 function canSelect(principal: Principal, mode: SelectionMode, relationshipOwnerActorId?: string | null) {
   if (principal.role === 'admin') return true;
   if (mode === 'customer_choice') return principal.role === 'customer';

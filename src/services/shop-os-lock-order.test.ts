@@ -28,4 +28,18 @@ describe('Shop OS scheduling lock order',()=>{
     const helper=source.slice(start,end);
     expect(helper).toContain('from service_cases where id=$1 for update');
   });
+
+  it('locks the linked service case before resource locking in appointment update/confirm/reschedule', () => {
+    const start=source.indexOf('export async function updateShopOsAppointment');
+    const end=source.indexOf('export async function listShopOsSchedule',start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const updateBody=source.slice(start,end);
+
+    const caseLock=updateBody.indexOf('await lockSchedulingCase(existing.service_case_id,client)');
+    const resourceLock=updateBody.indexOf('await lockSchedulingResources(');
+
+    expect(caseLock).toBeGreaterThanOrEqual(0);
+    expect(resourceLock).toBeGreaterThan(caseLock);
+  });
 });

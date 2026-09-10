@@ -3,6 +3,7 @@ import type { Principal } from '../types/principal.js';
 import { appendCaseEvent, createDeadline, transitionCase } from './orchestration.js';
 import { audit } from './audit.js';
 import { queueNotification, setCustomerSnapshot } from './operations.js';
+import { hasRelatedRepairPartner } from './selection-authority.js';
 
 export type TransportStatus = 'requested'|'assigned'|'accepted'|'en_route'|'arrived'|'vehicle_loaded'|'in_transit'|'delivered'|'declined'|'cancelled'|'failed';
 
@@ -113,6 +114,7 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
   let current: any;
   let updated: any;
   let caseStateForTransition: string | null = null;
+  let needsRepairHandoffDeadline = false;
   try {
     await client.query('begin');
     const d = await client.query('select * from transport_dispatches where id=$1 for update',[dispatchId]);
@@ -144,6 +146,16 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
       await client.query(`update service_cases set current_owner_role=null,current_owner_actor_id=null,updated_at=now() where id=$1 and current_owner_actor_id=$2`,[current.case_id,current.provider_actor_id]);
     } else if (status === 'delivered') {
       await client.query(`update workflow_deadlines set state='resolved',resolved_at=now() where case_id=$1 and deadline_type like 'transport_%' and state='open'`,[current.case_id]);
+      const c = await client.query('select state from service_cases where id=$1',[current.case_id]);
+      const caseState = c.rows[0]?.state ?? null;
+      if (caseState === 'tow_in_progress') {
+        // A repair partner already related to this case (dealer-controlled, or an offer seeded
+        // before the tow) does its own explicit tow -> repair handoff. Only cases with no such
+        // relation need to re-enter the general provider_selection pool -- otherwise they used to
+        // sit in tow_in_progress forever with no automatic advance and no alert.
+        if (await hasRelatedRepairPartner(current.case_id,client)) needsRepairHandoffDeadline = true;
+        else caseStateForTransition = caseState;
+      }
     }
     await client.query(`insert into audit_log(principal_role,principal_actor_id,action,object_type,object_id,rule_basis,metadata) values($1,$2,'update_transport_status','transport_dispatch',$3,$4,$5)`,[principal.role,principal.actorId??null,dispatchId,status==='declined'?`${current.status}->declined`:`${current.status}->${status}`,JSON.stringify(metadata)]);
     await client.query('commit');
@@ -154,13 +166,17 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
   } finally { client.release(); }
 
   if (caseStateForTransition === 'tow_pending') await transitionCase(principal,current.case_id,'tow_in_progress',{ dispatchId });
+  else if (caseStateForTransition === 'tow_in_progress') await transitionCase(principal,current.case_id,'provider_selection',{ dispatchId });
 
   const eventType = status === 'declined' ? 'TRANSPORT_DECLINED' : `TRANSPORT_${status.toUpperCase()}`;
   const sideEffects: Promise<unknown>[] = [appendCaseEvent(current.case_id,eventType,principal,{ dispatchId,...metadata })];
   if (status === 'accepted') sideEffects.push(setCustomerSnapshot(current.case_id,'transport_confirmed','Your transport provider has confirmed the job.','Provider is preparing for pickup',updated.rows[0].eta_at));
   else if (status === 'en_route') sideEffects.push(setCustomerSnapshot(current.case_id,'transport_en_route','Your transport provider is on the way.','Prepare vehicle for pickup',updated.rows[0].eta_at));
   else if (status === 'arrived') sideEffects.push(setCustomerSnapshot(current.case_id,'transport_arrived','Your transport provider has arrived.','Vehicle handoff in progress',updated.rows[0].eta_at));
-  else if (status === 'delivered') sideEffects.push(setCustomerSnapshot(current.case_id,'transport_delivered','Your vehicle has reached its destination.','Service journey continues'));
+  else if (status === 'delivered') {
+    sideEffects.push(setCustomerSnapshot(current.case_id,'transport_delivered','Your vehicle has reached its destination.','Service journey continues'));
+    if (needsRepairHandoffDeadline) sideEffects.push(createDeadline(current.case_id,'repair_handoff',new Date(Date.now()+30*60*1000).toISOString(),'escalate_repair_handoff',{ dispatchId }));
+  }
   else if (status === 'declined' || status === 'failed') sideEffects.push(setCustomerSnapshot(current.case_id,'transport_reassignment','A new transport provider is being arranged.','Reassigning transport'));
   const results = await Promise.allSettled(sideEffects);
   const failedSideEffects = results.filter((r) => r.status === 'rejected');
