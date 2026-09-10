@@ -20,7 +20,11 @@
 .tow-nav button.active::after,.tow-mode button.active::after{content:" • selected";font-size:10px;font-weight:700}
 .job-row{position:relative}
 .job-row:focus-visible{box-shadow:0 0 0 4px rgba(228,111,53,.16)!important}
-.assignment-actions{position:sticky;bottom:8px;z-index:25;padding-top:4px;background:linear-gradient(180deg,transparent,rgba(3,10,16,.94) 34%)}
+/* Not sticky: .assignment-actions only ever appears inside the compact active-dispatch
+   summary card (never a long scrollable list), where "stick to the viewport bottom" pinned
+   these buttons over the dispatch/case text above them whenever the card was shorter than
+   the viewport -- normal flow keeps them directly below that text, at every screen height. */
+.assignment-actions{margin-top:4px}
 @media(max-width:700px){
   .tow-header{display:grid!important;grid-template-columns:1fr auto!important;padding:8px 10px!important;min-height:58px}
   .tow-nav{grid-column:1/-1!important;display:grid!important;grid-template-columns:repeat(3,1fr)!important;margin-top:4px}
@@ -47,7 +51,6 @@
 }
 @media(prefers-reduced-motion:reduce){
   *{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
-  .assignment-actions{position:static}
 }
 @media(forced-colors:active){
   .active-dispatch,.field-service,.job-row{border:1px solid CanvasText!important}
