@@ -151,12 +151,15 @@ export async function updateShopWaitlistEntry(principal:Principal,entryId:string
         const active=await client.query(`select $1::timestamptz>clock_timestamp() as active`,[row.offer_expires_at]);
         if(!active.rows[0]?.active) throw httpError('waitlist_offer_expired',409);
       }
+      // Hold the candidate appointment row until the waitlist booking commits so
+      // cancellation or rescheduling cannot invalidate eligibility after validation.
       const appointment=await client.query(`
         select a.id,a.organization_id,a.location_id,a.service_case_id,a.service_category,a.starts_at,a.ends_at,a.appointment_status,
                a.resource_id,r.resource_type
         from roviq_appointments a
         left join service_resources r on r.id=a.resource_id
-        where a.id=$1`,[input.appointmentId]);
+        where a.id=$1
+        for update of a`,[input.appointmentId]);
       if(!appointment.rowCount) throw httpError('appointment_not_found',404);
       const a=appointment.rows[0];
       if(!['held','confirmed'].includes(a.appointment_status)) throw httpError('waitlist_appointment_inactive',409);
