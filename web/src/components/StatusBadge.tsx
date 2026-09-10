@@ -14,10 +14,10 @@ function colorFor(state: string) {
   return 'bg-slate-100 text-slate-700';
 }
 
-export function StatusBadge({ state }: { state: string }) {
+export function StatusBadge({ state, label }: { state: string; label?: string }) {
   return (
     <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium capitalize ${colorFor(state)}`}>
-      {humanizeToken(state)}
+      {label ?? humanizeToken(state)}
     </span>
   );
 }

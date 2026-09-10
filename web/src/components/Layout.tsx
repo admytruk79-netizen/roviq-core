@@ -14,6 +14,7 @@ export function Layout() {
           </Link>
           {principal && (
             <nav className="roviq-customer-nav" aria-label="Customer navigation">
+              <Link to="/" className="roviq-nav-link">My cases</Link>
               <Link to="/cases/new" className="roviq-nav-link roviq-nav-primary">Start service</Link>
               <button onClick={logout} className="roviq-nav-link roviq-account-action" type="button" aria-label="Sign out">Sign out</button>
             </nav>

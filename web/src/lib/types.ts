@@ -11,6 +11,8 @@ export type ServiceCase = {
   updated_at: string;
   completed_at: string | null;
   cancelled_at: string | null;
+  customer_status?: string | null;
+  customer_message?: string | null;
   attributes?: { description?: string; demandType?: string } & Record<string, unknown>;
 };
 

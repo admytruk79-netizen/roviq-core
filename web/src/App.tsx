@@ -7,6 +7,7 @@ import { Cases } from './pages/Cases';
 import { NewDemand } from './pages/NewDemand';
 import { CaseDetail } from './pages/CaseDetail';
 import { Local } from './pages/Local';
+import { NotFound } from './pages/NotFound';
 
 function App() {
   return (
@@ -20,6 +21,7 @@ function App() {
               <Route path="/cases/new" element={<NewDemand />} />
               <Route path="/cases/:id" element={<CaseDetail />} />
               <Route path="/local" element={<Local />} />
+              <Route path="*" element={<NotFound />} />
             </Route>
           </Route>
         </Routes>
