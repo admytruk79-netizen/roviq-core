@@ -3,7 +3,7 @@ import type { Principal } from '../types/principal.js';
 import { appendCaseEvent, createDeadline, transitionCase } from './orchestration.js';
 import { audit } from './audit.js';
 import { queueNotification, setCustomerSnapshot } from './operations.js';
-import { syncOperationalConstraints } from './case-constraint-projection.js';
+import { syncTransportOperationalConstraint } from './case-constraint-projection.js';
 
 export type TransportStatus = 'requested'|'assigned'|'accepted'|'en_route'|'arrived'|'vehicle_loaded'|'in_transit'|'delivered'|'declined'|'cancelled'|'failed';
 
@@ -51,7 +51,7 @@ export async function createTransportDispatch(principal: Principal, input:{
         [input.caseId,spatialPickup ? JSON.stringify(spatialPickup) : null,spatialDropoff ? JSON.stringify(spatialDropoff) : null]
       );
     }
-    await syncOperationalConstraints(input.caseId,client);
+    await syncTransportOperationalConstraint(input.caseId,client);
     await client.query('commit');
   }catch(e){
     await client.query('rollback').catch(()=>{});
@@ -102,7 +102,7 @@ export async function assignTransportDispatch(principal: Principal, dispatchId:s
     if (!allowed) throw new Error('provider_not_transport_capable');
     updated = await client.query(`update transport_dispatches set provider_actor_id=$1,status='assigned',assigned_at=now(),eta_at=coalesce($2,eta_at),updated_at=now() where id=$3 returning *`,[providerActorId,etaAt ?? null,dispatchId]);
     await client.query(`update service_cases set current_owner_role='tow',current_owner_actor_id=$1,updated_at=now() where id=$2`,[providerActorId,current.case_id]);
-    await syncOperationalConstraints(current.case_id,client);
+    await syncTransportOperationalConstraint(current.case_id,client);
     await client.query('commit');
     committed = true;
   } catch (e) {
@@ -159,7 +159,7 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
     } else if (status === 'delivered') {
       await client.query(`update workflow_deadlines set state='resolved',resolved_at=now() where case_id=$1 and deadline_type like 'transport_%' and state='open'`,[current.case_id]);
     }
-    await syncOperationalConstraints(current.case_id,client);
+    await syncTransportOperationalConstraint(current.case_id,client);
     await client.query(`insert into audit_log(principal_role,principal_actor_id,action,object_type,object_id,rule_basis,metadata) values($1,$2,'update_transport_status','transport_dispatch',$3,$4,$5)`,[principal.role,principal.actorId??null,dispatchId,status==='declined'?`${current.status}->declined`:`${current.status}->${status}`,JSON.stringify(metadata)]);
     await client.query('commit');
     committed = true;
