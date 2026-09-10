@@ -17,6 +17,10 @@ export async function syncOperationalConstraints(caseId:string,db:Queryable):Pro
   await syncTransportConstraint(caseId,db);
 }
 
+export async function syncApprovalOperationalConstraint(caseId:string,db:Queryable):Promise<void>{
+  await syncApprovalConstraint(caseId,db);
+}
+
 export function derivePartsConstraint(counts:Record<string,number>):{status:ConstraintStatus;total:number;ready:number}{
   const total=Object.values(counts).reduce((sum,value)=>sum+Number(value),0);
   const ready=counts.ready??0;
