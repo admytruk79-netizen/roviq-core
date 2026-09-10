@@ -3,7 +3,7 @@ import type { Principal } from '../types/principal.js';
 import { appendCaseEvent, createDeadline } from './orchestration.js';
 import { audit } from './audit.js';
 import { queueNotification, setCustomerSnapshot } from './operations.js';
-import { syncOperationalConstraints } from './case-constraint-projection.js';
+import { syncMobilityOperationalConstraint } from './case-constraint-projection.js';
 
 export async function createMobilityResource(principal: Principal, input: {
   actorId: string; resourceType: string; externalReference?: string; label?: string;
@@ -31,7 +31,7 @@ export async function requestMobility(principal: Principal, caseId: string, inpu
        values($1,$2,$3,$4,$5,$6) returning *`,
       [caseId,customerActorId,input.allocationType,input.returnDueAt ?? null,input.notes ?? null,JSON.stringify(input.metadata ?? {})]
     );
-    await syncOperationalConstraints(caseId,client);
+    await syncMobilityOperationalConstraint(caseId,client);
     await client.query('commit');
     await appendCaseEvent(caseId,'MOBILITY_REQUESTED',principal,{ allocationId:r.rows[0].id, allocationType:input.allocationType });
     await setCustomerSnapshot(caseId,'mobility_requested','Replacement mobility is being arranged.','Await mobility assignment');
@@ -61,7 +61,7 @@ export async function assignMobility(principal: Principal, allocationId:string, 
       `update mobility_allocations set provider_actor_id=$1,resource_id=$2,state='assigned',assigned_at=now(),return_due_at=coalesce($3,return_due_at),updated_at=now() where id=$4 returning *`,
       [input.providerActorId,input.resourceId ?? null,input.returnDueAt ?? null,allocationId]
     );
-    await syncOperationalConstraints(a.rows[0].case_id,client);
+    await syncMobilityOperationalConstraint(a.rows[0].case_id,client);
     await client.query('commit');
     const row = updated.rows[0];
     await appendCaseEvent(row.case_id,'MOBILITY_ASSIGNED',principal,{ allocationId, providerActorId:input.providerActorId, resourceId:input.resourceId ?? null });
@@ -96,7 +96,7 @@ export async function updateMobilityState(principal: Principal, allocationId:str
     if (['completed','cancelled','declined','failed'].includes(state) && current.resource_id) {
       await client.query("update mobility_resources set status='available',updated_at=now() where id=$1",[current.resource_id]);
     }
-    await syncOperationalConstraints(current.case_id,client);
+    await syncMobilityOperationalConstraint(current.case_id,client);
     await client.query('commit');
     const row = updated.rows[0];
     await appendCaseEvent(row.case_id,`MOBILITY_${state.toUpperCase()}`,principal,{ allocationId });
