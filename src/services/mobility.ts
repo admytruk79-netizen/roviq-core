@@ -3,6 +3,7 @@ import type { Principal } from '../types/principal.js';
 import { appendCaseEvent, createDeadline } from './orchestration.js';
 import { audit } from './audit.js';
 import { queueNotification, setCustomerSnapshot } from './operations.js';
+import { syncOperationalConstraints } from './case-constraint-projection.js';
 
 export async function createMobilityResource(principal: Principal, input: {
   actorId: string; resourceType: string; externalReference?: string; label?: string;
@@ -18,19 +19,28 @@ export async function createMobilityResource(principal: Principal, input: {
 }
 
 export async function requestMobility(principal: Principal, caseId: string, input:{ allocationType:string; notes?:string; metadata?:Record<string,unknown>; returnDueAt?:string }) {
-  const c = await pool.query('select * from service_cases where id=$1',[caseId]);
-  if (!c.rowCount) return null;
-  const customerActorId = c.rows[0].customer_actor_id;
-  if (principal.role === 'customer' && customerActorId !== principal.actorId) throw new Error('forbidden');
-  const r = await pool.query(
-    `insert into mobility_allocations(case_id,customer_actor_id,allocation_type,return_due_at,notes,metadata)
-     values($1,$2,$3,$4,$5,$6) returning *`,
-    [caseId,customerActorId,input.allocationType,input.returnDueAt ?? null,input.notes ?? null,JSON.stringify(input.metadata ?? {})]
-  );
-  await appendCaseEvent(caseId,'MOBILITY_REQUESTED',principal,{ allocationId:r.rows[0].id, allocationType:input.allocationType });
-  await setCustomerSnapshot(caseId,'mobility_requested','Replacement mobility is being arranged.','Await mobility assignment');
-  await audit(principal,'request_mobility','mobility_allocation',r.rows[0].id,'mobility_requested',{ caseId });
-  return r.rows[0];
+  const client=await pool.connect();
+  try{
+    await client.query('begin');
+    const c = await client.query('select * from service_cases where id=$1 for update',[caseId]);
+    if (!c.rowCount) { await client.query('rollback'); return null; }
+    const customerActorId = c.rows[0].customer_actor_id;
+    if (principal.role === 'customer' && customerActorId !== principal.actorId) throw new Error('forbidden');
+    const r = await client.query(
+      `insert into mobility_allocations(case_id,customer_actor_id,allocation_type,return_due_at,notes,metadata)
+       values($1,$2,$3,$4,$5,$6) returning *`,
+      [caseId,customerActorId,input.allocationType,input.returnDueAt ?? null,input.notes ?? null,JSON.stringify(input.metadata ?? {})]
+    );
+    await syncOperationalConstraints(caseId,client);
+    await client.query('commit');
+    await appendCaseEvent(caseId,'MOBILITY_REQUESTED',principal,{ allocationId:r.rows[0].id, allocationType:input.allocationType });
+    await setCustomerSnapshot(caseId,'mobility_requested','Replacement mobility is being arranged.','Await mobility assignment');
+    await audit(principal,'request_mobility','mobility_allocation',r.rows[0].id,'mobility_requested',{ caseId });
+    return r.rows[0];
+  }catch(e){
+    await client.query('rollback').catch(()=>{});
+    throw e;
+  }finally{client.release();}
 }
 
 export async function assignMobility(principal: Principal, allocationId:string, input:{ providerActorId:string; resourceId?:string; returnDueAt?:string }) {
@@ -51,6 +61,7 @@ export async function assignMobility(principal: Principal, allocationId:string, 
       `update mobility_allocations set provider_actor_id=$1,resource_id=$2,state='assigned',assigned_at=now(),return_due_at=coalesce($3,return_due_at),updated_at=now() where id=$4 returning *`,
       [input.providerActorId,input.resourceId ?? null,input.returnDueAt ?? null,allocationId]
     );
+    await syncOperationalConstraints(a.rows[0].case_id,client);
     await client.query('commit');
     const row = updated.rows[0];
     await appendCaseEvent(row.case_id,'MOBILITY_ASSIGNED',principal,{ allocationId, providerActorId:input.providerActorId, resourceId:input.resourceId ?? null });
@@ -85,6 +96,7 @@ export async function updateMobilityState(principal: Principal, allocationId:str
     if (['completed','cancelled','declined','failed'].includes(state) && current.resource_id) {
       await client.query("update mobility_resources set status='available',updated_at=now() where id=$1",[current.resource_id]);
     }
+    await syncOperationalConstraints(current.case_id,client);
     await client.query('commit');
     const row = updated.rows[0];
     await appendCaseEvent(row.case_id,`MOBILITY_${state.toUpperCase()}`,principal,{ allocationId });
