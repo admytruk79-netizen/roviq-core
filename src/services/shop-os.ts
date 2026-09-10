@@ -452,7 +452,9 @@ export async function updateShopOsAppointment(principal:Principal,appointmentId:
         excludeAppointmentId:appointmentId
       },client);
     }
-    if(nextStatus==='confirmed'&&(input.action==='confirm'||input.action==='reschedule')){
+    if(input.action==='reschedule'&&nextStatus==='held'){
+      await assertBookableServiceCase(existing.service_case_id,client);
+    }else if(nextStatus==='confirmed'&&(input.action==='confirm'||input.action==='reschedule')){
       await assertConfirmableServiceCase(existing.service_case_id,client);
     }
 
