@@ -93,10 +93,40 @@ export async function listShopWaitlist(principal:Principal,input:{organizationId
   }finally{client.release();}
 }
 
+export async function listWaitlistAppointmentChoices(principal:Principal,entryId:string){
+  const client=await pool.connect();
+  try{
+    const current=await client.query(`select * from shop_waitlist_entries where id=$1`,[entryId]);
+    if(!current.rowCount) throw httpError('waitlist_entry_not_found',404);
+    const row=current.rows[0];
+    await resolveScope(principal,{organizationId:row.organization_id,locationId:row.location_id},client);
+    await assertCase(principal,row.service_case_id,row.organization_id,client);
+    const preferredResourceTypes=Array.isArray(row.preferred_resource_types)?row.preferred_resource_types.map(String):[];
+    const result=await client.query(`
+      select a.id,a.service_case_id,a.appointment_status,a.starts_at,a.ends_at,a.service_category,
+             a.customer_visible_summary,a.resource_id,r.display_name as resource_display_name,r.resource_type
+      from roviq_appointments a
+      left join service_resources r on r.id=a.resource_id
+      where a.organization_id=$1
+        and ($2::uuid is null or a.location_id=$2::uuid)
+        and a.appointment_status in ('held','confirmed')
+        and a.service_case_id is not distinct from $3::uuid
+        and ($4::text is null or a.service_category=$4::text)
+        and ($5::timestamptz is null or a.starts_at>=$5::timestamptz)
+        and ($6::timestamptz is null or a.ends_at<=$6::timestamptz)
+        and ($7::int is null or extract(epoch from (a.ends_at-a.starts_at))/60 >= $7::int)
+        and (cardinality($8::text[])=0 or r.resource_type=any($8::text[]))
+      order by a.starts_at asc,a.id asc`,[
+      row.organization_id,row.location_id,row.service_case_id,row.requested_service_category,
+      row.requested_after,row.requested_before,row.estimated_duration_minutes,preferredResourceTypes
+    ]);
+    return {entryId,appointments:result.rows};
+  }finally{client.release();}
+}
+
 export async function updateShopWaitlistEntry(principal:Principal,entryId:string,input:{
   action:ShopWaitlistAction;
   appointmentId?:string;
-  offerExpiresAt?:string|null;
 }){
   const client=await pool.connect();
   try{
@@ -108,17 +138,17 @@ export async function updateShopWaitlistEntry(principal:Principal,entryId:string
     await assertCase(principal,row.service_case_id,row.organization_id,client);
 
     let nextState:string;
+    let canonicalOfferExpiry:string|Date|null=null;
     if(input.action==='offer'){
       if(row.state!=='waiting') throw httpError('waitlist_transition_invalid',409);
-      if(!input.offerExpiresAt) throw httpError('offer_expires_at_required',400);
-      const future=await client.query(`select $1::timestamptz>now() as future`,[input.offerExpiresAt]);
-      if(!future.rows[0]?.future) throw httpError('offer_expiry_invalid',400);
+      const expiry=await client.query(`select clock_timestamp()+interval '30 minutes' as expires_at`);
+      canonicalOfferExpiry=expiry.rows[0].expires_at;
       nextState='offered';
     }else if(input.action==='book'){
       if(!['waiting','offered'].includes(row.state)) throw httpError('waitlist_transition_invalid',409);
       if(!input.appointmentId) throw httpError('appointment_id_required',400);
       if(row.state==='offered'){
-        const active=await client.query(`select $1::timestamptz>now() as active`,[row.offer_expires_at]);
+        const active=await client.query(`select $1::timestamptz>clock_timestamp() as active`,[row.offer_expires_at]);
         if(!active.rows[0]?.active) throw httpError('waitlist_offer_expired',409);
       }
       const appointment=await client.query(`
@@ -161,7 +191,7 @@ export async function updateShopWaitlistEntry(principal:Principal,entryId:string
       offer_expires_at=case when $2='offered' then $3::timestamptz else null end,
       booked_appointment_id=case when $2='booked' then $4::uuid else booked_appointment_id end,
       updated_at=now()
-      where id=$1 returning *`,[entryId,nextState,input.offerExpiresAt??null,input.appointmentId??null]);
+      where id=$1 returning *`,[entryId,nextState,canonicalOfferExpiry,input.appointmentId??null]);
     await client.query('commit');
     return updated.rows[0];
   }catch(error){await client.query('rollback');throw error;}finally{client.release();}

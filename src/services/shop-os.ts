@@ -175,6 +175,24 @@ async function assertUsableShopOsCapacity(input:{
   const locked=await db.query(`select id from service_resources where id=$1 for update`,[input.resourceId]);
   if(!locked.rowCount) throw httpError('shop_os_resource_not_found',404);
 
+  // Re-read authoritative resource/connector state after the resource lock is held.
+  // This closes the race where a previously-manageable resource or its native
+  // connection becomes blocked/offline/deactivated before capacity is consumed.
+  const usable=await db.query(`
+    select r.id
+    from service_resources r
+    join partner_system_connections c
+      on c.id=r.source_connection_id
+     and c.id=$2
+     and c.mode='roviq_native'
+     and c.connection_status='active'
+    where r.id=$1
+      and r.source_connection_id=$2
+      and r.active=true
+      and r.operational_state not in ('blocked','offline')
+    for update of r,c`,[input.resourceId,input.sourceConnectionId]);
+  if(!usable.rowCount) throw httpError('shop_os_resource_unavailable',409);
+
   const windows=await db.query(`
     select cw.id,cw.nominal_capacity_units,cw.service_category,cw.window_start,cw.window_end
     from capacity_windows cw
@@ -305,24 +323,45 @@ async function appendAppointmentEvents(db:Queryable,row:any,eventType:string,pri
 
 function rethrowSchedulingError(error:unknown):never{
   if((error as {code?:string})?.code==='23P01') throw httpError('resource_schedule_conflict',409);
+  if((error as {code?:string,constraint?:string})?.code==='23505'&&(error as {constraint?:string}).constraint==='roviq_appointments_one_active_recovery_idx'){
+    throw httpError('appointment_recovery_already_exists',409);
+  }
   if(error instanceof Error && ['appointment_transition_invalid','appointment_not_reschedulable'].includes(error.message)) throw httpError(error.message,409);
   throw error;
 }
 
 export async function createShopOsAppointment(principal:Principal,input:{
   serviceCaseId?:string|null;resourceId:string;startsAt:string;endsAt:string;serviceCategory?:string|null;
-  status?:'held'|'confirmed';customerVisibleSummary?:string|null;internalNotes?:string|null;
+  status?:'held'|'confirmed';customerVisibleSummary?:string|null;internalNotes?:string|null;recoverySourceAppointmentId?:string;
 }){
   const client=await pool.connect();
   try{
     await client.query('begin');
     assertInterval(input.startsAt,input.endsAt);
-    // Global scheduling/selection lock order is service case -> resource -> capacity window.
-    // Selection already holds the case before reserving capacity; appointment creation must
-    // do the same before any resource lock so the two transactions cannot deadlock.
+    // Global scheduling/selection lock order is service case -> source appointment -> resource -> capacity window.
     await lockSchedulingCase(input.serviceCaseId,client);
+
+    let recoverySource:any=null;
+    if(input.recoverySourceAppointmentId){
+      const source=await client.query(`select * from roviq_appointments where id=$1 for update`,[input.recoverySourceAppointmentId]);
+      if(!source.rowCount) throw httpError('recovery_source_appointment_not_found',404);
+      recoverySource=source.rows[0];
+      if(!['cancelled','no_show'].includes(recoverySource.appointment_status)) throw httpError('recovery_source_not_terminal',409);
+      if((recoverySource.service_case_id??null)!==(input.serviceCaseId??null)) throw httpError('recovery_source_case_mismatch',409);
+      const satisfyingReplacement=await client.query(`
+        select id from roviq_appointments
+        where recovery_source_appointment_id=$1
+          and appointment_status in ('held','confirmed','in_progress','completed')
+        order by created_at asc,id asc limit 1`,[input.recoverySourceAppointmentId]);
+      if(satisfyingReplacement.rowCount) throw httpError('appointment_recovery_already_exists',409);
+    }
+
     const resource=await loadManageableResource(principal,input.resourceId,client);
     await assertManageableServiceCase(principal,input.serviceCaseId,resource.organization_id,client);
+    if(recoverySource){
+      if(recoverySource.organization_id!==resource.organization_id) throw httpError('recovery_source_tenant_mismatch',409);
+      if(recoverySource.location_id&&resource.location_id&&recoverySource.location_id!==resource.location_id) throw httpError('recovery_source_location_mismatch',409);
+    }
     await lockSchedulingResources([input.resourceId],client);
     const capacity=await assertUsableShopOsCapacity({
       resourceId:input.resourceId,
@@ -335,15 +374,17 @@ export async function createShopOsAppointment(principal:Principal,input:{
     if((input.status??'held')==='confirmed') await assertConfirmableServiceCase(input.serviceCaseId,client);
     const created=await client.query(`insert into roviq_appointments(
       service_case_id,organization_id,location_id,resource_id,source_connection_id,appointment_status,
-      starts_at,ends_at,service_category,customer_visible_summary,internal_notes,created_by_actor_id
-    ) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) returning *`,[
+      starts_at,ends_at,service_category,customer_visible_summary,internal_notes,created_by_actor_id,recovery_source_appointment_id
+    ) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning *`,[
       input.serviceCaseId??null,resource.organization_id,resource.location_id,input.resourceId,resource.shop_os_connection_id,
-      input.status??'held',input.startsAt,input.endsAt,input.serviceCategory??null,input.customerVisibleSummary??null,input.internalNotes??null,principal.actorId??null
+      input.status??'held',input.startsAt,input.endsAt,input.serviceCategory??null,input.customerVisibleSummary??null,input.internalNotes??null,
+      principal.actorId??null,input.recoverySourceAppointmentId??null
     ]);
     const row=created.rows[0];
     await consumeMatchingCaseReservation(input.serviceCaseId,capacity.id,client);
     await rebuildShopOsCapacity(input.resourceId,client);
-    await appendAppointmentEvents(client,row,row.appointment_status==='confirmed'?'SHOP_OS_APPOINTMENT_CONFIRMED':'SHOP_OS_APPOINTMENT_HELD',principal);
+    await appendAppointmentEvents(client,row,row.appointment_status==='confirmed'?'SHOP_OS_APPOINTMENT_CONFIRMED':'SHOP_OS_APPOINTMENT_HELD',principal,
+      input.recoverySourceAppointmentId?{recoverySourceAppointmentId:input.recoverySourceAppointmentId}:{});
     await client.query('commit');
     return row;
   }catch(error){await client.query('rollback');rethrowSchedulingError(error);}finally{client.release();}

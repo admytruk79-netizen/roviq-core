@@ -29,7 +29,7 @@ export async function listShopOsBoard(principal:Principal,input:{
   const scope=await resolveBoardScope(principal,input);
   const params=[scope.organizationId,scope.locationId,input.from,input.to];
 
-  const [resources,appointments,capacity]=await Promise.all([
+  const [resources,appointments,capacity,clock]=await Promise.all([
     pool.query(`
       select r.id,r.organization_id,r.location_id,r.resource_type,r.display_name,r.capability_tags,r.constraints,
              r.source_connection_id,c.connection_status
@@ -41,8 +41,17 @@ export async function listShopOsBoard(principal:Principal,input:{
         and c.connection_status not in ('revoked','failed')
       order by r.resource_type,r.display_name,r.id`,params.slice(0,2)),
     pool.query(`
-      select a.*
+      select a.*,
+             recovery.id as active_replacement_appointment_id
       from roviq_appointments a
+      left join lateral (
+        select replacement.id
+        from roviq_appointments replacement
+        where replacement.recovery_source_appointment_id=a.id
+          and replacement.appointment_status in ('held','confirmed','in_progress','completed')
+        order by replacement.created_at asc,replacement.id asc
+        limit 1
+      ) recovery on true
       where a.organization_id=$1
         and ($2::uuid is null or a.location_id=$2::uuid)
         and a.starts_at<$4::timestamptz
@@ -58,7 +67,8 @@ export async function listShopOsBoard(principal:Principal,input:{
         and cw.window_start<$4::timestamptz
         and cw.window_end>$3::timestamptz
         and c.connection_status not in ('revoked','failed')
-      order by cw.window_start,cw.resource_id,cw.id`,params)
+      order by cw.window_start,cw.resource_id,cw.id`,params),
+    pool.query(`select clock_timestamp() as server_now`)
   ]);
 
   const statusCounts:Record<string,number>={};
@@ -83,6 +93,7 @@ export async function listShopOsBoard(principal:Principal,input:{
   return {
     scope,
     range:{from:input.from,to:input.to},
+    serverNow:clock.rows[0]?.server_now,
     resources:resources.rows,
     appointments:appointments.rows,
     capacity:capacity.rows,

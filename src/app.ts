@@ -40,6 +40,10 @@ const deferredBookingConstraintErrors = new Set([
   'deferred_service_appointment_case_mismatch'
 ]);
 
+const operationalConflictErrors = new Set([
+  'appointment_no_show_before_start'
+]);
+
 export async function buildApp() {
   const app = Fastify({ logger: false, disableRequestLogging: true });
 
@@ -48,6 +52,7 @@ export async function buildApp() {
     if (err instanceof Error && err.message === 'idempotency_key_reused') return reply.code(409).send({error:err.message});
     if (err instanceof Error && err.message === 'idempotency_key_too_long') return reply.code(400).send({error:err.message});
     if (err instanceof Error && deferredBookingConstraintErrors.has(err.message)) return reply.code(409).send({ error:err.message });
+    if (err instanceof Error && operationalConflictErrors.has(err.message)) return reply.code(409).send({ error:err.message });
     const statusCode = (err as { statusCode?: number }).statusCode;
     if (typeof statusCode === 'number' && statusCode >= 400 && statusCode < 500) {
       return reply.code(statusCode).send({ error: err instanceof Error ? err.message : 'request_error' });

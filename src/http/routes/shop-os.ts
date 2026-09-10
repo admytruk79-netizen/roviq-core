@@ -32,7 +32,8 @@ export async function shopOsRoutes(app:FastifyInstance){
       serviceCategory:z.string().min(1).nullable().optional(),
       status:z.enum(['held','confirmed']).optional(),
       customerVisibleSummary:z.string().max(1000).nullable().optional(),
-      internalNotes:z.string().max(5000).nullable().optional()
+      internalNotes:z.string().max(5000).nullable().optional(),
+      recoverySourceAppointmentId:z.string().uuid().optional()
     }).refine((value)=>new Date(value.endsAt).getTime()>new Date(value.startsAt).getTime(),{message:'endsAt must be after startsAt',path:['endsAt']}).parse(req.body);
     const appointment=await createShopOsAppointment(req.principal,body);
     return reply.code(201).send({appointment});
@@ -117,8 +118,7 @@ export async function shopOsRoutes(app:FastifyInstance){
     const params=z.object({entryId:z.string().uuid()}).parse(req.params);
     const body=z.object({
       action:z.enum(['offer','book','cancel','expire','requeue']),
-      appointmentId:z.string().uuid().optional(),
-      offerExpiresAt:z.string().datetime({offset:true}).nullable().optional()
+      appointmentId:z.string().uuid().optional()
     }).parse(req.body);
     return {entry:await updateShopWaitlistEntry(req.principal,params.entryId,body)};
   });

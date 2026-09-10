@@ -75,16 +75,24 @@ export async function evaluateActorServiceability(
 ): Promise<ActorServiceability> {
   const db = queryable ?? (await import('../db/pool.js')).pool;
   const actor = await db.query(
-    `select a.organization_id,a.location_id,
+    `select a.organization_id,a.location_id,a.status,
             exists(
               select 1 from partner_system_connections psc
               where (
                 (a.location_id is not null and psc.location_id=a.location_id)
                 or (a.organization_id is not null and psc.organization_id=a.organization_id and psc.location_id is null)
               )
-            ) as has_connection_model
+            ) as has_connection_model,
+            case when $2::text is null then true else exists(
+              select 1
+                from actor_capabilities ac
+                join capabilities c on c.id=ac.capability_id
+               where ac.actor_id=a.id
+                 and ac.active=true
+                 and c.capability_code=$2::text
+            ) end as has_active_capability
      from actors a where a.id=$1`,
-    [actorId]
+    [actorId,serviceCategory??null]
   );
 
   const serviceTargetAt=await resolveServiceTargetAt(caseId,db,now,serviceCategory);
@@ -95,6 +103,8 @@ export async function evaluateActorServiceability(
   const a = actor.rows[0];
   if(caseId) await syncOperationalConstraints(caseId,db);
   const constraints = caseId ? await loadConstraints(caseId,db) : [];
+  if(a.status!=='active') constraints.push({type:'provider',status:'blocked',details:{actorId,actorStatus:a.status??'unknown'}});
+  if(serviceCategory && a.has_active_capability!==true) constraints.push({type:'capability',status:'blocked',details:{actorId,serviceCategory}});
   const requirementsProjected=Boolean(caseId && serviceCategory);
   const canonical = await db.query<CanonicalWindowRow>(
     `select cw.id,cw.capacity_state,cw.confidence,cw.sync_state,
