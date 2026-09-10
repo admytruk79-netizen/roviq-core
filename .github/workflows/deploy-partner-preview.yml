@@ -25,14 +25,18 @@ jobs:
       VITE_API_BASE_URL: https://roviq-core.admytruk79.workers.dev
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: productionize-shop-os-operations
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: partner/package-lock.json
 
       - name: Install dependencies
         working-directory: partner
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Build partner portal
         working-directory: partner
