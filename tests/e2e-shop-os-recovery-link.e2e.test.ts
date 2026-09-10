@@ -60,4 +60,26 @@ describe('Shop OS appointment recovery link',()=>{
       returning id`,[source.rows[0].id]);
     expect(retry.rowCount).toBe(1);
   });
+
+  it('rejects a failed replacement as a new recovery root',async()=>{
+    const source=await pool.query(`
+      insert into roviq_appointments(appointment_status,starts_at,ends_at,service_category)
+      values('cancelled',now()-interval '3 hours',now()-interval '2 hours','repair')
+      returning id`);
+    const replacement=await pool.query(`
+      insert into roviq_appointments(appointment_status,starts_at,ends_at,service_category,recovery_source_appointment_id)
+      values('cancelled',now()-interval '90 minutes',now()-interval '60 minutes','repair',$1)
+      returning id`,[source.rows[0].id]);
+
+    await expect(pool.query(`
+      insert into roviq_appointments(appointment_status,starts_at,ends_at,service_category,recovery_source_appointment_id)
+      values('held',now()+interval '1 hour',now()+interval '2 hours','repair',$1)
+    `,[replacement.rows[0].id])).rejects.toMatchObject({code:'P0001'});
+
+    const retry=await pool.query(`
+      insert into roviq_appointments(appointment_status,starts_at,ends_at,service_category,recovery_source_appointment_id)
+      values('held',now()+interval '1 hour',now()+interval '2 hours','repair',$1)
+      returning id`,[source.rows[0].id]);
+    expect(retry.rowCount).toBe(1);
+  });
 });
