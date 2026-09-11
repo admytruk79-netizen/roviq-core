@@ -10,10 +10,16 @@ export async function exceptionRoutes(app:FastifyInstance){
   app.get('/api/admin/exceptions/v2',{preHandler:requireRole('admin')},async(req)=>{
     const query=z.object({
       state:exceptionState.optional(),
+      active:z.coerce.boolean().optional(),
       severity:z.enum(['info','warning','critical']).optional(),
       limit:z.coerce.number().int().positive().max(500).default(200)
     }).parse(req.query??{});
-    return {exceptions:await getExceptionQueue(req.principal,query)};
+    return {exceptions:await getExceptionQueue(req.principal,{
+      state:query.state,
+      states:query.active?['open','acknowledged','remediating']:undefined,
+      severity:query.severity,
+      limit:query.limit
+    })};
   });
 
   app.post('/api/admin/exceptions/:id/state',{preHandler:requireRole('admin')},async(req,reply)=>{
