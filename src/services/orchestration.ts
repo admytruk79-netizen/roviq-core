@@ -119,8 +119,6 @@ export async function transitionCase(
 ) {
   const client = transactionClient ?? await pool.connect();
   const ownsTransaction = !transactionClient;
-  let fromState:string|null=null;
-  let changed=false;
   try {
     if (ownsTransaction) await client.query('begin');
     const current = await client.query('select * from service_cases where id=$1 for update',[caseId]);
@@ -129,7 +127,6 @@ export async function transitionCase(
       return null;
     }
     const c = current.rows[0];
-    fromState=c.state;
     await assertCaseAccess(principal,caseId,client);
     if (c.state === toState) {
       if (ownsTransaction) await client.query('commit');
@@ -166,7 +163,6 @@ export async function transitionCase(
         [caseId,JSON.stringify({source:'case_transition',from:c.state})]
       );
     }
-    changed=true;
     if (ownsTransaction) await client.query('commit');
     if (ownsTransaction) {
       await audit(principal,'transition_case','service_case',caseId,`${c.state}->${toState}`,metadata);
