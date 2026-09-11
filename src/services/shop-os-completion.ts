@@ -179,7 +179,11 @@ export async function updateDeferredService(principal:Principal,deferredItemId:s
     const discoveredCaseId=discovered.rows[0].service_case_id as string|null;
     if(input.action==='book'&&!discoveredCaseId) throw httpError('deferred_service_case_required_for_booking',409);
     if(discoveredCaseId) await lockServiceCase(discoveredCaseId,client);
-    const current=await client.query(`select * from shop_deferred_service_items where id=$1 for update`,[deferredItemId]);
+    const current=await client.query(`select d.*,l.service_category as deferred_service_category
+      from shop_deferred_service_items d
+      join shop_repair_order_lines l on l.id=d.repair_order_line_id
+      where d.id=$1
+      for update of d,l`,[deferredItemId]);
     if(!current.rowCount) throw httpError('deferred_service_not_found',404);
     const row=current.rows[0];
     if((row.service_case_id??null)!==discoveredCaseId) throw httpError('deferred_service_case_changed',409);
@@ -199,13 +203,16 @@ export async function updateDeferredService(principal:Principal,deferredItemId:s
       }
     }else if(input.action==='book'){
       if(!['open','reminded'].includes(row.status)||!input.appointmentId) throw httpError('deferred_service_transition_invalid',409);
-      const appointment=await client.query(`select id,organization_id,location_id,service_case_id,appointment_status from roviq_appointments where id=$1 for update`,[input.appointmentId]);
+      const appointment=await client.query(`select id,organization_id,location_id,service_case_id,appointment_status,service_category from roviq_appointments where id=$1 for update`,[input.appointmentId]);
       if(!appointment.rowCount) throw httpError('appointment_not_found',404);
       const a=appointment.rows[0];
       if(a.organization_id!==row.organization_id||(row.location_id&&a.location_id!==row.location_id)) throw httpError('deferred_service_appointment_scope_mismatch',409);
       if(!row.service_case_id) throw httpError('deferred_service_case_required_for_booking',409);
       if(!a.service_case_id||a.service_case_id!==row.service_case_id) throw httpError('deferred_service_appointment_case_mismatch',409);
       if(!['held','confirmed'].includes(a.appointment_status)) throw httpError('deferred_service_appointment_inactive',409);
+      if(row.deferred_service_category&&a.service_category&&a.service_category!==row.deferred_service_category){
+        throw httpError('deferred_service_appointment_category_mismatch',409);
+      }
       nextStatus='booked';
     }else if(input.action==='complete'){
       if(!['booked','open','reminded'].includes(row.status)) throw httpError('deferred_service_transition_invalid',409);
