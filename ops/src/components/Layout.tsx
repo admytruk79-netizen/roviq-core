@@ -30,6 +30,7 @@ export function Layout() {
               <nav className="hidden items-center gap-1 sm:flex" aria-label="Operations navigation">
                 <Link to="/" className={navClass('/')}>Cases</Link>
                 <Link to="/exceptions" className={navClass('/exceptions')}>Exceptions</Link>
+                <Link to="/integrations" className={navClass('/integrations')}>Integrations</Link>
                 <Link to="/map" className={navClass('/map')}>Map</Link>
               </nav>
               <details className="relative sm:hidden">
@@ -37,6 +38,7 @@ export function Layout() {
                 <nav className="absolute right-0 top-11 z-50 grid min-w-40 gap-1 rounded-xl border border-white/10 bg-[var(--roviq-navy)] p-2 shadow-2xl" aria-label="Operations navigation">
                   <Link to="/" className={navClass('/')}>Cases</Link>
                   <Link to="/exceptions" className={navClass('/exceptions')}>Exceptions</Link>
+                  <Link to="/integrations" className={navClass('/integrations')}>Integrations</Link>
                   <Link to="/map" className={navClass('/map')}>Map</Link>
                 </nav>
               </details>
