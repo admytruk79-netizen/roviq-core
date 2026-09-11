@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireRole } from '../middleware/principal.js';
-import { createShopOsAppointment, listShopOsSchedule, updateShopOsAppointment } from '../../services/shop-os.js';
+import { createShopOsAppointment } from '../../services/shop-os-appointment-create.js';
+import { updateShopOsAppointment } from '../../services/shop-os-appointment-update.js';
+import { listShopOsSchedule } from '../../services/shop-os-schedule-query.js';
 import { listShopOsBoard } from '../../services/shop-os-board.js';
 import { createShopWaitlistEntry, listShopWaitlist, updateShopWaitlistEntry } from '../../services/shop-os-waitlist.js';
 import { createShopResource, listShopResources, updateShopResource } from '../../services/shop-os-resources.js';
