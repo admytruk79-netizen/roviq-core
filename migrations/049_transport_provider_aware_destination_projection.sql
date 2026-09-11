@@ -75,6 +75,11 @@ begin
      where service_case_id=new.case_id
        and projection_key='transport-readiness'
        and source_type='operational_projection';
+  else
+    delete from case_constraints
+     where service_case_id=new.case_id
+       and projection_key='transport-readiness'
+       and source_type='operational_projection';
   end if;
 
   return new;
@@ -129,3 +134,16 @@ update case_constraints cc
  where cc.service_case_id=d.case_id
    and cc.projection_key='transport-readiness'
    and cc.source_type='operational_projection';
+
+-- Cases with only cancelled dispatches have no current transport dependency. Remove
+-- any stale operational projection so the database backfill matches the application
+-- synchronizer's delete-on-no-current-dispatch behavior.
+delete from case_constraints cc
+ where cc.projection_key='transport-readiness'
+   and cc.source_type='operational_projection'
+   and not exists (
+     select 1
+       from transport_dispatches td
+      where td.case_id=cc.service_case_id
+        and td.status<>'cancelled'
+   );
