@@ -11,6 +11,7 @@ import { PartsHandoff } from './pages/PartsHandoff';
 import { PaymentHandoff } from './pages/PaymentHandoff';
 import { NetworkMap } from './pages/NetworkMap';
 import { IntegrationHealth } from './pages/IntegrationHealth';
+import { NotificationOperations } from './pages/NotificationOperations';
 
 function CaseControl() {
   return (
@@ -41,6 +42,7 @@ function App() {
               <Route path="/" element={<Cases />} />
               <Route path="/exceptions" element={<Exceptions />} />
               <Route path="/integrations" element={<IntegrationHealth />} />
+              <Route path="/notifications" element={<NotificationOperations />} />
               <Route path="/map" element={<NetworkMap />} />
               <Route path="/cases/:id" element={<CaseControl />} />
             </Route>
