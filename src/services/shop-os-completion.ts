@@ -179,11 +179,15 @@ export async function updateDeferredService(principal:Principal,deferredItemId:s
     const discoveredCaseId=discovered.rows[0].service_case_id as string|null;
     if(input.action==='book'&&!discoveredCaseId) throw httpError('deferred_service_case_required_for_booking',409);
     if(discoveredCaseId) await lockServiceCase(discoveredCaseId,client);
+    // Only the deferred item is row-locked here. service_category is immutable through
+    // the repair-line update API, so reading it through the join does not require a
+    // line lock. This keeps the lock order compatible with repair-line approval
+    // updates, which take line -> deferred-item locks.
     const current=await client.query(`select d.*,l.service_category as deferred_service_category
       from shop_deferred_service_items d
       join shop_repair_order_lines l on l.id=d.repair_order_line_id
       where d.id=$1
-      for update of d,l`,[deferredItemId]);
+      for update of d`,[deferredItemId]);
     if(!current.rowCount) throw httpError('deferred_service_not_found',404);
     const row=current.rows[0];
     if((row.service_case_id??null)!==discoveredCaseId) throw httpError('deferred_service_case_changed',409);
