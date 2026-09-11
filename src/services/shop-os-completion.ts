@@ -1,7 +1,7 @@
 import type { PoolClient } from 'pg';
 import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
-import { syncOperationalConstraints } from './case-constraint-projection.js';
+import { syncPartsOperationalConstraint } from './case-constraint-projection.js';
 import { resolveShopPrincipalScope } from './shop-os-scope.js';
 
 type Queryable=Pick<PoolClient,'query'>;
@@ -16,6 +16,11 @@ function httpError(message:string,statusCode:number){
 
 async function resolveScope(principal:Principal,input:{organizationId?:string;locationId?:string},db:Queryable){
   return resolveShopPrincipalScope(principal,input,db);
+}
+
+async function lockServiceCase(caseId:string,db:Queryable){
+  const result=await db.query('select id from service_cases where id=$1 for update',[caseId]);
+  if(!result.rowCount) throw httpError('case_not_found',404);
 }
 
 async function loadOrder(principal:Principal,repairOrderId:string,db:Queryable,forUpdate=false){
@@ -40,8 +45,13 @@ export async function createRepairOrderPartRequirement(principal:Principal,input
   const client=await pool.connect();
   try{
     await client.query('begin');
+    const discovered=await client.query('select service_case_id from shop_repair_orders where id=$1',[input.repairOrderId]);
+    if(!discovered.rowCount) throw httpError('repair_order_not_found',404);
+    const caseId=discovered.rows[0].service_case_id as string|null;
+    if(!caseId) throw httpError('repair_order_case_required',409);
+    await lockServiceCase(caseId,client);
     const order=await loadOrder(principal,input.repairOrderId,client,true);
-    if(!order.service_case_id) throw httpError('repair_order_case_required',409);
+    if(order.service_case_id!==caseId) throw httpError('repair_order_case_changed',409);
     if(['closed','cancelled'].includes(order.status)) throw httpError('repair_order_inactive',409);
     const line=await client.query(`select * from shop_repair_order_lines where id=$1 and repair_order_id=$2 for update`,[input.repairOrderLineId,input.repairOrderId]);
     if(!line.rowCount) throw httpError('repair_order_line_not_found',404);
@@ -50,16 +60,16 @@ export async function createRepairOrderPartRequirement(principal:Principal,input
     if(input.partsOrderId){
       const po=await client.query(`select id,case_id from parts_orders where id=$1`,[input.partsOrderId]);
       if(!po.rowCount) throw httpError('parts_order_not_found',404);
-      if(po.rows[0].case_id!==order.service_case_id) throw httpError('parts_order_case_mismatch',409);
+      if(po.rows[0].case_id!==caseId) throw httpError('parts_order_case_mismatch',409);
     }
     const created=await client.query(`insert into case_parts_requirements(
       service_case_id,repair_order_id,repair_order_line_id,parts_order_id,part_reference,description,quantity,
       readiness_status,eta,supplier_reference
     ) values($1,$2,$3,$4,$5,$6,$7,'identified',$8,$9) returning *`,[
-      order.service_case_id,input.repairOrderId,input.repairOrderLineId,input.partsOrderId??null,input.partReference??null,
+      caseId,input.repairOrderId,input.repairOrderLineId,input.partsOrderId??null,input.partReference??null,
       input.description??line.rows[0].description,input.quantity??Number(line.rows[0].quantity),input.eta??null,input.supplierReference??null
     ]);
-    await syncOperationalConstraints(order.service_case_id,client);
+    await syncPartsOperationalConstraint(caseId,client);
     await appendEvent(client,input.repairOrderId,'SHOP_OS_PART_REQUIREMENT_CREATED',principal,{requirementId:created.rows[0].id,lineId:input.repairOrderLineId});
     await client.query('commit');
     return created.rows[0];
@@ -72,16 +82,21 @@ export async function updateRepairOrderPartRequirement(principal:Principal,requi
   const client=await pool.connect();
   try{
     await client.query('begin');
+    const discovered=await client.query('select service_case_id from case_parts_requirements where id=$1',[requirementId]);
+    if(!discovered.rowCount) throw httpError('part_requirement_not_found',404);
+    const caseId=discovered.rows[0].service_case_id as string;
+    await lockServiceCase(caseId,client);
     const current=await client.query(`select cpr.*,ro.organization_id,ro.location_id
       from case_parts_requirements cpr join shop_repair_orders ro on ro.id=cpr.repair_order_id
       where cpr.id=$1 for update`,[requirementId]);
     if(!current.rowCount) throw httpError('part_requirement_not_found',404);
     const row=current.rows[0];
+    if(row.service_case_id!==caseId) throw httpError('part_requirement_case_changed',409);
     await resolveScope(principal,{organizationId:row.organization_id,locationId:row.location_id},client);
     if(input.partsOrderId){
       const po=await client.query(`select id,case_id from parts_orders where id=$1`,[input.partsOrderId]);
       if(!po.rowCount) throw httpError('parts_order_not_found',404);
-      if(po.rows[0].case_id!==row.service_case_id) throw httpError('parts_order_case_mismatch',409);
+      if(po.rows[0].case_id!==caseId) throw httpError('parts_order_case_mismatch',409);
     }
     const updated=await client.query(`update case_parts_requirements set
       readiness_status=$2,eta=case when $3::boolean then $4::timestamptz else eta end,
@@ -92,7 +107,7 @@ export async function updateRepairOrderPartRequirement(principal:Principal,requi
       Object.prototype.hasOwnProperty.call(input,'supplierReference'),input.supplierReference??null,
       Object.prototype.hasOwnProperty.call(input,'partsOrderId'),input.partsOrderId??null
     ]);
-    await syncOperationalConstraints(row.service_case_id,client);
+    await syncPartsOperationalConstraint(caseId,client);
     await appendEvent(client,row.repair_order_id,'SHOP_OS_PART_READINESS_UPDATED',principal,{requirementId,readinessStatus:input.readinessStatus});
     await client.query('commit');
     return updated.rows[0];
@@ -159,9 +174,15 @@ export async function updateDeferredService(principal:Principal,deferredItemId:s
   const client=await pool.connect();
   try{
     await client.query('begin');
+    const discovered=await client.query(`select service_case_id from shop_deferred_service_items where id=$1`,[deferredItemId]);
+    if(!discovered.rowCount) throw httpError('deferred_service_not_found',404);
+    const discoveredCaseId=discovered.rows[0].service_case_id as string|null;
+    if(input.action==='book'&&!discoveredCaseId) throw httpError('deferred_service_case_required_for_booking',409);
+    if(discoveredCaseId) await lockServiceCase(discoveredCaseId,client);
     const current=await client.query(`select * from shop_deferred_service_items where id=$1 for update`,[deferredItemId]);
     if(!current.rowCount) throw httpError('deferred_service_not_found',404);
     const row=current.rows[0];
+    if((row.service_case_id??null)!==discoveredCaseId) throw httpError('deferred_service_case_changed',409);
     await resolveScope(principal,{organizationId:row.organization_id,locationId:row.location_id},client);
     let nextStatus=row.status as string;
     if(input.action==='remind'){
@@ -178,7 +199,7 @@ export async function updateDeferredService(principal:Principal,deferredItemId:s
       }
     }else if(input.action==='book'){
       if(!['open','reminded'].includes(row.status)||!input.appointmentId) throw httpError('deferred_service_transition_invalid',409);
-      const appointment=await client.query(`select id,organization_id,location_id,service_case_id,appointment_status from roviq_appointments where id=$1`,[input.appointmentId]);
+      const appointment=await client.query(`select id,organization_id,location_id,service_case_id,appointment_status from roviq_appointments where id=$1 for update`,[input.appointmentId]);
       if(!appointment.rowCount) throw httpError('appointment_not_found',404);
       const a=appointment.rows[0];
       if(a.organization_id!==row.organization_id||(row.location_id&&a.location_id!==row.location_id)) throw httpError('deferred_service_appointment_scope_mismatch',409);
