@@ -141,7 +141,7 @@ export async function rebuildShopOsCapacity(resourceId:string,db:Queryable){
     ), grouped as (
       select id,at,sum(delta)::int as delta from window_events group by id,at
     ), running as (
-      select id,sum(delta) over(partition by id order by at rows unbounded preceding)::int as concurrent from grouped
+      select id,sum(delta) over(partition by id order by at rows unbounded preceding)::int as concurrent
       from grouped
     ), peaks as (
       select id,coalesce(max(concurrent),0)::int as peak from running group by id
