@@ -5,13 +5,14 @@ const completion=readFileSync(new URL('./shop-os-completion.ts',import.meta.url)
 const migration=readFileSync(new URL('../../migrations/049_transport_provider_aware_destination_projection.sql',import.meta.url),'utf8');
 
 describe('deferred booking and transport projection invariants',()=>{
-  it('locks the deferred repair line and validates appointment service category before booking',()=>{
+  it('validates appointment category without taking the repair-line row lock',()=>{
     const start=completion.indexOf('export async function updateDeferredService');
     const end=completion.indexOf('export async function reconcileRepairOrder',start);
     const body=completion.slice(start,end);
 
     expect(body).toContain('l.service_category as deferred_service_category');
-    expect(body).toContain('for update of d,l');
+    expect(body).toContain('for update of d`');
+    expect(body).not.toContain('for update of d,l');
     expect(body).toContain('appointment_status,service_category from roviq_appointments');
     expect(body).toContain("a.service_category!==row.deferred_service_category");
     expect(body).toContain("deferred_service_appointment_category_mismatch");
