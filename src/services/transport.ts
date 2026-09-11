@@ -1,6 +1,6 @@
 import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
-import { appendCaseEvent, createDeadline, transitionCase } from './orchestration.js';
+import { appendCaseEvent, createDeadline, finalizeExternalCaseTransition, transitionCase } from './orchestration.js';
 import { audit } from './audit.js';
 import { queueNotification, setCustomerSnapshot } from './operations.js';
 import { syncTransportOperationalConstraint } from './case-constraint-projection.js';
@@ -29,6 +29,7 @@ export async function createTransportDispatch(principal: Principal, input:{
   const client=await pool.connect();
   let dispatch:any;
   let caseRow:any;
+  let transitionedToTowPending=false;
   try{
     await client.query('begin');
     const c = await client.query('select * from service_cases where id=$1 for update',[input.caseId]);
@@ -56,6 +57,10 @@ export async function createTransportDispatch(principal: Principal, input:{
         [input.caseId,spatialPickup ? JSON.stringify(spatialPickup) : null,spatialDropoff ? JSON.stringify(spatialDropoff) : null]
       );
     }
+    if (caseRow.state !== 'tow_pending' && caseRow.state !== 'tow_in_progress') {
+      await transitionCase(principal,input.caseId,'tow_pending',{ transportDispatchId:dispatch.id, transportType:input.transportType },client);
+      transitionedToTowPending=true;
+    }
     await syncTransportOperationalConstraint(input.caseId,client);
     await client.query('commit');
   }catch(e){
@@ -63,17 +68,17 @@ export async function createTransportDispatch(principal: Principal, input:{
     throw e;
   }finally{client.release();}
 
-  if (caseRow.state !== 'tow_pending' && caseRow.state !== 'tow_in_progress') {
-    await transitionCase(principal,input.caseId,'tow_pending',{ transportDispatchId:dispatch.id, transportType:input.transportType });
-  }
-
-  const sideEffects = await Promise.allSettled([
+  const sideEffects:Promise<unknown>[] = [
     appendCaseEvent(input.caseId,'TRANSPORT_REQUESTED',principal,{ dispatchId:dispatch.id, transportType:input.transportType }),
     setCustomerSnapshot(input.caseId,'transport_requested','Vehicle transport has been requested.','Waiting for a transport provider',input.etaAt),
     createDeadline(input.caseId,'transport_assignment',new Date(Date.now()+5*60*1000).toISOString(),'escalate_transport_assignment',{ dispatchId:dispatch.id }),
     audit(principal,'create_transport_dispatch','transport_dispatch',dispatch.id,'transport_requested',{ caseId:input.caseId, transportType:input.transportType })
-  ]);
-  const failedSideEffects = sideEffects.filter((result) => result.status === 'rejected');
+  ];
+  if(transitionedToTowPending){
+    sideEffects.push(finalizeExternalCaseTransition(principal,input.caseId,caseRow.state,'tow_pending',{ transportDispatchId:dispatch.id, transportType:input.transportType }));
+  }
+  const results = await Promise.allSettled(sideEffects);
+  const failedSideEffects = results.filter((result) => result.status === 'rejected');
   if (failedSideEffects.length > 0) console.warn('transport_creation_side_effect_failed',{dispatchId:dispatch.id,caseId:input.caseId,failedCount:failedSideEffects.length});
   return dispatch;
 }
@@ -136,7 +141,7 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
   let committed = false;
   let current: any;
   let updated: any;
-  let caseStateForTransition: string | null = null;
+  let transitionedToTowInProgress=false;
   try {
     await client.query('begin');
     const discovered=await client.query('select case_id from transport_dispatches where id=$1',[dispatchId]);
@@ -159,7 +164,10 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
     updated = await client.query(`update transport_dispatches set status=$1,metadata=metadata || $2::jsonb,updated_at=now() ${ts} where id=$3 returning *`,[status,JSON.stringify(metadata),dispatchId]);
     if (status === 'accepted') {
       const c = await client.query('select state from service_cases where id=$1',[caseId]);
-      caseStateForTransition = c.rows[0]?.state ?? null;
+      if(c.rows[0]?.state==='tow_pending'){
+        await transitionCase(principal,caseId,'tow_in_progress',{dispatchId},client);
+        transitionedToTowInProgress=true;
+      }
     } else if (status === 'declined') {
       await client.query(`update service_cases set current_owner_role=null,current_owner_actor_id=null,updated_at=now() where id=$1 and current_owner_actor_id=$2`,[caseId,current.provider_actor_id]);
       updated = await client.query(
@@ -183,10 +191,9 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
     throw e;
   } finally { client.release(); }
 
-  if (caseStateForTransition === 'tow_pending') await transitionCase(principal,current.case_id,'tow_in_progress',{ dispatchId });
-
   const eventType = status === 'declined' ? 'TRANSPORT_DECLINED' : `TRANSPORT_${status.toUpperCase()}`;
   const sideEffects: Promise<unknown>[] = [appendCaseEvent(current.case_id,eventType,principal,{ dispatchId,...metadata })];
+  if(transitionedToTowInProgress) sideEffects.push(finalizeExternalCaseTransition(principal,current.case_id,'tow_pending','tow_in_progress',{dispatchId}));
   if (status === 'accepted') sideEffects.push(setCustomerSnapshot(current.case_id,'transport_confirmed','Your transport provider has confirmed the job.','Provider is preparing for pickup',updated.rows[0].eta_at));
   else if (status === 'en_route') sideEffects.push(setCustomerSnapshot(current.case_id,'transport_en_route','Your transport provider is on the way.','Prepare vehicle for pickup',updated.rows[0].eta_at));
   else if (status === 'arrived') sideEffects.push(setCustomerSnapshot(current.case_id,'transport_arrived','Your transport provider has arrived.','Vehicle handoff in progress',updated.rows[0].eta_at));
