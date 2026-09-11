@@ -110,15 +110,31 @@ async function cancelLinkedShopOsAppointments(caseId:string,principal:Principal,
   for(const resourceId of resourceIds) await rebuildShopOsCapacity(resourceId,client);
 }
 
-export async function transitionCase(principal: Principal, caseId: string, toState: CaseState, metadata: Record<string, unknown> = {}) {
-  const client = await pool.connect();
+export async function transitionCase(
+  principal: Principal,
+  caseId: string,
+  toState: CaseState,
+  metadata: Record<string, unknown> = {},
+  transactionClient?:PoolClient
+) {
+  const client = transactionClient ?? await pool.connect();
+  const ownsTransaction = !transactionClient;
+  let fromState:string|null=null;
+  let changed=false;
   try {
-    await client.query('begin');
+    if (ownsTransaction) await client.query('begin');
     const current = await client.query('select * from service_cases where id=$1 for update',[caseId]);
-    if (!current.rowCount) return null;
+    if (!current.rowCount) {
+      if (ownsTransaction) await client.query('commit');
+      return null;
+    }
     const c = current.rows[0];
+    fromState=c.state;
     await assertCaseAccess(principal,caseId,client);
-    if (c.state === toState) { await client.query('commit'); return c; }
+    if (c.state === toState) {
+      if (ownsTransaction) await client.query('commit');
+      return c;
+    }
     if (toState === 'cancelled') {
       if (!['admin','customer'].includes(principal.role)) throw new Error('transition_forbidden');
     } else {
@@ -150,14 +166,30 @@ export async function transitionCase(principal: Principal, caseId: string, toSta
         [caseId,JSON.stringify({source:'case_transition',from:c.state})]
       );
     }
-    await client.query('commit');
-    await audit(principal,'transition_case','service_case',caseId,`${c.state}->${toState}`,metadata);
-    await publishCaseIntegrationEventSafely(caseId,`CASE_${toState.toUpperCase()}`,principal,{ from:c.state, to:toState });
+    changed=true;
+    if (ownsTransaction) await client.query('commit');
+    if (ownsTransaction) {
+      await audit(principal,'transition_case','service_case',caseId,`${c.state}->${toState}`,metadata);
+      await publishCaseIntegrationEventSafely(caseId,`CASE_${toState.toUpperCase()}`,principal,{ from:c.state, to:toState });
+    }
     return updated.rows[0];
   } catch (e) {
-    await client.query('rollback');
+    if (ownsTransaction) await client.query('rollback');
     throw e;
-  } finally { client.release(); }
+  } finally {
+    if (ownsTransaction) client.release();
+  }
+}
+
+export async function finalizeExternalCaseTransition(
+  principal:Principal,
+  caseId:string,
+  fromState:string,
+  toState:CaseState,
+  metadata:Record<string,unknown>={}
+){
+  await audit(principal,'transition_case','service_case',caseId,`${fromState}->${toState}`,metadata);
+  await publishCaseIntegrationEventSafely(caseId,`CASE_${toState.toUpperCase()}`,principal,{from:fromState,to:toState});
 }
 
 async function publishCaseIntegrationEventSafely(
