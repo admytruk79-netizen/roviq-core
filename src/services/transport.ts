@@ -12,6 +12,11 @@ function hasLocation(value:unknown) {
   return Object.keys(value as Record<string,unknown>).length > 0;
 }
 
+async function lockServiceCase(caseId:string,client:{query:(text:string,params?:unknown[])=>Promise<any>}){
+  const result=await client.query('select id from service_cases where id=$1 for update',[caseId]);
+  if(!result.rowCount) throw new Error('case_not_found');
+}
+
 export async function createTransportDispatch(principal: Principal, input:{
   caseId:string;
   transportType:'tow'|'valet';
@@ -80,9 +85,14 @@ export async function assignTransportDispatch(principal: Principal, dispatchId:s
   let updated: any;
   try {
     await client.query('begin');
+    const discovered=await client.query('select case_id from transport_dispatches where id=$1',[dispatchId]);
+    if(!discovered.rowCount) throw new Error('dispatch_not_found');
+    const caseId=discovered.rows[0].case_id as string;
+    await lockServiceCase(caseId,client);
     const d = await client.query('select * from transport_dispatches where id=$1 for update',[dispatchId]);
     if (!d.rowCount) throw new Error('dispatch_not_found');
     current = d.rows[0];
+    if(current.case_id!==caseId) throw new Error('transport_case_changed');
     if (!['requested','declined','failed'].includes(current.status)) {
       if (current.provider_actor_id === providerActorId) {
         await client.query('commit');
@@ -101,8 +111,8 @@ export async function assignTransportDispatch(principal: Principal, dispatchId:s
     const allowed = current.transport_type === 'tow' ? (provider.rows[0].actor_type === 'tow' || provider.rows[0].tow_participation || provider.rows[0].has_tow_capability) : provider.rows[0].valet_participation;
     if (!allowed) throw new Error('provider_not_transport_capable');
     updated = await client.query(`update transport_dispatches set provider_actor_id=$1,status='assigned',assigned_at=now(),eta_at=coalesce($2,eta_at),updated_at=now() where id=$3 returning *`,[providerActorId,etaAt ?? null,dispatchId]);
-    await client.query(`update service_cases set current_owner_role='tow',current_owner_actor_id=$1,updated_at=now() where id=$2`,[providerActorId,current.case_id]);
-    await syncTransportOperationalConstraint(current.case_id,client);
+    await client.query(`update service_cases set current_owner_role='tow',current_owner_actor_id=$1,updated_at=now() where id=$2`,[providerActorId,caseId]);
+    await syncTransportOperationalConstraint(caseId,client);
     await client.query('commit');
     committed = true;
   } catch (e) {
@@ -129,9 +139,14 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
   let caseStateForTransition: string | null = null;
   try {
     await client.query('begin');
+    const discovered=await client.query('select case_id from transport_dispatches where id=$1',[dispatchId]);
+    if(!discovered.rowCount) throw new Error('dispatch_not_found');
+    const caseId=discovered.rows[0].case_id as string;
+    await lockServiceCase(caseId,client);
     const d = await client.query('select * from transport_dispatches where id=$1 for update',[dispatchId]);
     if (!d.rowCount) throw new Error('dispatch_not_found');
     current = d.rows[0];
+    if(current.case_id!==caseId) throw new Error('transport_case_changed');
     if (principal.role !== 'admin' && current.provider_actor_id !== principal.actorId) throw new Error('dispatch_forbidden');
     const allowed:Record<string,TransportStatus[]> = {
       assigned:['accepted','declined','cancelled'],accepted:['en_route','cancelled','failed'],en_route:['arrived','failed'],
@@ -143,23 +158,23 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
     const ts = timestampColumn[status] ? `, ${timestampColumn[status]}=now()` : '';
     updated = await client.query(`update transport_dispatches set status=$1,metadata=metadata || $2::jsonb,updated_at=now() ${ts} where id=$3 returning *`,[status,JSON.stringify(metadata),dispatchId]);
     if (status === 'accepted') {
-      const c = await client.query('select state from service_cases where id=$1',[current.case_id]);
+      const c = await client.query('select state from service_cases where id=$1',[caseId]);
       caseStateForTransition = c.rows[0]?.state ?? null;
     } else if (status === 'declined') {
-      await client.query(`update service_cases set current_owner_role=null,current_owner_actor_id=null,updated_at=now() where id=$1 and current_owner_actor_id=$2`,[current.case_id,current.provider_actor_id]);
+      await client.query(`update service_cases set current_owner_role=null,current_owner_actor_id=null,updated_at=now() where id=$1 and current_owner_actor_id=$2`,[caseId,current.provider_actor_id]);
       updated = await client.query(
         `update transport_dispatches
          set status='requested',provider_actor_id=null,assigned_at=null,accepted_at=null,updated_at=now(),metadata=metadata || $2::jsonb
          where id=$1 returning *`,
         [dispatchId,JSON.stringify({lastDeclinedBy:principal.actorId??null,lastDeclinedAt:new Date().toISOString()})]
       );
-      await client.query(`insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload) values('service_case',$1,'TRANSPORT_RELEASED_FOR_REASSIGNMENT',$2,$3)`,[current.case_id,principal.actorId??null,JSON.stringify({dispatchId,declinedProviderActorId:current.provider_actor_id})]);
+      await client.query(`insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload) values('service_case',$1,'TRANSPORT_RELEASED_FOR_REASSIGNMENT',$2,$3)`,[caseId,principal.actorId??null,JSON.stringify({dispatchId,declinedProviderActorId:current.provider_actor_id})]);
     } else if (status === 'failed') {
-      await client.query(`update service_cases set current_owner_role=null,current_owner_actor_id=null,updated_at=now() where id=$1 and current_owner_actor_id=$2`,[current.case_id,current.provider_actor_id]);
+      await client.query(`update service_cases set current_owner_role=null,current_owner_actor_id=null,updated_at=now() where id=$1 and current_owner_actor_id=$2`,[caseId,current.provider_actor_id]);
     } else if (status === 'delivered') {
-      await client.query(`update workflow_deadlines set state='resolved',resolved_at=now() where case_id=$1 and deadline_type like 'transport_%' and state='open'`,[current.case_id]);
+      await client.query(`update workflow_deadlines set state='resolved',resolved_at=now() where case_id=$1 and deadline_type like 'transport_%' and state='open'`,[caseId]);
     }
-    await syncTransportOperationalConstraint(current.case_id,client);
+    await syncTransportOperationalConstraint(caseId,client);
     await client.query(`insert into audit_log(principal_role,principal_actor_id,action,object_type,object_id,rule_basis,metadata) values($1,$2,'update_transport_status','transport_dispatch',$3,$4,$5)`,[principal.role,principal.actorId??null,dispatchId,status==='declined'?`${current.status}->declined`:`${current.status}->${status}`,JSON.stringify(metadata)]);
     await client.query('commit');
     committed = true;
