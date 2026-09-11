@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
@@ -8,14 +7,16 @@ import { publishIntegrationEvent } from './integration-gateway.js';
 import { consumeCaseCapacity, releaseCaseCapacity } from './capacity-reservation.js';
 import { rebuildShopOsCapacity } from './shop-os.js';
 
+export { appendCaseEvent, getCaseTimeline } from './case-events.js';
+export { createDeadline, raiseException } from './workflow-support.js';
+export { withIdempotency } from './idempotency.js';
+
 export type CaseState =
   | 'intake' | 'triage' | 'diagnostic_pending' | 'diagnostic_in_progress'
   | 'tow_pending' | 'tow_in_progress' | 'provider_selection' | 'provider_pending'
   | 'repair_in_progress' | 'parts_pending' | 'payment_pending' | 'completed' | 'cancelled';
 
 export type SelectionMode = 'customer_choice' | 'dealer_controlled' | 'auto_dispatch' | 'ops_override';
-
-type Queryable = Pick<PoolClient, 'query'>;
 
 export async function createServiceCase(principal: Principal, input: {
   demandId?: string; marketId?: string; locationId?: string; priority?: string;
@@ -62,13 +63,7 @@ export async function createServiceCase(principal: Principal, input: {
       [principal.role,principal.actorId ?? null,c.id,JSON.stringify({servicePlanId:plan.rows[0].id,selectionMode:c.selection_mode})]
     );
     if (ownsTransaction) await client.query('commit');
-    if (ownsTransaction) {
-      try {
-        await publishIntegrationEvent({ aggregateType:'service_case', aggregateId:c.id, eventType:'CASE_CREATED', actorId:principal.actorId ?? undefined, payload:{ state:c.state, priority:c.priority } });
-      } catch (error) {
-        console.error('integration_event_publish_failed', { eventType:'CASE_CREATED', caseId:c.id, message: error instanceof Error ? error.message : String(error) });
-      }
-    }
+    if (ownsTransaction) await publishCaseIntegrationEventSafely(c.id,'CASE_CREATED',principal,{ state:c.state, priority:c.priority });
     return c;
   } catch (error) {
     if (ownsTransaction) await client.query('rollback');
@@ -87,6 +82,7 @@ async function cancelLinkedShopOsAppointments(caseId:string,principal:Principal,
     for update`,[caseId]);
   if(!active.rowCount)return;
 
+  const previousStatusById=new Map(active.rows.map((row:any)=>[row.id,row.appointment_status]));
   const ids=active.rows.map((row:any)=>row.id);
   const cancelled=await client.query(`
     update roviq_appointments
@@ -100,7 +96,7 @@ async function cancelLinkedShopOsAppointments(caseId:string,principal:Principal,
   for(const row of cancelled.rows){
     await client.query(`insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload)
       values('service_case',$1,'SHOP_OS_APPOINTMENT_CANCELLED_BY_CASE',$2,$3)`,[
-      caseId,principal.actorId ?? null,JSON.stringify({appointmentId:row.id,resourceId:row.resource_id,previousStatus:active.rows.find((x:any)=>x.id===row.id)?.appointment_status??null,status:'cancelled',reason:'service_case_cancelled'})
+      caseId,principal.actorId ?? null,JSON.stringify({appointmentId:row.id,resourceId:row.resource_id,previousStatus:previousStatusById.get(row.id)??null,status:'cancelled',reason:'service_case_cancelled'})
     ]);
     if(row.source_connection_id){
       await client.query(`insert into integration_sync_events(connection_id,event_type,direction,status,roviq_entity_type,roviq_entity_id,payload)
@@ -156,11 +152,7 @@ export async function transitionCase(principal: Principal, caseId: string, toSta
     }
     await client.query('commit');
     await audit(principal,'transition_case','service_case',caseId,`${c.state}->${toState}`,metadata);
-    try {
-      await publishIntegrationEvent({ aggregateType:'service_case', aggregateId:caseId, eventType:`CASE_${toState.toUpperCase()}`, actorId:principal.actorId ?? undefined, payload:{ from:c.state, to:toState } });
-    } catch (error) {
-      console.error('integration_event_publish_failed', { eventType:`CASE_${toState.toUpperCase()}`, caseId, message: error instanceof Error ? error.message : String(error) });
-    }
+    await publishCaseIntegrationEventSafely(caseId,`CASE_${toState.toUpperCase()}`,principal,{ from:c.state, to:toState });
     return updated.rows[0];
   } catch (e) {
     await client.query('rollback');
@@ -168,92 +160,25 @@ export async function transitionCase(principal: Principal, caseId: string, toSta
   } finally { client.release(); }
 }
 
-export async function appendCaseEvent(caseId: string, eventType: string, principal: Principal, payload: Record<string, unknown> = {}, queryable: Queryable = pool) {
-  await queryable.query(
-    `insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload)
-     values('service_case',$1,$2,$3,$4)`,
-    [caseId,eventType,principal.actorId ?? null,JSON.stringify(payload)]
-  );
-}
-
-export async function getCaseTimeline(caseId: string) {
-  const r = await pool.query(
-    `select id,event_type,actor_id,occurred_at,payload from events
-     where aggregate_type='service_case' and aggregate_id=$1 order by occurred_at asc`, [caseId]
-  );
-  return r.rows;
-}
-
-export async function createDeadline(caseId: string, deadlineType: string, dueAt: string, fallbackAction?: string, metadata: Record<string,unknown> = {}) {
-  const r = await pool.query(
-    `insert into workflow_deadlines(case_id,deadline_type,due_at,fallback_action,metadata)
-     values($1,$2,$3,$4,$5) returning *`, [caseId,deadlineType,dueAt,fallbackAction ?? null,JSON.stringify(metadata)]
-  );
-  return r.rows[0];
-}
-
-export async function raiseException(caseId: string, code: string, summary: string, severity='warning', metadata: Record<string,unknown> = {}) {
-  const r = await pool.query(
-    `insert into case_exceptions(case_id,exception_code,severity,summary,metadata)
-     values($1,$2,$3,$4,$5) returning *`, [caseId,code,severity,summary,JSON.stringify(metadata)]
-  );
-  return r.rows[0];
-}
-
-export async function withIdempotency<T>(principal: Principal, key: string | undefined, operation: string, body: unknown, fn: (transactionClient?:PoolClient) => Promise<{ status:number; body:T }>) {
-  if (!key) return fn();
-  if (key.length > 200) throw new Error('idempotency_key_too_long');
-  const actorScope = principal.actorId ?? 'anonymous';
-  const scopedKey = createHash('sha256').update(`${principal.role}|${actorScope}|${operation}|${key}`).digest('hex');
-  const requestHash = createHash('sha256').update(stableJson(body ?? null)).digest('hex');
-  const client = await pool.connect();
+async function publishCaseIntegrationEventSafely(
+  caseId:string,
+  eventType:string,
+  principal:Principal,
+  payload:Record<string,unknown>
+){
   try {
-    await client.query('begin');
-    await client.query(
-      `insert into idempotency_keys(key,principal_role,principal_actor_id,operation,request_hash)
-       values($1,$2,$3,$4,$5) on conflict(key) do nothing`,
-      [scopedKey,principal.role,principal.actorId ?? null,operation,requestHash]
-    );
-    const existing = await client.query(
-      `select principal_role,principal_actor_id,operation,request_hash,response_code,response_body,expires_at
-       from idempotency_keys where key=$1 for update`,
-      [scopedKey]
-    );
-    const row = existing.rows[0];
-    const expired = row.expires_at && new Date(row.expires_at).getTime() <= Date.now();
-    if (expired) {
-      await client.query(
-        `update idempotency_keys set principal_role=$1,principal_actor_id=$2,operation=$3,request_hash=$4,
-         response_code=null,response_body=null,created_at=now(),expires_at=now()+interval '24 hours' where key=$5`,
-        [principal.role,principal.actorId ?? null,operation,requestHash,scopedKey]
-      );
-    } else if (row.request_hash !== requestHash || row.operation !== operation || row.principal_role !== principal.role || (row.principal_actor_id ?? null) !== (principal.actorId ?? null)) {
-      throw new Error('idempotency_key_reused');
-    } else if (row.response_code !== null) {
-      await client.query('commit');
-      return {status:row.response_code,body:row.response_body as T};
-    }
-
-    const result = await fn(client);
-    await client.query(
-      'update idempotency_keys set response_code=$1,response_body=$2 where key=$3',
-      [result.status,JSON.stringify(result.body),scopedKey]
-    );
-    await client.query('commit');
-    return result;
+    await publishIntegrationEvent({
+      aggregateType:'service_case',
+      aggregateId:caseId,
+      eventType,
+      actorId:principal.actorId ?? undefined,
+      payload
+    });
   } catch (error) {
-    await client.query('rollback');
-    throw error;
-  } finally {
-    client.release();
+    console.error('integration_event_publish_failed', {
+      eventType,
+      caseId,
+      message:error instanceof Error ? error.message : String(error)
+    });
   }
-}
-
-function stableJson(value:unknown):string {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
-  if (value && typeof value === 'object') {
-    const record = value as Record<string,unknown>;
-    return `{${Object.keys(record).sort().map((key)=>`${JSON.stringify(key)}:${stableJson(record[key])}`).join(',')}}`;
-  }
-  return JSON.stringify(value) ?? 'null';
 }
