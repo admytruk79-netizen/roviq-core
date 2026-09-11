@@ -117,10 +117,13 @@ export type PaymentIntent = {
 export type CaseException = {
   id: string;
   case_id: string;
-  code: string;
+  // Matches the case_exceptions.exception_code column name returned by
+  // GET /api/admin/exceptions(/v2) -- not "code". A prior mismatch here crashed this whole
+  // page (humanizeToken(undefined)) any time an exception existed.
+  exception_code: string;
   summary: string;
   severity: 'info' | 'warning' | 'critical';
-  state: string;
+  state: 'open' | 'acknowledged' | 'remediating' | 'resolved' | 'dismissed';
   case_state: string;
   priority: string;
   created_at: string;
