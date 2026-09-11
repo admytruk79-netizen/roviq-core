@@ -114,15 +114,22 @@ export type PaymentIntent = {
   captured_at: string | null;
 };
 
+export type ExceptionState = 'open' | 'acknowledged' | 'remediating' | 'resolved' | 'dismissed';
+
 export type CaseException = {
   id: string;
   case_id: string;
-  code: string;
+  exception_code?: string;
+  code?: string;
   summary: string;
   severity: 'info' | 'warning' | 'critical';
-  state: string;
+  state: ExceptionState;
   case_state: string;
   priority: string;
+  owner_actor_id: string | null;
+  due_at: string | null;
+  resolution_code: string | null;
+  remediation_history: Array<{at?:string;from?:string;to?:string;actorId?:string|null;note?:string|null;resolutionCode?:string|null}>;
   created_at: string;
 };
 
