@@ -129,13 +129,14 @@ describe('Shop OS real PostgreSQL concurrency invariants',()=>{
     ]);
 
     expect(results.some(isDeadlock)).toBe(false);
-    const approval=results[1];
-    expect(approval.status).toBe('fulfilled');
+    expect(results[1].status).toBe('fulfilled');
+    if(results[0].status==='rejected'){
+      expect(results[0].reason).toMatchObject({message:'deferred_service_transition_invalid',statusCode:409});
+    }
 
     const line=await pool.query(`select approval_status from shop_repair_order_lines where id=$1`,[race.lineId]);
     const deferred=await pool.query(`select status,booked_appointment_id from shop_deferred_service_items where id=$1`,[race.deferredItemId]);
     expect(line.rows[0].approval_status).toBe('approved');
     expect(deferred.rows[0].status).toBe('dismissed');
-    expect(['booked','dismissed']).not.toContain(deferred.rows[0].status==='booked'&&line.rows[0].approval_status==='approved'?'booked':deferred.rows[0].status);
   });
 });
