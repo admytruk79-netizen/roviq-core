@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import { formatDateTime, humanizeToken } from '../lib/format';
@@ -20,18 +20,36 @@ function exceptionCode(exception:CaseException){
   return exception.exception_code ?? exception.code ?? 'exception';
 }
 
-function RecoveryControls({exception,onChanged}:{exception:CaseException;onChanged:()=>Promise<void>}){
+function RecoveryControls({exception,onUpdated,onRefresh}:{
+  exception:CaseException;
+  onUpdated:(updated:CaseException)=>void;
+  onRefresh:()=>Promise<void>;
+}){
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState<string|null>(null);
+  const [notice,setNotice]=useState<string|null>(null);
 
   async function move(state:ExceptionState){
-    setBusy(true);setError(null);
+    setBusy(true);setError(null);setNotice(null);
+    const payload:Record<string,string>={state};
+    if(state==='resolved') payload.resolutionCode='operator_verified';
+    let updated:CaseException;
     try{
-      const payload:Record<string,string>={state};
-      if(state==='resolved') payload.resolutionCode='operator_verified';
-      await api.post(`/api/admin/exceptions/${exception.id}/state`,payload);
-      await onChanged();
-    }catch(e){setError(errorMessage(e));}finally{setBusy(false);}
+      const result=await api.post<{exception:CaseException}>(`/api/admin/exceptions/${exception.id}/state`,payload);
+      updated=result.exception;
+      onUpdated(updated);
+    }catch(e){
+      setError(errorMessage(e));
+      setBusy(false);
+      return;
+    }
+    try{
+      await onRefresh();
+    }catch{
+      setNotice('Recovery state was saved, but the queue could not be refreshed.');
+    }finally{
+      setBusy(false);
+    }
   }
 
   const actions: Array<{state:ExceptionState;label:string}> = exception.state==='open'
@@ -48,6 +66,7 @@ function RecoveryControls({exception,onChanged}:{exception:CaseException;onChang
       {actions.map(action=><button key={action.state} type="button" disabled={busy} onClick={()=>void move(action.state)} className="roviq-btn-secondary text-xs disabled:cursor-not-allowed disabled:opacity-50">{action.label}</button>)}
     </div>
     {error&&<p role="alert" className="mt-2 text-xs text-red-700">{error}</p>}
+    {notice&&<p role="status" className="mt-2 text-xs text-amber-700">{notice}</p>}
   </div>;
 }
 
@@ -55,19 +74,41 @@ export function Exceptions() {
   const [exceptions, setExceptions] = useState<CaseException[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [stateFilter,setStateFilter]=useState<'active'|ExceptionState>('active');
+  const requestSequence=useRef(0);
 
-  const load=useCallback(async()=>{
+  const load=useCallback(async(options:{preserve?:boolean}={})=>{
+    const requestId=++requestSequence.current;
     setError(null);
+    if(!options.preserve)setExceptions(null);
     try{
-      const suffix=stateFilter==='active'?'':`?state=${encodeURIComponent(stateFilter)}`;
+      const suffix=stateFilter==='active'?`?active=true`:`?state=${encodeURIComponent(stateFilter)}`;
       const res=await api.get<{ exceptions: CaseException[] }>(`/api/admin/exceptions/v2${suffix}`);
-      setExceptions(stateFilter==='active'?res.exceptions.filter(item=>!['resolved','dismissed'].includes(item.state)):res.exceptions);
-    }catch(e){setError(errorMessage(e));}
+      if(requestId!==requestSequence.current)return;
+      setExceptions(res.exceptions);
+    }catch(e){
+      if(requestId!==requestSequence.current)return;
+      setError(errorMessage(e));
+      if(!options.preserve)setExceptions(null);
+      throw e;
+    }
   },[stateFilter]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load().catch(()=>undefined); }, [load]);
 
-  const overdue=useMemo(()=>exceptions?.filter(item=>item.due_at&&new Date(item.due_at).getTime()<Date.now()).length??0,[exceptions]);
+  const applyUpdated=useCallback((updated:CaseException)=>{
+    setExceptions(current=>{
+      if(!current)return current;
+      const belongs=stateFilter==='active'
+        ? !['resolved','dismissed'].includes(updated.state)
+        : updated.state===stateFilter;
+      if(!belongs)return current.filter(item=>item.id!==updated.id);
+      return current.map(item=>item.id===updated.id?{...item,...updated}:item);
+    });
+  },[stateFilter]);
+
+  const refreshAfterMutation=useCallback(()=>load({preserve:true}),[load]);
+
+  const overdue=useMemo(()=>exceptions?.filter(item=>item.due_at&&new Date(item.due_at).getTime()<Date.now()&&!['resolved','dismissed'].includes(item.state)).length??0,[exceptions]);
   const critical=useMemo(()=>exceptions?.filter(item=>item.severity==='critical').length??0,[exceptions]);
 
   return (
@@ -79,7 +120,7 @@ export function Exceptions() {
 
       <div className="grid gap-3 sm:grid-cols-3"><div className="rounded-xl border border-slate-200 bg-white p-4"><p className="text-xs uppercase tracking-wide text-slate-500">Visible</p><p className="mt-1 text-2xl font-semibold">{exceptions?.length??'—'}</p></div><div className="rounded-xl border border-slate-200 bg-white p-4"><p className="text-xs uppercase tracking-wide text-slate-500">Critical</p><p className="mt-1 text-2xl font-semibold">{exceptions?critical:'—'}</p></div><div className="rounded-xl border border-slate-200 bg-white p-4"><p className="text-xs uppercase tracking-wide text-slate-500">Past due</p><p className="mt-1 text-2xl font-semibold">{exceptions?overdue:'—'}</p></div></div>
 
-      {error && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+      {error && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">Could not load this queue: {error}</p>}
       {exceptions === null && !error && <p className="text-sm text-slate-500">Loading exception queue…</p>}
       {exceptions !== null && exceptions.length === 0 && <p className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">No exceptions in this queue.</p>}
 
@@ -91,7 +132,7 @@ export function Exceptions() {
               <div className="min-w-0 flex-1"><Link to={`/cases/${e.case_id}`} className="font-medium text-slate-900 hover:underline">{e.summary}</Link><p className="mt-1 text-xs text-slate-500">{humanizeToken(exceptionCode(e))} · Case {humanizeToken(e.case_state)} · Raised {formatDateTime(e.created_at)}</p><div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600"><span>Recovery: <strong>{humanizeToken(e.state)}</strong></span>{e.owner_actor_id&&<span>Owner assigned</span>}<span className={isOverdue?'font-semibold text-red-700':''}>Due: {formatDateTime(e.due_at)}</span>{e.resolution_code&&<span>Resolution: {humanizeToken(e.resolution_code)}</span>}</div></div>
               <div className="flex items-center gap-2"><span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium capitalize ${SEVERITY_COLORS[e.severity] ?? SEVERITY_COLORS.info}`}>{e.severity}</span><StatusBadge state={e.case_state} /></div>
             </div>
-            <RecoveryControls exception={e} onChanged={load}/>
+            <RecoveryControls exception={e} onUpdated={applyUpdated} onRefresh={refreshAfterMutation}/>
           </li>;
         })}
       </ul>}
