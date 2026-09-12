@@ -20,6 +20,7 @@ import { transportRoutes } from './routes/transport.js';
 import { mobilityRoutes } from './routes/mobility.js';
 import { partsRoutes } from './routes/parts.js';
 import { paymentRoutes } from './routes/payments.js';
+import { paymentWebhookRoutes } from './routes/payment-webhooks.js';
 import { notificationRoutes } from './routes/notifications.js';
 import { triageRoutes } from './routes/triage.js';
 import { integrationRoutes } from './routes/integrations.js';
@@ -41,7 +42,7 @@ const routeModules: RouteModule[] = [
   { name: 'coordination', plugins: [routingRoutes, triageRoutes, triageEvaluationRoutes, coherenceRoutes] },
   { name: 'service-operations', plugins: [diagnosticRoutes, fieldServiceRoutes, transportRoutes, mobilityRoutes, partsRoutes] },
   { name: 'shop-os', plugins: [shopOsRoutes, shopOsFloorRoutes] },
-  { name: 'financial-and-communications', plugins: [paymentRoutes, commerceRoutes, notificationRoutes] },
+  { name: 'financial-and-communications', plugins: [paymentWebhookRoutes, paymentRoutes, commerceRoutes, notificationRoutes] },
   { name: 'integration-and-observability', plugins: [integrationRoutes, analyticsRoutes, localRoutes] },
   { name: 'actor-surfaces', plugins: [partnerRoutes, adminRoutes] }
 ];
