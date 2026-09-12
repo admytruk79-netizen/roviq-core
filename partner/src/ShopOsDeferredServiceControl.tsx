@@ -2,25 +2,11 @@ import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
 import {api} from './api';
 import {deferredPrimaryAction,eligibleDeferredAppointments,type DeferredAppointment,type DeferredServiceItem} from './shop-os-deferred-model';
 
-type Board={appointments:DeferredAppointment[]};
+type AppointmentChoices={appointments:DeferredAppointment[]};
 
 function human(value:string|null|undefined){return value?value.replaceAll('_',' ').replace(/\b\w/g,c=>c.toUpperCase()):'—'}
 function when(value:string|null|undefined){return value?new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'}).format(new Date(value)):'Not scheduled'}
 function money(value:string|number|null|undefined){const amount=Number(value??0);return Number.isFinite(amount)?new Intl.NumberFormat(undefined,{style:'currency',currency:'USD'}).format(amount):'—'}
-function range(items:DeferredServiceItem[]){
-  const now=new Date();
-  const from=new Date(now);from.setDate(from.getDate()-1);
-  const defaultTo=new Date(now);defaultTo.setDate(defaultTo.getDate()+90);
-  let latest=defaultTo.getTime();
-  for(const item of items){
-    for(const value of [item.target_return_at,item.next_follow_up_at]){
-      if(!value)continue;
-      const time=new Date(value).getTime();
-      if(Number.isFinite(time))latest=Math.max(latest,time+30*24*60*60*1000);
-    }
-  }
-  return{from:from.toISOString(),to:new Date(latest).toISOString()};
-}
 function selectedAppointmentStillEligible(selectedId:string|undefined,choices:DeferredAppointment[]){return !!selectedId&&choices.some(a=>a.id===selectedId)}
 
 export function ShopOsDeferredServiceControl(){
@@ -37,12 +23,12 @@ export function ShopOsDeferredServiceControl(){
     const requestId=++requestSequence.current;
     setLoading(true);setError(null);
     try{
-      const d=await api.get<{deferredItems:DeferredServiceItem[]}>('/api/shop-os/deferred-service?statuses=open,reminded,booked,dismissed,completed');
+      const[d,b]=await Promise.all([
+        api.get<{deferredItems:DeferredServiceItem[]}>('/api/shop-os/deferred-service?statuses=open,reminded,booked,dismissed,completed'),
+        api.get<AppointmentChoices>('/api/shop-os/deferred-service/appointment-choices')
+      ]);
       if(requestId!==requestSequence.current)return;
       const nextItems=d.deferredItems??[];
-      const r=range(nextItems);
-      const b=await api.get<Board>(`/api/shop-os/board?from=${encodeURIComponent(r.from)}&to=${encodeURIComponent(r.to)}`);
-      if(requestId!==requestSequence.current)return;
       const nextAppointments=b.appointments??[];
       setItems(nextItems);
       setAppointments(nextAppointments);
