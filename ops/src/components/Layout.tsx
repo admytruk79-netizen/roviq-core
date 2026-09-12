@@ -32,6 +32,7 @@ export function Layout() {
                 <Link to="/exceptions" className={navClass('/exceptions')}>Exceptions</Link>
                 <Link to="/integrations" className={navClass('/integrations')}>Integrations</Link>
                 <Link to="/notifications" className={navClass('/notifications')}>Notifications</Link>
+                <Link to="/financials" className={navClass('/financials')}>Financials</Link>
                 <Link to="/map" className={navClass('/map')}>Map</Link>
               </nav>
               <details className="relative sm:hidden">
@@ -41,6 +42,7 @@ export function Layout() {
                   <Link to="/exceptions" className={navClass('/exceptions')}>Exceptions</Link>
                   <Link to="/integrations" className={navClass('/integrations')}>Integrations</Link>
                   <Link to="/notifications" className={navClass('/notifications')}>Notifications</Link>
+                  <Link to="/financials" className={navClass('/financials')}>Financials</Link>
                   <Link to="/map" className={navClass('/map')}>Map</Link>
                 </nav>
               </details>
