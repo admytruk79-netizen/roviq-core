@@ -38,7 +38,7 @@ export async function paymentWebhookRoutes(app:FastifyInstance){
     }catch(error){
       const message=error instanceof Error?error.message:'stripe_webhook_error';
       if(['stripe_webhook_not_configured','stripe_webhook_timestamp_invalid','stripe_webhook_signature_invalid'].includes(message)) return reply.code(401).send({error:message});
-      if(['stripe_webhook_payload_invalid','stripe_webhook_currency_missing','stripe_currency_unsupported'].includes(message)) return reply.code(400).send({error:message});
+      if(['stripe_webhook_payload_invalid','stripe_webhook_currency_missing','stripe_currency_unsupported','stripe_currency_precision_unsupported'].includes(message)) return reply.code(400).send({error:message});
       if(message==='payment_not_found'||message==='case_not_found') return reply.code(404).send({error:message});
       if(['stripe_webhook_currency_mismatch','invalid_payment_transition','provider_event_conflict','refund_not_allowed','invalid_refund_amount'].includes(message)) return reply.code(409).send({error:message});
       throw error;
