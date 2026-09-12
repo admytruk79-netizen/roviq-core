@@ -22,6 +22,14 @@ const TWO_DECIMAL_CURRENCIES=new Set([
   'AED','AFN','ALL','AMD','ANG','AOA','ARS','AUD','AWG','AZN','BAM','BBD','BDT','BGN','BMD','BND','BOB','BRL','BSD','BWP','BYN','BZD','CAD','CDF','CHF','CNY','COP','CRC','CVE','CZK','DKK','DOP','DZD','EGP','ETB','EUR','FJD','FKP','GBP','GEL','GIP','GMD','GTQ','GYD','HKD','HNL','HTG','HUF','IDR','ILS','INR','ISK','JMD','KES','KGS','KHR','KYD','KZT','LAK','LBP','LKR','LRD','LSL','MAD','MDL','MKD','MMK','MNT','MOP','MUR','MVR','MWK','MXN','MYR','MZN','NAD','NGN','NIO','NOK','NPR','NZD','PAB','PEN','PGK','PHP','PKR','PLN','QAR','RON','RSD','SAR','SBD','SCR','SEK','SGD','SHP','SLE','SOS','SRD','SZL','THB','TJS','TOP','TRY','TTD','TWD','TZS','UAH','USD','UYU','UZS','WST','YER','ZAR','ZMW'
 ]);
 
+const SUPPORTED_PAYMENT_INTENT_EVENTS=new Set([
+  'payment_intent.requires_action',
+  'payment_intent.amount_capturable_updated',
+  'payment_intent.succeeded',
+  'payment_intent.canceled',
+  'payment_intent.payment_failed'
+]);
+
 function parseStripeSignature(header:string){
   const values=header.split(',').map(part=>part.trim().split('=',2));
   const timestamp=Number(values.find(([key])=>key==='t')?.[1]);
@@ -59,7 +67,7 @@ async function localPayment(stripePaymentIntentId:string):Promise<LocalPayment>{
 function currencyExponent(currency:string){
   const code=currency.toUpperCase();
   if(ZERO_DECIMAL_CURRENCIES.has(code)) return 0;
-  if(THREE_DECIMAL_CURRENCIES.has(code)) return 3;
+  if(THREE_DECIMAL_CURRENCIES.has(code)) throw new Error('stripe_currency_precision_unsupported');
   if(TWO_DECIMAL_CURRENCIES.has(code)) return 2;
   throw new Error('stripe_currency_unsupported');
 }
@@ -79,7 +87,9 @@ function requireMatchingCurrency(localCurrency:string,stripeCurrency:string|unde
 export async function applyStripeWebhook(event:StripeEvent){
   const principal:Principal={role:'admin'};
   const object=event.data.object;
+
   if(event.type.startsWith('payment_intent.')){
+    if(!SUPPORTED_PAYMENT_INTENT_EVENTS.has(event.type)) return null;
     if(!object.id) throw new Error('stripe_webhook_payload_invalid');
     const payment=await localPayment(object.id);
     const currency=requireMatchingCurrency(payment.currency,object.currency);
@@ -93,6 +103,7 @@ export async function applyStripeWebhook(event:StripeEvent){
       default:return null;
     }
   }
+
   if(event.type==='refund.created'){
     const stripeIntent=object.payment_intent;
     if(typeof stripeIntent!=='string'||object.amount===undefined) throw new Error('stripe_webhook_payload_invalid');
