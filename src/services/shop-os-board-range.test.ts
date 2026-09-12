@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import type { Principal } from '../types/principal.js';
-import { listShopOsBoard } from './shop-os-board.js';
+import { normalizeShopOsBoardRange } from './shop-os-board.js';
 
 describe('Shop OS board range guard',()=>{
-  it('rejects pathological ranges before querying board data',async()=>{
-    await expect(listShopOsBoard({} as Principal,{
-      from:'2026-09-11T00:00:00.000Z',
-      to:'9999-12-31T00:00:00.000Z'
-    })).rejects.toMatchObject({message:'shop_os_board_range_too_large',statusCode:400});
+  it('normalizes pathological ranges to a bounded query window',()=>{
+    const range=normalizeShopOsBoardRange('2026-09-11T00:00:00.000Z','9999-12-31T00:00:00.000Z');
+    expect(range.truncated).toBe(true);
+    expect(new Date(range.to).getTime()-new Date(range.from).getTime()).toBeLessThanOrEqual(366*24*60*60*1000);
+    expect(range.to).toBe('9999-12-31T00:00:00.000Z');
+  });
+
+  it('preserves already bounded ranges',()=>{
+    const range=normalizeShopOsBoardRange('2026-09-11T00:00:00.000Z','2026-10-11T00:00:00.000Z');
+    expect(range).toEqual({from:'2026-09-11T00:00:00.000Z',to:'2026-10-11T00:00:00.000Z',truncated:false});
   });
 });
