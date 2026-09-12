@@ -2,6 +2,8 @@ import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
 import { resolveShopPrincipalScope } from './shop-os-scope.js';
 
+const MAX_BOARD_RANGE_MS=366*24*60*60*1000;
+
 function httpError(message:string,statusCode:number){
   const error=new Error(message) as Error&{statusCode:number};
   error.statusCode=statusCode;
@@ -12,6 +14,7 @@ function assertRange(from:string,to:string){
   const start=new Date(from).getTime();
   const end=new Date(to).getTime();
   if(!Number.isFinite(start)||!Number.isFinite(end)||end<=start) throw httpError('shop_os_board_range_invalid',400);
+  if(end-start>MAX_BOARD_RANGE_MS) throw httpError('shop_os_board_range_too_large',400);
 }
 
 async function resolveBoardScope(principal:Principal,input:{organizationId?:string;locationId?:string}){
