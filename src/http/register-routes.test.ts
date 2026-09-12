@@ -11,6 +11,6 @@ describe('HTTP route composition', () => {
 
   it('keeps Shop OS isolated as an explicit module', () => {
     const shopOs = registeredRouteModules().find(module => module.name === 'shop-os');
-    expect(shopOs).toEqual({ name:'shop-os', routeCount:2 });
+    expect(shopOs).toEqual({ name:'shop-os', routeCount:3 });
   });
 });
