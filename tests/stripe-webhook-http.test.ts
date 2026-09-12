@@ -32,6 +32,22 @@ describe('Stripe-native webhook boundary',()=>{
     await app.close();
   });
 
+  it('acknowledges unsupported payment-intent event types without local lookup',async()=>{
+    process.env.STRIPE_WEBHOOK_SECRET='whsec_test_only';
+    const app=await buildApp();
+    const timestamp=Math.floor(Date.now()/1000);
+    const body='{"id":"evt_created","type":"payment_intent.created","data":{"object":{"id":"pi_external","currency":"usd","amount":1000}}}';
+    const response=await app.inject({
+      method:'POST',
+      url:'/api/payments/webhooks/stripe',
+      headers:{'content-type':'application/json','stripe-signature':signature(process.env.STRIPE_WEBHOOK_SECRET,timestamp,body)},
+      payload:body
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({received:true,payment:null});
+    await app.close();
+  });
+
   it('rejects a signature if the raw body is modified',async()=>{
     process.env.STRIPE_WEBHOOK_SECRET='whsec_test_only';
     const app=await buildApp();
@@ -49,10 +65,10 @@ describe('Stripe-native webhook boundary',()=>{
     await app.close();
   });
 
-  it('converts Stripe minor units with explicit currency exponents',()=>{
+  it('converts only currencies representable by current storage precision',()=>{
     expect(stripeMinorToMajor('USD',12345)).toBe(123.45);
     expect(stripeMinorToMajor('JPY',10000)).toBe(10000);
-    expect(stripeMinorToMajor('KWD',12345)).toBe(12.345);
+    expect(()=>stripeMinorToMajor('KWD',12345)).toThrow('stripe_currency_precision_unsupported');
     expect(()=>stripeMinorToMajor('ZZZ',100)).toThrow('stripe_currency_unsupported');
   });
 });
