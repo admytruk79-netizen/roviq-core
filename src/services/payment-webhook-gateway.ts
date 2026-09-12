@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { pool } from '../db/pool.js';
 import { refundPayment, updatePaymentState } from './payments.js';
 import type { Principal } from '../types/principal.js';
 
@@ -33,8 +34,13 @@ export function verifyPaymentWebhook(provider:string,timestamp:number,event:Paym
 }
 
 export async function applyPaymentWebhook(provider:string,event:PaymentWebhookEvent){
+  const normalizedProvider=provider.trim().toLowerCase();
+  const existing=await pool.query(`select provider from payment_intents where id=$1`,[event.paymentIntentId]);
+  if(!existing.rowCount) throw new Error('payment_not_found');
+  if(String(existing.rows[0].provider??'').trim().toLowerCase()!==normalizedProvider) throw new Error('payment_webhook_provider_mismatch');
+
   const principal:Principal={role:'admin'};
-  const payload={provider,...(event.payload??{})};
+  const payload={provider:normalizedProvider,...(event.payload??{})};
   switch(event.type){
     case 'payment.requires_action': return updatePaymentState(principal,event.paymentIntentId,'requires_action',{amount:event.amount,providerEventId:event.id,payload});
     case 'payment.authorized': return updatePaymentState(principal,event.paymentIntentId,'authorized',{amount:event.amount,providerEventId:event.id,payload});
