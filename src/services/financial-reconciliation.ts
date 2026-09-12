@@ -13,8 +13,15 @@ export type FinancialDiscrepancy = {
   observed:Record<string,unknown>;
 };
 
+function forbidden(message:string){
+  const error=new Error(message) as Error&{statusCode:number};
+  error.statusCode=403;
+  return error;
+}
+
 export async function getFinancialReconciliation(principal:Principal,limit=200){
-  if(principal.role!=='admin')throw new Error('financial_admin_only');
+  if(principal.role!=='admin')throw forbidden('financial_admin_only');
+  if(principal.actorId)throw forbidden('financial_global_admin_only');
   const bounded=Math.max(1,Math.min(500,limit));
 
   const [payments,payouts,paymentCount,payoutCount]=await Promise.all([
