@@ -25,6 +25,7 @@ import { notificationRoutes } from './routes/notifications.js';
 import { triageRoutes } from './routes/triage.js';
 import { integrationRoutes } from './routes/integrations.js';
 import { shopOsRoutes } from './routes/shop-os.js';
+import { shopOsDeferredAppointmentChoiceRoutes } from './routes/shop-os-deferred-appointment-choices.js';
 import { shopOsFloorRoutes } from './routes/shop-os-floor.js';
 import { localRoutes } from './routes/local.js';
 import { triageEvaluationRoutes } from './routes/triage-evaluation.js';
@@ -41,7 +42,7 @@ const routeModules: RouteModule[] = [
   { name: 'case-lifecycle', plugins: [demandRoutes, caseRoutes, exceptionRoutes, servicePlanRoutes, quoteRoutes] },
   { name: 'coordination', plugins: [routingRoutes, triageRoutes, triageEvaluationRoutes, coherenceRoutes] },
   { name: 'service-operations', plugins: [diagnosticRoutes, fieldServiceRoutes, transportRoutes, mobilityRoutes, partsRoutes] },
-  { name: 'shop-os', plugins: [shopOsRoutes, shopOsFloorRoutes] },
+  { name: 'shop-os', plugins: [shopOsRoutes, shopOsDeferredAppointmentChoiceRoutes, shopOsFloorRoutes] },
   { name: 'financial-and-communications', plugins: [paymentWebhookRoutes, paymentRoutes, commerceRoutes, notificationRoutes] },
   { name: 'integration-and-observability', plugins: [integrationRoutes, analyticsRoutes, localRoutes] },
   { name: 'actor-surfaces', plugins: [partnerRoutes, adminRoutes] }
