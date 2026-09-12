@@ -23,6 +23,7 @@ type ChannelConfig={channel:string;provider:string;enabled:boolean;updated_at:st
 export function NotificationOperations(){
   const [notifications,setNotifications]=useState<NotificationRow[]>([]);
   const [channels,setChannels]=useState<ChannelConfig[]>([]);
+  const [globalControls,setGlobalControls]=useState(true);
   const [loading,setLoading]=useState(true);
   const [processing,setProcessing]=useState(false);
   const [error,setError]=useState<string|null>(null);
@@ -32,12 +33,16 @@ export function NotificationOperations(){
     setLoading(true);
     setError(null);
     try{
-      const [outbox,channelResult]=await Promise.all([
-        api.get<{notifications:NotificationRow[]}>('/api/admin/notifications/outbox?limit=200'),
-        api.get<{channels:ChannelConfig[]}>('/api/admin/notifications/channels')
-      ]);
+      const outbox=await api.get<{notifications:NotificationRow[]}>('/api/admin/notifications/outbox?limit=200');
       setNotifications(outbox.notifications);
-      setChannels(channelResult.channels);
+      try{
+        const channelResult=await api.get<{channels:ChannelConfig[]}>('/api/admin/notifications/channels');
+        setChannels(channelResult.channels);
+        setGlobalControls(true);
+      }catch{
+        setChannels([]);
+        setGlobalControls(false);
+      }
     }catch(err){
       setError(err instanceof Error?err.message:'Unable to load notification operations');
     }finally{
@@ -48,6 +53,7 @@ export function NotificationOperations(){
   useEffect(()=>{ void load(); },[]);
 
   async function processQueue(){
+    if(!globalControls)return;
     setProcessing(true);
     setMessage(null);
     setError(null);
@@ -78,7 +84,7 @@ export function NotificationOperations(){
       </div>
       <div className="flex gap-2">
         <button className="roviq-btn-secondary" onClick={()=>void load()} disabled={loading||processing}>Refresh</button>
-        <button className="roviq-btn-primary" onClick={()=>void processQueue()} disabled={processing}>{processing?'Processing…':'Process queue'}</button>
+        {globalControls&&<button className="roviq-btn-primary" onClick={()=>void processQueue()} disabled={processing}>{processing?'Processing…':'Process queue'}</button>}
       </div>
     </div>
 
@@ -94,7 +100,7 @@ export function NotificationOperations(){
     {message&&<div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">{message}</div>}
     {error&&<div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800"><div className="font-semibold">Notification operations need attention.</div><div className="mt-1">{error}</div></div>}
 
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
+    {globalControls&&<div className="rounded-xl border border-slate-200 bg-white p-4">
       <h2 className="font-semibold text-slate-950">Delivery channels</h2>
       <div className="mt-3 grid gap-3 sm:grid-cols-3">
         {channels.length===0&&<p className="text-sm text-slate-600">No delivery channels are configured.</p>}
@@ -104,7 +110,7 @@ export function NotificationOperations(){
           <div className="mt-1 text-xs text-slate-500">Updated {formatDateTime(channel.updated_at)}</div>
         </div>)}
       </div>
-    </div>
+    </div>}
 
     <div className="rounded-xl border border-slate-200 bg-white">
       <div className="border-b border-slate-200 px-4 py-3"><h2 className="font-semibold text-slate-950">Recent delivery state</h2></div>
