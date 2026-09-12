@@ -8,12 +8,6 @@ function amountEquals(a:unknown,b:unknown){
   return Number(a)===Number(b);
 }
 
-async function existingProviderEvent(providerEventId:string|undefined){
-  if(!providerEventId)return null;
-  const existing=await pool.query(`select payment_intent_id,event_type,amount from payment_events where provider_event_id=$1`,[providerEventId]);
-  return existing.rows[0]??null;
-}
-
 export async function createPaymentIntent(principal: Principal, input:{ caseId:string; amount:number; currency?:string; description?:string; provider?:string; providerIntentId?:string; metadata?:Record<string,unknown> }) {
   const client=await pool.connect();
   try{
@@ -156,22 +150,30 @@ export async function createPayout(principal: Principal, input:{ caseId:string; 
     if(!serviceCase.rowCount) throw new Error('case_not_found');
     const actor=await client.query(`select id,status from actors where id=$1`,[input.counterpartyActorId]);
     if(!actor.rowCount||actor.rows[0].status!=='active') throw new Error('payout_counterparty_invalid');
+    const normalizedCurrency=(input.currency??'USD').toUpperCase();
+    const requestedPaymentIntentId=input.paymentIntentId??null;
     if(input.paymentIntentId){
       const payment=await client.query(`select case_id,currency from payment_intents where id=$1`,[input.paymentIntentId]);
       if(!payment.rowCount) throw new Error('payment_not_found');
       if(payment.rows[0].case_id!==input.caseId) throw new Error('payout_payment_case_mismatch');
-      if(payment.rows[0].currency!==(input.currency??'USD').toUpperCase()) throw new Error('payout_currency_mismatch');
+      if(payment.rows[0].currency!==normalizedCurrency) throw new Error('payout_currency_mismatch');
     }
     if(input.providerPayoutId){
       const existing=await client.query(`select * from settlement_payouts where provider=$1 and provider_payout_id=$2`,[input.provider??'manual',input.providerPayoutId]);
       if(existing.rowCount){
         const row=existing.rows[0];
-        if(row.case_id!==input.caseId||row.counterparty_actor_id!==input.counterpartyActorId||!amountEquals(row.amount,input.amount)) throw new Error('provider_payout_conflict');
+        if(
+          row.case_id!==input.caseId||
+          row.counterparty_actor_id!==input.counterpartyActorId||
+          !amountEquals(row.amount,input.amount)||
+          row.currency!==normalizedCurrency||
+          (row.payment_intent_id??null)!==requestedPaymentIntentId
+        ) throw new Error('provider_payout_conflict');
         await client.query('commit');
         return row;
       }
     }
-    const r = await client.query(`insert into settlement_payouts(case_id,counterparty_actor_id,payment_intent_id,amount,currency,provider,provider_payout_id,metadata) values($1,$2,$3,$4,$5,$6,$7,$8) returning *`,[input.caseId,input.counterpartyActorId,input.paymentIntentId ?? null,input.amount,(input.currency ?? 'USD').toUpperCase(),input.provider ?? 'manual',input.providerPayoutId ?? null,JSON.stringify(input.metadata ?? {})]);
+    const r = await client.query(`insert into settlement_payouts(case_id,counterparty_actor_id,payment_intent_id,amount,currency,provider,provider_payout_id,metadata) values($1,$2,$3,$4,$5,$6,$7,$8) returning *`,[input.caseId,input.counterpartyActorId,requestedPaymentIntentId,input.amount,normalizedCurrency,input.provider ?? 'manual',input.providerPayoutId ?? null,JSON.stringify(input.metadata ?? {})]);
     const payout = r.rows[0];
     await appendCaseEvent(input.caseId,'PAYOUT_CREATED',principal,{ payoutId:payout.id, counterpartyActorId:input.counterpartyActorId, amount:input.amount },client);
     await client.query('commit');
