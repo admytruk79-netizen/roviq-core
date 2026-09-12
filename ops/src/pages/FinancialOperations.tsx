@@ -5,7 +5,11 @@ import { humanizeToken } from '../lib/format';
 
 type Reconciliation = {
   generatedAt:string;
+  complete:boolean;
+  truncated:boolean;
+  limit:number;
   scanned:{payments:number;payouts:number};
+  totals:{payments:number;payouts:number};
   summary:{total:number;critical:number;warning:number};
   discrepancies:Array<{
     kind:string;
@@ -46,16 +50,17 @@ export function FinancialOperations(){
     </div>
 
     {error&&<p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+    {data&&!data.complete&&<div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900"><strong>Reconciliation is incomplete.</strong><p className="mt-1">Only the newest {data.limit} records per financial table were checked. A zero discrepancy count is not a clean bill of health until all {data.totals.payments} payments and {data.totals.payouts} payouts are scanned.</p></div>}
 
     <div className="grid gap-3 sm:grid-cols-4">
       <div className="rounded-xl border border-slate-200 bg-white p-4"><p className="text-xs uppercase tracking-wide text-slate-500">Discrepancies</p><p className="mt-1 text-2xl font-semibold">{data?.summary.total??'—'}</p></div>
       <div className="rounded-xl border border-slate-200 bg-white p-4"><p className="text-xs uppercase tracking-wide text-slate-500">Critical</p><p className="mt-1 text-2xl font-semibold">{data?.summary.critical??'—'}</p></div>
-      <div className="rounded-xl border border-slate-200 bg-white p-4"><p className="text-xs uppercase tracking-wide text-slate-500">Payments scanned</p><p className="mt-1 text-2xl font-semibold">{data?.scanned.payments??'—'}</p></div>
-      <div className="rounded-xl border border-slate-200 bg-white p-4"><p className="text-xs uppercase tracking-wide text-slate-500">Payouts scanned</p><p className="mt-1 text-2xl font-semibold">{data?.scanned.payouts??'—'}</p></div>
+      <div className="rounded-xl border border-slate-200 bg-white p-4"><p className="text-xs uppercase tracking-wide text-slate-500">Payments scanned</p><p className="mt-1 text-2xl font-semibold">{data?`${data.scanned.payments}/${data.totals.payments}`:'—'}</p></div>
+      <div className="rounded-xl border border-slate-200 bg-white p-4"><p className="text-xs uppercase tracking-wide text-slate-500">Payouts scanned</p><p className="mt-1 text-2xl font-semibold">{data?`${data.scanned.payouts}/${data.totals.payouts}`:'—'}</p></div>
     </div>
 
     {loading&&!data&&<p className="text-sm text-slate-500">Reconciling financial records…</p>}
-    {data&&data.discrepancies.length===0&&<div className="rounded-xl border border-emerald-200 bg-emerald-50 p-5 text-sm text-emerald-800"><strong>No internal financial discrepancies found.</strong><p className="mt-1">This verifies ROVIQ database consistency only; live provider settlement still requires provider-side reconciliation.</p></div>}
+    {data&&data.complete&&data.discrepancies.length===0&&<div className="rounded-xl border border-emerald-200 bg-emerald-50 p-5 text-sm text-emerald-800"><strong>No internal financial discrepancies found.</strong><p className="mt-1">All currently recorded payments and payouts were checked for ROVIQ database consistency. Live provider settlement still requires provider-side reconciliation.</p></div>}
 
     {data&&data.discrepancies.length>0&&<ul className="space-y-3">{data.discrepancies.map((item,index)=><li key={`${item.kind}-${item.caseId}-${item.paymentIntentId??item.payoutId??index}`} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0 flex-1"><Link to={`/cases/${item.caseId}`} className="font-medium text-slate-900 hover:underline">{item.message}</Link><p className="mt-1 text-xs text-slate-500">{humanizeToken(item.kind)} · Provider: {item.provider??'unknown'}{item.providerReference?` · Ref ${item.providerReference}`:''}</p></div><span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${item.severity==='critical'?'bg-red-100 text-red-800':'bg-amber-100 text-amber-800'}`}>{item.severity}</span></div>
