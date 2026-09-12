@@ -88,9 +88,11 @@ describe('financial provider replay and concurrency invariants',()=>{
     expect(Number(ledger.rows[0].n)).toBe(1);
   });
 
-  it('reuses provider payout references and posts a paid payout exactly once',async()=>{
+  it('reuses provider payout references only when every canonical financial detail matches',async()=>{
     const payment=await createPaymentIntent(admin,{caseId,amount:110,currency:'USD'});
+    const alternatePayment=await createPaymentIntent(admin,{caseId,amount:110,currency:'USD'});
     await updatePaymentState(admin,payment.id,'captured',{providerEventId:`evt-payout-capture-${Date.now()}-${Math.random()}`});
+    await updatePaymentState(admin,alternatePayment.id,'captured',{providerEventId:`evt-payout-alt-capture-${Date.now()}-${Math.random()}`});
     const providerPayoutId=`po-replay-${Date.now()}-${Math.random()}`;
 
     const payout=await createPayout(admin,{
@@ -102,6 +104,21 @@ describe('financial provider replay and concurrency invariants',()=>{
       amount:75,currency:'USD',provider:'test',providerPayoutId
     });
     expect(replay.id).toBe(payout.id);
+
+    await expect(createPayout(admin,{
+      caseId,counterpartyActorId:partnerActorId,paymentIntentId:alternatePayment.id,
+      amount:75,currency:'USD',provider:'test',providerPayoutId
+    })).rejects.toThrow('provider_payout_conflict');
+
+    await expect(createPayout(admin,{
+      caseId,counterpartyActorId:partnerActorId,paymentIntentId:payment.id,
+      amount:75,currency:'EUR',provider:'test',providerPayoutId
+    })).rejects.toThrow('payout_currency_mismatch');
+
+    await expect(createPayout(admin,{
+      caseId,counterpartyActorId:partnerActorId,
+      amount:75,currency:'USD',provider:'test',providerPayoutId
+    })).rejects.toThrow('provider_payout_conflict');
 
     await updatePayoutState(admin,payout.id,'approved');
     await updatePayoutState(admin,payout.id,'processing');
