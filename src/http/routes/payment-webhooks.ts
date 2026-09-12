@@ -11,6 +11,8 @@ const eventSchema=z.object({
   payload:z.record(z.unknown()).optional()
 });
 
+const WEBHOOK_BODY_LIMIT=256*1024;
+
 function rawBody(body:unknown){
   if(Buffer.isBuffer(body)) return body.toString('utf8');
   if(typeof body==='string') return body;
@@ -23,12 +25,10 @@ function parsedJson(body:unknown){
 }
 
 export async function paymentWebhookRoutes(app:FastifyInstance){
-  // Stripe signature verification requires the exact request bytes. Override JSON parsing only
-  // inside this encapsulated webhook plugin so ordinary application JSON routes remain unchanged.
   app.removeContentTypeParser('application/json');
-  app.addContentTypeParser('application/json',{parseAs:'buffer'},(_req,body,done)=>done(null,body));
+  app.addContentTypeParser('application/json',{parseAs:'buffer',bodyLimit:WEBHOOK_BODY_LIMIT},(_req,body,done)=>done(null,body));
 
-  app.post('/api/payments/webhooks/stripe',{config:{public:true}},async(req,reply)=>{
+  app.post('/api/payments/webhooks/stripe',{config:{public:true},bodyLimit:WEBHOOK_BODY_LIMIT},async(req,reply)=>{
     const body=rawBody(req.body);
     const signature=String(req.headers['stripe-signature']??'');
     try{
@@ -45,7 +45,7 @@ export async function paymentWebhookRoutes(app:FastifyInstance){
     }
   });
 
-  app.post('/api/payments/webhooks/:provider',{config:{public:true}},async(req,reply)=>{
+  app.post('/api/payments/webhooks/:provider',{config:{public:true},bodyLimit:WEBHOOK_BODY_LIMIT},async(req,reply)=>{
     const {provider}=z.object({provider:z.string().regex(/^[a-z0-9_-]{1,40}$/i)}).parse(req.params);
     const event=eventSchema.parse(parsedJson(req.body));
     const timestamp=Number(req.headers['x-roviq-webhook-timestamp']);
@@ -59,7 +59,7 @@ export async function paymentWebhookRoutes(app:FastifyInstance){
       if(['payment_webhook_not_configured','payment_webhook_timestamp_invalid','payment_webhook_signature_invalid'].includes(message)) return reply.code(401).send({error:message});
       if(['payment_webhook_amount_required','payment_webhook_payload_invalid'].includes(message)) return reply.code(400).send({error:message});
       if(message==='payment_not_found'||message==='case_not_found') return reply.code(404).send({error:message});
-      if(['invalid_payment_transition','provider_event_conflict','refund_not_allowed','invalid_refund_amount'].includes(message)) return reply.code(409).send({error:message});
+      if(['payment_webhook_provider_mismatch','invalid_payment_transition','provider_event_conflict','refund_not_allowed','invalid_refund_amount'].includes(message)) return reply.code(409).send({error:message});
       throw error;
     }
   });
