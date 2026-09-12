@@ -17,7 +17,7 @@ export async function getFinancialReconciliation(principal:Principal,limit=200){
   if(principal.role!=='admin')throw new Error('financial_admin_only');
   const bounded=Math.max(1,Math.min(500,limit));
 
-  const [payments,payouts]=await Promise.all([
+  const [payments,payouts,paymentCount,payoutCount]=await Promise.all([
     pool.query(`
       select p.id,p.case_id,p.provider,p.provider_intent_id,p.amount,p.currency,p.state,
         coalesce((select sum(pe.amount) from payment_events pe where pe.payment_intent_id=p.id and pe.event_type='REFUND'),0)::numeric as refunded_amount,
@@ -25,7 +25,7 @@ export async function getFinancialReconciliation(principal:Principal,limit=200){
         coalesce((select sum(le.amount) from ledger_entries le where le.payment_intent_id=p.id and le.entry_type='payment_capture'),0)::numeric as capture_ledger_amount,
         coalesce((select sum(le.amount) from ledger_entries le where le.payment_intent_id=p.id and le.entry_type='refund'),0)::numeric as refund_ledger_amount
       from payment_intents p
-      order by p.updated_at desc
+      order by p.updated_at desc,p.id desc
       limit $1`,[bounded]),
     pool.query(`
       select s.id,s.case_id,s.payment_intent_id,s.provider,s.provider_payout_id,s.amount,s.currency,s.state,
@@ -33,8 +33,10 @@ export async function getFinancialReconciliation(principal:Principal,limit=200){
         coalesce((select sum(le.amount) from ledger_entries le where le.payout_id=s.id and le.entry_type='provider_payout'),0)::numeric as payout_ledger_amount
       from settlement_payouts s
       left join payment_intents p on p.id=s.payment_intent_id
-      order by s.updated_at desc
-      limit $1`,[bounded])
+      order by s.updated_at desc,s.id desc
+      limit $1`,[bounded]),
+    pool.query(`select count(*)::int as total from payment_intents`),
+    pool.query(`select count(*)::int as total from settlement_payouts`)
   ]);
 
   const discrepancies:FinancialDiscrepancy[]=[];
@@ -84,9 +86,19 @@ export async function getFinancialReconciliation(principal:Principal,limit=200){
     }
   }
 
+  const totalPayments=Number(paymentCount.rows[0]?.total??0);
+  const totalPayouts=Number(payoutCount.rows[0]?.total??0);
+  const scannedPayments=payments.rowCount??0;
+  const scannedPayouts=payouts.rowCount??0;
+  const complete=scannedPayments>=totalPayments&&scannedPayouts>=totalPayouts;
+
   return {
     generatedAt:new Date().toISOString(),
-    scanned:{payments:payments.rowCount??0,payouts:payouts.rowCount??0},
+    complete,
+    truncated:!complete,
+    limit:bounded,
+    scanned:{payments:scannedPayments,payouts:scannedPayouts},
+    totals:{payments:totalPayments,payouts:totalPayouts},
     summary:{total:discrepancies.length,critical:discrepancies.filter(item=>item.severity==='critical').length,warning:discrepancies.filter(item=>item.severity==='warning').length},
     discrepancies
   };
