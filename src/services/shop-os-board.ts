@@ -3,6 +3,7 @@ import type { Principal } from '../types/principal.js';
 import { resolveShopPrincipalScope } from './shop-os-scope.js';
 
 const MAX_BOARD_RANGE_MS=366*24*60*60*1000;
+const HARD_MAX_BOARD_RANGE_MS=5*366*24*60*60*1000;
 
 function httpError(message:string,statusCode:number){
   const error=new Error(message) as Error&{statusCode:number};
@@ -10,11 +11,14 @@ function httpError(message:string,statusCode:number){
   return error;
 }
 
-function assertRange(from:string,to:string){
-  const start=new Date(from).getTime();
-  const end=new Date(to).getTime();
-  if(!Number.isFinite(start)||!Number.isFinite(end)||end<=start) throw httpError('shop_os_board_range_invalid',400);
-  if(end-start>MAX_BOARD_RANGE_MS) throw httpError('shop_os_board_range_too_large',400);
+function normalizeRange(from:string,to:string){
+  const requestedStart=new Date(from).getTime();
+  const requestedEnd=new Date(to).getTime();
+  if(!Number.isFinite(requestedStart)||!Number.isFinite(requestedEnd)||requestedEnd<=requestedStart) throw httpError('shop_os_board_range_invalid',400);
+  const requestedSpan=requestedEnd-requestedStart;
+  if(requestedSpan>HARD_MAX_BOARD_RANGE_MS) throw httpError('shop_os_board_range_too_large',400);
+  if(requestedSpan<=MAX_BOARD_RANGE_MS) return {from,to,truncated:false};
+  return {from:new Date(requestedEnd-MAX_BOARD_RANGE_MS).toISOString(),to:new Date(requestedEnd).toISOString(),truncated:true};
 }
 
 async function resolveBoardScope(principal:Principal,input:{organizationId?:string;locationId?:string}){
@@ -28,9 +32,9 @@ export async function listShopOsBoard(principal:Principal,input:{
   from:string;
   to:string;
 }){
-  assertRange(input.from,input.to);
+  const range=normalizeRange(input.from,input.to);
   const scope=await resolveBoardScope(principal,input);
-  const params=[scope.organizationId,scope.locationId,input.from,input.to];
+  const params=[scope.organizationId,scope.locationId,range.from,range.to];
 
   const [resources,appointments,capacity,clock]=await Promise.all([
     pool.query(`
@@ -75,13 +79,8 @@ export async function listShopOsBoard(principal:Principal,input:{
   ]);
 
   const statusCounts:Record<string,number>={};
-  for(const row of appointments.rows){
-    statusCounts[row.appointment_status]=(statusCounts[row.appointment_status]??0)+1;
-  }
+  for(const row of appointments.rows){statusCounts[row.appointment_status]=(statusCounts[row.appointment_status]??0)+1;}
   const activeAppointments=appointments.rows.filter((row)=>['held','confirmed','in_progress'].includes(row.appointment_status)).length;
-
-  // capacity_units is the minimum temporal availability inside a canonical window.
-  // Summarize once per resource so overlapping category windows are not double-counted.
   const byResource=new Map<string,{available:number;nominal:number}>();
   for(const row of capacity.rows){
     const available=Math.max(Number(row.capacity_units??0),0);
@@ -95,18 +94,11 @@ export async function listShopOsBoard(principal:Principal,input:{
 
   return {
     scope,
-    range:{from:input.from,to:input.to},
+    range:{from:range.from,to:range.to,requestedFrom:input.from,requestedTo:input.to,truncated:range.truncated},
     serverNow:clock.rows[0]?.server_now,
     resources:resources.rows,
     appointments:appointments.rows,
     capacity:capacity.rows,
-    summary:{
-      resourceCount:resources.rowCount??resources.rows.length,
-      appointmentCount:appointments.rowCount??appointments.rows.length,
-      activeAppointments,
-      appointmentStatusCounts:statusCounts,
-      availableCapacityUnits,
-      nominalCapacityUnits
-    }
+    summary:{resourceCount:resources.rowCount??resources.rows.length,appointmentCount:appointments.rowCount??appointments.rows.length,activeAppointments,appointmentStatusCounts:statusCounts,availableCapacityUnits,nominalCapacityUnits}
   };
 }
