@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { pool } from '../../db/pool.js';
 import { requireRole } from '../middleware/principal.js';
 import { createPaymentIntent, createPayout, refundPayment, updatePaymentState, updatePayoutState } from '../../services/payments.js';
+import { getFinancialReconciliation } from '../../services/financial-reconciliation.js';
 import { loadCaseForPrincipal } from '../../services/case-access.js';
 
 export async function paymentRoutes(app: FastifyInstance) {
@@ -85,5 +86,10 @@ export async function paymentRoutes(app: FastifyInstance) {
       pool.query('select * from ledger_entries where case_id=$1 order by occurred_at asc',[id])
     ]);
     return { payments:payments.rows,payouts:payouts.rows,ledger:ledger.rows };
+  });
+
+  app.get('/api/admin/financial-reconciliation', { preHandler: requireRole('admin') }, async (req) => {
+    const query=z.object({limit:z.coerce.number().int().positive().max(500).default(200)}).parse(req.query??{});
+    return getFinancialReconciliation(req.principal,query.limit);
   });
 }
