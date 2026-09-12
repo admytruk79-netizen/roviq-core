@@ -10,8 +10,9 @@ export async function paymentRoutes(app: FastifyInstance) {
     const body = z.object({ caseId:z.string().uuid(), amount:z.number().nonnegative(), currency:z.string().length(3).default('USD'), description:z.string().optional(), provider:z.string().default('manual'), providerIntentId:z.string().optional(), metadata:z.record(z.unknown()).optional() }).parse(req.body);
     try { return reply.code(201).send({ payment:await createPaymentIntent(req.principal,body) }); }
     catch (e) {
-      if (e instanceof Error && e.message==='case_not_found') return reply.code(404).send({ error:e.message });
-      if (e instanceof Error && e.message==='quote_not_approved') return reply.code(409).send({ error:e.message });
+      const message=e instanceof Error?e.message:'payment_error';
+      if (message==='case_not_found') return reply.code(404).send({ error:message });
+      if (['quote_not_approved','provider_intent_conflict'].includes(message)) return reply.code(409).send({ error:message });
       throw e;
     }
   });
@@ -19,10 +20,6 @@ export async function paymentRoutes(app: FastifyInstance) {
   app.get('/api/maintenance/cases/:id/payments', async (req, reply) => {
     const { id } = req.params as { id:string };
     try {
-      // Route through the shared access service (also used by cases.ts/mobility.ts) instead of a
-      // second, narrower ad hoc check -- the previous version only recognized the customer or the
-      // case's current owner, so a provider with a real relation to this case (an accepted offer,
-      // an assigned dispatch, a parts order, a mobility allocation) was wrongly denied.
       const c = await loadCaseForPrincipal(req.principal,id);
       if (!c) return reply.code(404).send({ error:'case_not_found' });
     } catch (e) {
@@ -37,19 +34,35 @@ export async function paymentRoutes(app: FastifyInstance) {
     const { id } = req.params as { id:string };
     const body = z.object({ state:z.enum(['requires_action','authorized','captured','cancelled','failed']), amount:z.number().positive().optional(), providerEventId:z.string().optional(), payload:z.record(z.unknown()).optional() }).parse(req.body);
     try { return { payment:await updatePaymentState(req.principal,id,body.state,{ amount:body.amount,providerEventId:body.providerEventId,payload:body.payload }) }; }
-    catch (e) { const m=e instanceof Error?e.message:'payment_error'; if (m==='payment_not_found') return reply.code(404).send({ error:m }); if (m==='invalid_payment_transition') return reply.code(409).send({ error:m }); throw e; }
+    catch (e) {
+      const m=e instanceof Error?e.message:'payment_error';
+      if (m==='payment_not_found'||m==='case_not_found') return reply.code(404).send({ error:m });
+      if (['invalid_payment_transition','provider_event_conflict'].includes(m)) return reply.code(409).send({ error:m });
+      throw e;
+    }
   });
 
   app.post('/api/admin/payments/:id/refunds', { preHandler: requireRole('admin') }, async (req, reply) => {
     const { id } = req.params as { id:string };
     const body = z.object({ amount:z.number().positive(), providerEventId:z.string().optional(), payload:z.record(z.unknown()).optional() }).parse(req.body);
     try { return { payment:await refundPayment(req.principal,id,body.amount,body.providerEventId,body.payload ?? {}) }; }
-    catch (e) { const m=e instanceof Error?e.message:'refund_error'; if (m==='payment_not_found') return reply.code(404).send({ error:m }); if (['refund_not_allowed','invalid_refund_amount'].includes(m)) return reply.code(409).send({ error:m }); throw e; }
+    catch (e) {
+      const m=e instanceof Error?e.message:'refund_error';
+      if (m==='payment_not_found') return reply.code(404).send({ error:m });
+      if (['refund_not_allowed','invalid_refund_amount','provider_event_conflict'].includes(m)) return reply.code(409).send({ error:m });
+      throw e;
+    }
   });
 
   app.post('/api/admin/payouts', { preHandler: requireRole('admin') }, async (req, reply) => {
     const body = z.object({ caseId:z.string().uuid(), counterpartyActorId:z.string().uuid(), paymentIntentId:z.string().uuid().optional(), amount:z.number().nonnegative(), currency:z.string().length(3).default('USD'), provider:z.string().default('manual'), providerPayoutId:z.string().optional(), metadata:z.record(z.unknown()).optional() }).parse(req.body);
-    return reply.code(201).send({ payout:await createPayout(req.principal,body) });
+    try{return reply.code(201).send({ payout:await createPayout(req.principal,body) });}
+    catch(e){
+      const m=e instanceof Error?e.message:'payout_error';
+      if(['case_not_found','payment_not_found'].includes(m))return reply.code(404).send({error:m});
+      if(['payout_counterparty_invalid','payout_payment_case_mismatch','payout_currency_mismatch','provider_payout_conflict'].includes(m))return reply.code(409).send({error:m});
+      throw e;
+    }
   });
 
   app.post('/api/admin/payouts/:id/state', { preHandler: requireRole('admin') }, async (req, reply) => {
