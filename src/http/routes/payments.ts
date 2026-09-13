@@ -112,6 +112,11 @@ export async function paymentRoutes(app: FastifyInstance) {
   app.post('/api/admin/payouts/:id/state', { preHandler: requireRole('admin') }, async (req, reply) => {
     const { id } = req.params as { id:string };
     const body = z.object({ state:z.enum(['approved','processing','paid','failed','cancelled']), externalReference:z.string().optional() }).parse(req.body);
+    if(body.state==='paid'){
+      const funding=await pool.query(`select s.payment_intent_id,p.state as payment_state from settlement_payouts s left join payment_intents p on p.id=s.payment_intent_id where s.id=$1`,[id]);
+      if(!funding.rowCount) return reply.code(404).send({error:'payout_not_found'});
+      if(funding.rows[0].payment_intent_id&&funding.rows[0].payment_state==='refunded') return reply.code(409).send({error:'payout_payment_not_funded'});
+    }
     try { return { payout:await updatePayoutState(req.principal,id,body.state,body.externalReference) }; }
     catch (e) {
       const m=errorMessage(e,'payout_error');
