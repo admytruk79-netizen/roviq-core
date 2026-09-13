@@ -15,7 +15,7 @@ export function normalizeShopOsBoardRange(from:string,to:string){
   const requestedEnd=new Date(to).getTime();
   if(!Number.isFinite(requestedStart)||!Number.isFinite(requestedEnd)||requestedEnd<=requestedStart) throw httpError('shop_os_board_range_invalid',400);
   if(requestedEnd-requestedStart<=MAX_BOARD_RANGE_MS) return {from,to,truncated:false};
-  return {from:new Date(requestedEnd-MAX_BOARD_RANGE_MS).toISOString(),to:new Date(requestedEnd).toISOString(),truncated:true};
+  return {from:new Date(requestedStart).toISOString(),to:new Date(requestedStart+MAX_BOARD_RANGE_MS).toISOString(),truncated:true};
 }
 
 async function resolveBoardScope(principal:Principal,input:{organizationId?:string;locationId?:string}){
