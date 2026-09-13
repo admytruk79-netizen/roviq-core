@@ -1,6 +1,7 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { pool } from '../../db/pool.js';
+import type { Principal } from '../../types/principal.js';
 import { requireRole } from '../middleware/principal.js';
 import { createPaymentIntent, createPayout, refundPayment, updatePaymentState, updatePayoutState } from '../../services/payments.js';
 import { getFinancialReconciliation } from '../../services/financial-reconciliation.js';
@@ -10,18 +11,34 @@ function errorMessage(error:unknown,fallback:string){
   return error instanceof Error?error.message:fallback;
 }
 
-async function requireFinancialCaseAccess(principal:Parameters<typeof loadCaseForPrincipal>[0],caseId:string,reply:any){
-  try{
-    const serviceCase=await loadCaseForPrincipal(principal,caseId);
-    if(!serviceCase){reply.code(404).send({error:'case_not_found'});return false;}
-    return true;
-  }catch(error){
-    if(error instanceof Error&&error.message==='forbidden'){
-      reply.code(403).send({error:'forbidden'});
-      return false;
-    }
-    throw error;
+async function requireAdminFinancialCaseAccess(principal:Principal,caseId:string,reply:FastifyReply){
+  if(principal.role!=='admin'){
+    reply.code(403).send({error:'forbidden'});
+    return false;
   }
+  if(!principal.actorId){
+    const existing=await pool.query('select 1 from service_cases where id=$1',[caseId]);
+    if(!existing.rowCount){reply.code(404).send({error:'case_not_found'});return false;}
+    return true;
+  }
+  const actor=await pool.query(`select organization_id from actors where id=$1 and status='active'`,[principal.actorId]);
+  if(!actor.rowCount){reply.code(403).send({error:'forbidden'});return false;}
+  const organizationId=actor.rows[0].organization_id;
+  const scoped=await pool.query(`
+    select exists(
+      select 1 from service_cases sc
+      left join actors owner on owner.id=sc.current_owner_actor_id
+      left join actors selected on selected.id=sc.selected_actor_id
+      where sc.id=$1 and (
+        owner.organization_id=$2 or selected.organization_id=$2 or
+        exists(select 1 from matches_offers mo join actors a on a.id=mo.actor_id where mo.case_id=sc.id and mo.outcome='accepted' and a.organization_id=$2) or
+        exists(select 1 from transport_dispatches td join actors a on a.id=td.provider_actor_id where td.case_id=sc.id and a.organization_id=$2) or
+        exists(select 1 from parts_orders po join actors a on a.id=po.supplier_actor_id where po.case_id=sc.id and a.organization_id=$2) or
+        exists(select 1 from mobility_allocations ma join actors a on a.id=ma.provider_actor_id where ma.case_id=sc.id and a.organization_id=$2)
+      )
+    ) as allowed`,[caseId,organizationId]);
+  if(!scoped.rows[0]?.allowed){reply.code(403).send({error:'forbidden'});return false;}
+  return true;
 }
 
 export async function paymentRoutes(app: FastifyInstance) {
@@ -39,12 +56,16 @@ export async function paymentRoutes(app: FastifyInstance) {
 
   app.get('/api/maintenance/cases/:id/payments', async (req, reply) => {
     const { id } = req.params as { id:string };
-    try {
-      const c = await loadCaseForPrincipal(req.principal,id);
-      if (!c) return reply.code(404).send({ error:'case_not_found' });
-    } catch (e) {
-      if (e instanceof Error && e.message === 'forbidden') return reply.code(403).send({ error:'forbidden' });
-      throw e;
+    if(req.principal.role==='admin'){
+      if(!await requireAdminFinancialCaseAccess(req.principal,id,reply)) return;
+    }else{
+      try {
+        const c = await loadCaseForPrincipal(req.principal,id);
+        if (!c) return reply.code(404).send({ error:'case_not_found' });
+      } catch (e) {
+        if (e instanceof Error && e.message === 'forbidden') return reply.code(403).send({ error:'forbidden' });
+        throw e;
+      }
     }
     const r = await pool.query('select id,case_id,amount,currency,state,description,created_at,updated_at,authorized_at,captured_at from payment_intents where case_id=$1 order by created_at desc',[id]);
     return { payments:r.rows };
@@ -108,7 +129,7 @@ export async function paymentRoutes(app: FastifyInstance) {
 
   app.get('/api/admin/cases/:id/financials', { preHandler: requireRole('admin') }, async (req, reply) => {
     const { id } = req.params as { id:string };
-    if(!await requireFinancialCaseAccess(req.principal,id,reply)) return;
+    if(!await requireAdminFinancialCaseAccess(req.principal,id,reply)) return;
     const [payments,payouts,ledger] = await Promise.all([
       pool.query('select * from payment_intents where case_id=$1 order by created_at asc',[id]),
       pool.query('select * from settlement_payouts where case_id=$1 order by created_at asc',[id]),
