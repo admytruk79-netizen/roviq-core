@@ -12,6 +12,13 @@ const eventSchema=z.object({
 });
 
 const WEBHOOK_BODY_LIMIT=256*1024;
+const PAYMENT_CONFLICTS=new Set([
+  'invalid_payment_transition',
+  'provider_event_conflict',
+  'capture_amount_mismatch',
+  'refund_not_allowed',
+  'invalid_refund_amount'
+]);
 
 function rawBody(body:unknown){
   if(Buffer.isBuffer(body)) return body.toString('utf8');
@@ -40,7 +47,7 @@ export async function paymentWebhookRoutes(app:FastifyInstance){
       if(['stripe_webhook_not_configured','stripe_webhook_timestamp_invalid','stripe_webhook_signature_invalid'].includes(message)) return reply.code(401).send({error:message});
       if(['stripe_webhook_payload_invalid','stripe_webhook_currency_missing','stripe_currency_unsupported','stripe_currency_precision_unsupported'].includes(message)) return reply.code(400).send({error:message});
       if(message==='payment_not_found'||message==='case_not_found') return reply.code(404).send({error:message});
-      if(['stripe_webhook_currency_mismatch','invalid_payment_transition','provider_event_conflict','refund_not_allowed','invalid_refund_amount'].includes(message)) return reply.code(409).send({error:message});
+      if(message==='stripe_webhook_currency_mismatch'||PAYMENT_CONFLICTS.has(message)) return reply.code(409).send({error:message});
       throw error;
     }
   });
@@ -59,7 +66,7 @@ export async function paymentWebhookRoutes(app:FastifyInstance){
       if(['payment_webhook_not_configured','payment_webhook_timestamp_invalid','payment_webhook_signature_invalid'].includes(message)) return reply.code(401).send({error:message});
       if(['payment_webhook_amount_required','payment_webhook_payload_invalid'].includes(message)) return reply.code(400).send({error:message});
       if(message==='payment_not_found'||message==='case_not_found') return reply.code(404).send({error:message});
-      if(['payment_webhook_provider_mismatch','invalid_payment_transition','provider_event_conflict','refund_not_allowed','invalid_refund_amount'].includes(message)) return reply.code(409).send({error:message});
+      if(message==='payment_webhook_provider_mismatch'||PAYMENT_CONFLICTS.has(message)) return reply.code(409).send({error:message});
       throw error;
     }
   });
