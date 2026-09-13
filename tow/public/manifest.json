@@ -1,0 +1,13 @@
+{
+  "name": "ROVIQ Tow / Valet",
+  "short_name": "ROVIQ Tow",
+  "description": "Drive assignments, dispatch queue and job history for ROVIQ tow/valet drivers.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#030A10",
+  "theme_color": "#030A10",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

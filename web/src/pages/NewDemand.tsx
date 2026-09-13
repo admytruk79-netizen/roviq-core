@@ -41,6 +41,8 @@ export function NewDemand() {
   const [location, setLocation] = useState<IntakeLocation | null>(null);
   const [locating, setLocating] = useState(false);
   const [locationMessage, setLocationMessage] = useState('');
+  const [manualLocation, setManualLocation] = useState('');
+  const [gpsAttempted, setGpsAttempted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
@@ -49,13 +51,14 @@ export function NewDemand() {
     setLocating(true);
     setLocationMessage('');
     const next = await currentLocation();
+    setGpsAttempted(true);
     if (next) {
       setLocation(next);
       const accuracy = typeof next.accuracy === 'number' ? ` · ±${Math.round(next.accuracy)} m` : '';
       setLocationMessage(`Vehicle GPS captured${accuracy}.`);
     } else {
       setLocation(null);
-      setLocationMessage('Location permission or GPS is unavailable. Enable precise location to create a dispatch-ready case.');
+      setLocationMessage('Location permission or GPS is unavailable. You can still submit and describe your location below -- our team will confirm it with you.');
     }
     setLocating(false);
     return next;
@@ -67,18 +70,21 @@ export function NewDemand() {
     setError(null);
     try {
       const demandType = issueType === 'other' ? otherIssue.trim().toLowerCase().replace(/\s+/g, '_') : issueType;
-      const intakeLocation = location ?? await captureLocation();
-      if (!intakeLocation) {
-        setError('Vehicle GPS is required so diagnostics and Tow / Valet can find the case location. Enable location permission and try again.');
+      const intakeLocation = location ?? (gpsAttempted ? null : await captureLocation());
+      if (!intakeLocation && !manualLocation.trim()) {
+        setError('We could not capture GPS. Please describe your vehicle location below, or try GPS again.');
         setSubmitting(false);
         return;
       }
+      const attributes: Record<string, unknown> = {};
+      if (description.trim()) attributes.description = description.trim();
+      if (!intakeLocation && manualLocation.trim()) attributes.locationNote = manualLocation.trim();
       const res = await api.post<{ case: ServiceCase }>('/api/demands', {
         domain: 'maintenance',
         demandType,
-        location: intakeLocation,
+        ...(intakeLocation ? { location: intakeLocation } : {}),
         urgency,
-        attributes: description.trim() ? { description: description.trim() } : {}
+        attributes
       });
       navigate(`/cases/${res.case.id}`);
     } catch {
@@ -138,7 +144,7 @@ export function NewDemand() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-sm font-medium text-slate-700">Vehicle GPS</p>
-              <p className="mt-0.5 text-xs text-slate-500">Required for diagnostic dispatch and Tow / Valet routing.</p>
+              <p className="mt-0.5 text-xs text-slate-500">Fastest way for diagnostics and Tow / Valet to find you.</p>
             </div>
             <button
               type="button"
@@ -151,6 +157,19 @@ export function NewDemand() {
           </div>
           {location && <p className="mt-2 text-xs text-emerald-700">GPS ready for dispatch.</p>}
           {locationMessage && <p className="mt-2 text-xs text-slate-500">{locationMessage}</p>}
+          {gpsAttempted && !location && (
+            <div className="mt-3">
+              <label className="block text-sm font-medium text-slate-700" htmlFor="manualLocation">Describe your vehicle's location</label>
+              <input
+                id="manualLocation"
+                value={manualLocation}
+                onChange={(e) => setManualLocation(e.target.value)}
+                placeholder="e.g. 123 Main St, or cross streets, or a landmark"
+                className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none"
+              />
+              <p className="mt-1 text-xs text-slate-500">We'll confirm the exact location with you before dispatching anyone.</p>
+            </div>
+          )}
         </div>
         <div>
           <label className="block text-sm font-medium text-slate-700" htmlFor="urgency">Urgency</label>

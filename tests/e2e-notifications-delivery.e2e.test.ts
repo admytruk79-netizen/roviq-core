@@ -76,7 +76,7 @@ describe('notifications delivery end-to-end lifecycle', () => {
 
     const pushNotification = await seedNotification({ caseId, channel: 'push', recipientId: customerActorId, templateKey: 'test_notice', payload: { name: 'Alex', caseId, status: 'ready' } });
 
-    const process1Res = await app.inject({ method: 'POST', url: '/api/admin/notifications/process', headers: adminHeaders(), payload: { workerId: 'test-worker' } });
+    const process1Res = await app.inject({ method: 'POST', url: '/api/admin/notifications/process', headers: adminHeaders(), payload: { workerId: 'test-worker', limit: 200 } });
     expect(process1Res.statusCode).toBe(200);
     const processed1 = JSON.parse(process1Res.body).processed;
     expect(processed1.find((p: { id: string }) => p.id === pushNotification.id)).toMatchObject({ state: 'sent' });
@@ -95,7 +95,7 @@ describe('notifications delivery end-to-end lifecycle', () => {
 
     // A disabled channel fails delivery and is rescheduled for retry, not sent.
     const smsNotification = await seedNotification({ caseId, channel: 'sms', recipientId: customerActorId, templateKey: 'test_notice' });
-    const process2Res = await app.inject({ method: 'POST', url: '/api/admin/notifications/process', headers: adminHeaders(), payload: { workerId: 'test-worker' } });
+    const process2Res = await app.inject({ method: 'POST', url: '/api/admin/notifications/process', headers: adminHeaders(), payload: { workerId: 'test-worker', limit: 200 } });
     const processed2 = JSON.parse(process2Res.body).processed;
     expect(processed2.find((p: { id: string }) => p.id === smsNotification.id)).toMatchObject({ state: 'retry' });
 
@@ -103,13 +103,13 @@ describe('notifications delivery end-to-end lifecycle', () => {
     expect(JSON.parse(smsAttemptsRes.body).attempts[0]).toMatchObject({ state: 'failed', error_code: 'channel_disabled' });
 
     // Its retry backoff pushes availability into the future, so an immediate re-process must not pick it up again.
-    const process3Res = await app.inject({ method: 'POST', url: '/api/admin/notifications/process', headers: adminHeaders(), payload: { workerId: 'test-worker' } });
+    const process3Res = await app.inject({ method: 'POST', url: '/api/admin/notifications/process', headers: adminHeaders(), payload: { workerId: 'test-worker', limit: 200 } });
     const processed3 = JSON.parse(process3Res.body).processed;
     expect(processed3.some((p: { id: string }) => p.id === smsNotification.id)).toBe(false);
 
     // A notification with only one allowed attempt is dead-lettered immediately on failure.
     const deadNotification = await seedNotification({ caseId, channel: 'sms', recipientId: customerActorId, templateKey: 'test_notice', maxAttempts: 1 });
-    const process4Res = await app.inject({ method: 'POST', url: '/api/admin/notifications/process', headers: adminHeaders(), payload: { workerId: 'test-worker' } });
+    const process4Res = await app.inject({ method: 'POST', url: '/api/admin/notifications/process', headers: adminHeaders(), payload: { workerId: 'test-worker', limit: 200 } });
     const processed4 = JSON.parse(process4Res.body).processed;
     expect(processed4.find((p: { id: string }) => p.id === deadNotification.id)).toMatchObject({ state: 'dead' });
     const deadOutboxRes = await app.inject({ method: 'GET', url: '/api/admin/notifications/outbox?state=dead', headers: adminHeaders() });
@@ -120,7 +120,7 @@ describe('notifications delivery end-to-end lifecycle', () => {
     expect(enableEmailRes.statusCode).toBe(200);
     await app.inject({ method: 'POST', url: '/api/admin/notifications/templates', headers: adminHeaders(), payload: { templateKey: 'test_notice', channel: 'email', bodyTemplate: 'Case {{caseId}}' } });
     const noAdapterNotification = await seedNotification({ caseId, channel: 'email', recipientId: customerActorId, templateKey: 'test_notice', maxAttempts: 1 });
-    const process5Res = await app.inject({ method: 'POST', url: '/api/admin/notifications/process', headers: adminHeaders(), payload: { workerId: 'test-worker' } });
+    const process5Res = await app.inject({ method: 'POST', url: '/api/admin/notifications/process', headers: adminHeaders(), payload: { workerId: 'test-worker', limit: 200 } });
     const processed5 = JSON.parse(process5Res.body).processed;
     expect(processed5.find((p: { id: string }) => p.id === noAdapterNotification.id)).toMatchObject({ state: 'dead' });
     const noAdapterAttemptsRes = await app.inject({ method: 'GET', url: `/api/admin/notifications/${noAdapterNotification.id}/attempts`, headers: adminHeaders() });

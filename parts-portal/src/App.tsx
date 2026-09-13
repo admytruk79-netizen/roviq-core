@@ -26,6 +26,20 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
   return response.json();
 }
 
+// Translate the backend's internal snake_case error codes into plain sentences a supplier can
+// act on -- surfacing e.g. "invalid_parts_transition" verbatim tells them nothing actionable.
+function partsErrorMessage(raw: string) {
+  if (raw.startsWith('inventory_unavailable:')) return `Inventory is not sufficient for SKU ${raw.split(':')[1]}. Update stock below, then reserve again.`;
+  const known: Record<string, string> = {
+    invalid_parts_transition: 'This order has already moved past that step. Refresh to see its current status.',
+    order_not_reservable: 'This order is no longer awaiting reservation. Refresh to see its current status.',
+    supplier_not_assigned: 'This order has not been assigned to a supplier yet.',
+    order_not_found: 'This order could not be found -- it may have been reassigned or removed.',
+    forbidden: "You don't have permission to update this order."
+  };
+  return known[raw] ?? raw;
+}
+
 function loc(value: unknown) {
   if (!value) return 'Not available yet';
   if (typeof value === 'string') return value;
@@ -92,6 +106,7 @@ export default function App() {
   const [quantityOnHand, setQuantityOnHand] = useState('');
   const [unitPrice, setUnitPrice] = useState('');
   const [savingInventory, setSavingInventory] = useState(false);
+  const [busy, setBusy] = useState<{ id: string; kind: string } | null>(null);
 
   async function login(event: FormEvent) {
     event.preventDefault();
@@ -184,7 +199,11 @@ export default function App() {
   function chooseItem(item: OrderItem) {
     setSku(item.sku);
     setDescription(item.description ?? '');
-    setQuantityOnHand(String(item.quantity));
+    // Do NOT prefill from item.quantity -- that's the order's *required* quantity (shown as
+    // "Required" in the item row above), not the supplier's actual stock on hand. Prefilling this
+    // field with it invited a supplier to unknowingly overwrite their real inventory count with
+    // whatever a single order happened to need.
+    setQuantityOnHand('');
     setUnitPrice('');
   }
 
@@ -212,13 +231,15 @@ export default function App() {
       });
       setMessage(`Inventory saved for ${sku.trim()}. You can reserve the assigned order when stock is sufficient.`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not update inventory');
+      setError(err instanceof Error ? partsErrorMessage(err.message) : 'Could not update inventory');
     } finally {
       setSavingInventory(false);
     }
   }
 
   async function action(id: string, kind: string) {
+    if (busy) return; // one lifecycle action in flight at a time -- guards against a double-click firing the same transition twice
+    setBusy({ id, kind });
     try {
       setError('');
       setMessage('');
@@ -230,7 +251,11 @@ export default function App() {
           method: 'POST',
           body: JSON.stringify({ status: kind })
         });
-        setMessage(`Order marked ${kind}.`);
+        setMessage(
+          kind === 'cancelled' ? 'Order cancelled. Any reserved inventory was released back to stock.' :
+          kind === 'failed' ? 'Order reported as failed. ROVIQ will reassign a supplier.' :
+          `Order marked ${kind}.`
+        );
       }
       await load();
       // Only refresh the detail panel if this action was on the order still currently selected --
@@ -239,10 +264,25 @@ export default function App() {
       if (id === selectedRef.current) await loadDetail(id);
     } catch (err) {
       const raw = err instanceof Error ? err.message : 'Update failed';
-      setError(raw.startsWith('inventory_unavailable:')
-        ? `Inventory is not sufficient for SKU ${raw.split(':')[1]}. Update stock below, then reserve again.`
-        : raw);
+      setError(partsErrorMessage(raw));
+    } finally {
+      setBusy(null);
     }
+  }
+
+  function cancelOrder(id: string) {
+    if (!window.confirm('Cancel this parts order? Any reserved inventory will be released back to stock.')) return;
+    void action(id, 'cancelled');
+  }
+
+  function reportFailed(id: string) {
+    if (!window.confirm('Report this order as failed? This cannot be undone -- ROVIQ will be notified to reassign a supplier.')) return;
+    void action(id, 'failed');
+  }
+
+  function refreshAll() {
+    void load();
+    if (selected) void loadDetail(selected);
   }
 
   function logout() {
@@ -263,7 +303,7 @@ export default function App() {
         <p>Confirm inventory, reserve stock and keep fulfilment status current. Geography is restricted to the selected case order.</p>
         {error && <div className="error">{error}</div>}
         {message && <div className="success">{message}</div>}
-        <div className="actions"><button className="secondary" type="button" onClick={() => void load()}>Refresh orders</button></div>
+        <div className="actions"><button className="secondary" type="button" onClick={refreshAll}>Refresh orders</button></div>
 
         <div className="grid">
           {orders.map((order) => (
@@ -274,10 +314,12 @@ export default function App() {
                 <p>Case {order.case_id.slice(0, 8)}</p>
               </button>
               <div className="actions">
-                {order.status === 'supplier_assigned' && <button className="primary" onClick={() => void action(order.id, 'reserve')}>Reserve stock</button>}
-                {order.status === 'reserved' && <button className="primary" onClick={() => void action(order.id, 'ordered')}>Mark ordered</button>}
-                {order.status === 'ordered' && <button className="primary" onClick={() => void action(order.id, 'shipped')}>Mark shipped</button>}
-                {order.status === 'shipped' && <button className="primary" onClick={() => void action(order.id, 'delivered')}>Mark delivered</button>}
+                {order.status === 'supplier_assigned' && <button className="primary" disabled={!!busy} onClick={() => void action(order.id, 'reserve')}>{busy?.id === order.id && busy.kind === 'reserve' ? 'Reserving…' : 'Reserve stock'}</button>}
+                {order.status === 'reserved' && <button className="primary" disabled={!!busy} onClick={() => void action(order.id, 'ordered')}>{busy?.id === order.id && busy.kind === 'ordered' ? 'Marking…' : 'Mark ordered'}</button>}
+                {order.status === 'ordered' && <button className="primary" disabled={!!busy} onClick={() => void action(order.id, 'shipped')}>{busy?.id === order.id && busy.kind === 'shipped' ? 'Marking…' : 'Mark shipped'}</button>}
+                {order.status === 'shipped' && <button className="primary" disabled={!!busy} onClick={() => void action(order.id, 'delivered')}>{busy?.id === order.id && busy.kind === 'delivered' ? 'Marking…' : 'Mark delivered'}</button>}
+                {['reserved', 'ordered'].includes(order.status) && <button className="secondary danger" disabled={!!busy} onClick={() => cancelOrder(order.id)}>{busy?.id === order.id && busy.kind === 'cancelled' ? 'Cancelling…' : 'Cancel order'}</button>}
+                {order.status === 'shipped' && <button className="secondary danger" disabled={!!busy} onClick={() => reportFailed(order.id)}>{busy?.id === order.id && busy.kind === 'failed' ? 'Reporting…' : 'Report delivery failed'}</button>}
               </div>
             </article>
           ))}
@@ -301,7 +343,7 @@ export default function App() {
                 </div>
                 <form className="inventory-form" onSubmit={saveInventory}>
                   <label>SKU<input required value={sku} onChange={(event) => setSku(event.target.value)} /></label>
-                  <label>Stock on hand<input required type="number" min="0" step="1" value={quantityOnHand} onChange={(event) => setQuantityOnHand(event.target.value)} /></label>
+                  <label>Stock on hand<input required type="number" min="0" step="1" placeholder="Your current stock" value={quantityOnHand} onChange={(event) => setQuantityOnHand(event.target.value)} /></label>
                   <label>Unit price (USD)<input type="number" min="0" step="0.01" value={unitPrice} onChange={(event) => setUnitPrice(event.target.value)} placeholder="Optional" /></label>
                   <label className="inventory-description">Description<input value={description} onChange={(event) => setDescription(event.target.value)} /></label>
                   <button className="secondary inventory-save" type="submit" disabled={savingInventory}>{savingInventory ? 'Saving…' : 'Save inventory'}</button>

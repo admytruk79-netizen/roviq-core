@@ -1,5 +1,6 @@
 import { Link, Outlet } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
+import { NotificationsPrompt } from './NotificationsPrompt';
 
 export function Layout() {
   const { principal, logout } = useAuth();
@@ -14,6 +15,7 @@ export function Layout() {
           </Link>
           {principal && (
             <nav className="roviq-customer-nav" aria-label="Customer navigation">
+              <Link to="/" className="roviq-nav-link">My cases</Link>
               <Link to="/cases/new" className="roviq-nav-link roviq-nav-primary">Start service</Link>
               <button onClick={logout} className="roviq-nav-link roviq-account-action" type="button" aria-label="Sign out">Sign out</button>
             </nav>
@@ -21,6 +23,7 @@ export function Layout() {
         </div>
       </header>
       <main className="roviq-grid-glow mx-auto min-h-[calc(100vh-65px)] max-w-6xl px-4 py-5 sm:px-6 sm:py-9">
+        {principal && <NotificationsPrompt />}
         <Outlet />
       </main>
     </div>

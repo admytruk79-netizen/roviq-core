@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
-import { formatDateTime } from '../lib/format';
+import { formatDateTime, humanizeToken } from '../lib/format';
 import { StatusBadge } from '../components/StatusBadge';
 import type { ServiceCase } from '../lib/types';
 
@@ -67,16 +67,19 @@ export function Cases() {
 
       {cases !== null && cases.length > 0 && (
         <section className="roviq-case-list" aria-label="Your service cases">
-          {cases.map((c) => (
-            <Link key={c.id} to={`/cases/${c.id}`} className="roviq-case-card" aria-label={`Open ${String(c.case_type).replaceAll('_',' ')} case ${c.id.slice(0,8)}, status ${String(c.state).replaceAll('_',' ')}`}>
-              <div className="roviq-case-copy">
-                <p className="roviq-kicker">{String(c.case_type).replaceAll('_',' ')} case</p>
-                <h2>Case {c.id.slice(0,8)}</h2>
-                <p className="roviq-muted">Opened {formatDateTime(c.created_at)}</p>
-              </div>
-              <div className="roviq-case-status"><StatusBadge state={c.state} /><span aria-hidden="true">›</span></div>
-            </Link>
-          ))}
+          {cases.map((c) => {
+            const label = c.customer_message ?? humanizeToken(c.customer_status ?? c.state);
+            return (
+              <Link key={c.id} to={`/cases/${c.id}`} className="roviq-case-card" aria-label={`Open ${String(c.case_type).replaceAll('_',' ')} case ${c.id.slice(0,8)}, status ${label}`}>
+                <div className="roviq-case-copy">
+                  <p className="roviq-kicker">{String(c.case_type).replaceAll('_',' ')} case</p>
+                  <h2>Case {c.id.slice(0,8)}</h2>
+                  <p className="roviq-muted">Opened {formatDateTime(c.created_at)}</p>
+                </div>
+                <div className="roviq-case-status"><StatusBadge state={c.state} label={label} /><span aria-hidden="true">›</span></div>
+              </Link>
+            );
+          })}
         </section>
       )}
     </div>

@@ -1,1 +1,3 @@
-import{StrictMode}from'react';import{createRoot}from'react-dom/client';import'./session-guard';import App from './App';import'maplibre-gl/dist/maplibre-gl.css';import'./index.css';import'./local-map-frame.css';import'./nielsen.css';createRoot(document.getElementById('root')!).render(<StrictMode><App/></StrictMode>);
+import{StrictMode}from'react';import{createRoot}from'react-dom/client';import'./session-guard';import App from './App';import'maplibre-gl/dist/maplibre-gl.css';import'./index.css';import'./local-map-frame.css';import'./nielsen.css';
+if('serviceWorker'in navigator){window.addEventListener('load',()=>{void navigator.serviceWorker.register('/sw.js')})}
+createRoot(document.getElementById('root')!).render(<StrictMode><App/></StrictMode>);

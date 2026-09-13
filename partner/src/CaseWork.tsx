@@ -221,8 +221,8 @@ export function CaseWork({ caseId }: { caseId: string }) {
     </div>
 
     <div className="mt-5 flex flex-col justify-between gap-3 rounded-xl border border-white/10 bg-white/[.025] p-4 sm:flex-row sm:items-center">
-      <div><p className="kicker">Next handoff</p><p className="mt-1 text-sm font-semibold">When the quote is ready and repair work is complete, move the case into customer approval / payment.</p></div>
-      <button type="button" className="secondary shrink-0" disabled={requestingPayment || caseData?.state !== 'repair_in_progress' || !pendingApproval} onClick={()=>void requestPayment()}>{requestingPayment ? 'Updating…' : 'Request approval & payment'}</button>
+      <div><p className="kicker">Next handoff</p><p className="mt-1 text-sm font-semibold">Once the customer approves the quote and repair work is complete, move the case to payment.</p></div>
+      <button type="button" className="secondary shrink-0" disabled={requestingPayment || caseData?.state !== 'repair_in_progress' || latestApproval?.state !== 'approved'} onClick={()=>void requestPayment()}>{requestingPayment ? 'Updating…' : 'Request approval & payment'}</button>
     </div>
   </section>;
 }

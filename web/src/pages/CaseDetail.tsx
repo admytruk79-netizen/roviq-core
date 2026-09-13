@@ -143,6 +143,10 @@ export function CaseDetail() {
   const [decidingId, setDecidingId] = useState<string | null>(null);
   const [fieldDecidingId, setFieldDecidingId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+  const [payingId, setPayingId] = useState<string | null>(null);
+  const [payError, setPayError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -218,6 +222,36 @@ export function CaseDetail() {
     }
   }
 
+  async function cancelCase() {
+    if (!id) return;
+    if (!window.confirm('Cancel this case? This cannot be undone.')) return;
+    setCancelling(true);
+    setCancelError(null);
+    try {
+      await api.post(`/api/maintenance/cases/${id}/transition`, { toState: 'cancelled' });
+      await load();
+    } catch (e) {
+      const message = e instanceof ApiError && e.status === 409
+        ? 'This case can no longer be cancelled -- it may have already moved past the point service can be stopped.'
+        : 'Could not cancel this case. Please try again.';
+      setCancelError(message);
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  async function payNow(paymentId: string) {
+    setPayingId(paymentId);
+    setPayError(null);
+    try {
+      const res = await api.post<{ checkoutUrl: string }>(`/api/customers/me/payments/${paymentId}/checkout-session`);
+      window.location.href = res.checkoutUrl;
+    } catch {
+      setPayError('Could not start checkout. Please try again.');
+      setPayingId(null);
+    }
+  }
+
   async function decideFieldService(decisionId: string, approved: boolean) {
     if (!id) return;
     setFieldDecidingId(decisionId);
@@ -240,7 +274,7 @@ export function CaseDetail() {
       <section className="rounded-xl border border-red-200 bg-red-50 p-5">
         <p className="text-sm font-semibold text-red-800">We could not open this case.</p>
         <p className="mt-1 text-sm text-red-700">{error}</p>
-        <Link to="/cases" className="mt-4 inline-flex text-sm font-medium text-slate-700 underline underline-offset-4">Back to my cases</Link>
+        <Link to="/" className="mt-4 inline-flex text-sm font-medium text-slate-700 underline underline-offset-4">Back to my cases</Link>
       </section>
     );
   }
@@ -268,8 +302,10 @@ export function CaseDetail() {
   const eta = route.etaMinutes;
   const normalizedState = String(caseData.state).toLowerCase();
   const isComplete = ['completed', 'closed'].includes(normalizedState);
+  const isCancelled = normalizedState === 'cancelled';
+  const canCancel = !isComplete && !isCancelled;
   const statusMessage = snapshot?.customer_message ?? humanizeToken(snapshot?.customer_status ?? caseData.state);
-  const nextAction = snapshot?.next_action ?? (isComplete ? 'Your service is complete. No action is required.' : 'We are coordinating the next step.');
+  const nextAction = snapshot?.next_action ?? (isComplete ? 'Your service is complete. No action is required.' : isCancelled ? 'This case has been cancelled. No further action is required.' : 'We are coordinating the next step.');
   const responderLocation = normalizedState.startsWith('diagnostic')
     ? spatial?.diagnostic_location ?? spatial?.transport_location ?? spatial?.provider_location
     : spatial?.transport_location ?? spatial?.provider_location ?? spatial?.diagnostic_location;
@@ -277,7 +313,7 @@ export function CaseDetail() {
 
   return (
     <div className="space-y-6">
-      <Link to="/cases" className="inline-flex items-center text-sm font-medium text-slate-500 hover:text-slate-800">← My cases</Link>
+      <Link to="/" className="inline-flex items-center text-sm font-medium text-slate-500 hover:text-slate-800">← My cases</Link>
 
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-start sm:justify-between">
@@ -288,6 +324,7 @@ export function CaseDetail() {
           </div>
           <div className="flex items-center gap-2">
             <button type="button" onClick={() => void refresh()} disabled={refreshing} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">{refreshing ? 'Refreshing…' : 'Refresh'}</button>
+            {canCancel && <button type="button" onClick={() => void cancelCase()} disabled={cancelling} className="rounded-md border border-red-300 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50">{cancelling ? 'Cancelling…' : 'Cancel case'}</button>}
             <StatusBadge state={caseData.state} />
           </div>
         </div>
@@ -300,6 +337,7 @@ export function CaseDetail() {
             <p className="mt-1 text-sm text-slate-700">{nextAction}</p>
             {snapshot?.eta_at && <p className="mt-1 text-xs text-slate-500">Estimated update {formatDateTime(snapshot.eta_at)}</p>}
           </div>
+          {cancelError && <p className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{cancelError}</p>}
         </div>
       </section>
 
@@ -365,9 +403,29 @@ export function CaseDetail() {
 
       <section>
         <h2 className="text-sm font-semibold text-slate-800">Payments</h2>
+        {payError && <p className="mt-2 text-sm text-red-600">{payError}</p>}
         <ul className="mt-3 divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white">
           {payments.length === 0 && <li className="px-4 py-3 text-sm text-slate-400">No payment is due yet.</li>}
-          {payments.map((p) => <li key={p.id} className="flex items-center justify-between gap-4 px-4 py-3"><span className="text-sm text-slate-800">{p.description ?? 'Payment'}</span><span className="flex items-center gap-2"><StatusBadge state={p.state} /><span className="text-sm text-slate-500">{formatAmount(p.amount, p.currency)}</span></span></li>)}
+          {payments.map((p) => (
+            <li key={p.id} className="flex items-center justify-between gap-4 px-4 py-3">
+              <span className="text-sm text-slate-800">{p.description ?? 'Payment'}</span>
+              <span className="flex items-center gap-2">
+                <StatusBadge state={p.state} />
+                <span className="text-sm text-slate-500">{formatAmount(p.amount, p.currency)}</span>
+                {['created', 'requires_action'].includes(p.state) && (
+                  <button
+                    type="button"
+                    className="roviq-btn-primary"
+                    style={{ padding: '6px 14px', minHeight: 0 }}
+                    disabled={payingId === p.id}
+                    onClick={() => void payNow(p.id)}
+                  >
+                    {payingId === p.id ? 'Redirecting…' : 'Pay now'}
+                  </button>
+                )}
+              </span>
+            </li>
+          ))}
         </ul>
       </section>
 

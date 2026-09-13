@@ -245,6 +245,59 @@ describe('external dependency degradation', () => {
     }
   });
 
+  it('delivers a customer status email via Resend when the email channel is configured for it', async () => {
+    process.env.RESEND_API_KEY = 'resend_test_key';
+    process.env.RESEND_FROM_EMAIL = 'updates@roviq.test';
+    try {
+      const fetchSpy = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 'email_test123' }), { status: 200 }));
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const notification = { id: 'n3', channel: 'email', recipient_id: 'actor-3', template_key: 'customer_status_update', payload: { status: 'diagnostic_finding_ready', message: 'Your diagnostic is complete.' }, attempt_count: 0, max_attempts: 5, provider: null };
+      const { tag: sql } = fakeSql([
+        [notification],
+        [{ channel: 'email', provider: 'resend', enabled: true }],
+        [{ body_template: '{{message}}', subject_template: 'ROVIQ update: {{status}}' }],
+        [{ email: 'customer@example.com' }],
+        [],
+        [],
+        []
+      ]);
+
+      const results = await processNotificationBatchNative(sql as never, { RESEND_API_KEY: process.env.RESEND_API_KEY, RESEND_FROM_EMAIL: process.env.RESEND_FROM_EMAIL } as never, 'test-worker', 10);
+
+      expect(results).toEqual([{ id: 'n3', state: 'sent', providerMessageId: 'email_test123' }]);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit & { headers: Record<string, string> }];
+      expect(url).toBe('https://api.resend.com/emails');
+      expect(init.headers.authorization).toBe('Bearer resend_test_key');
+      const sentBody = JSON.parse(init.body as string);
+      expect(sentBody).toMatchObject({ from: 'updates@roviq.test', to: 'customer@example.com', subject: 'ROVIQ update: diagnostic_finding_ready', text: 'Your diagnostic is complete.' });
+    } finally {
+      delete process.env.RESEND_API_KEY;
+      delete process.env.RESEND_FROM_EMAIL;
+    }
+  });
+
+  it('retries an email notification with a specific reason when Resend is not configured, without touching fetch', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const notification = { id: 'n4', channel: 'email', recipient_id: 'actor-4', template_key: 'customer_status_update', payload: { status: 'triage', message: 'Hi' }, attempt_count: 0, max_attempts: 5, provider: null };
+    const { tag: sql, calls } = fakeSql([
+      [notification],
+      [{ channel: 'email', provider: 'resend', enabled: true }],
+      [{ body_template: '{{message}}', subject_template: 'ROVIQ update: {{status}}' }],
+      [],
+      []
+    ]);
+
+    const results = await processNotificationBatchNative(sql as never, {} as never, 'test-worker', 10);
+
+    expect(results).toEqual([{ id: 'n4', state: 'retry' }]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(calls[3].values).toContain('resend_not_configured');
+  });
+
   it('retries an sms notification with a specific reason when Twilio is not configured, without touching fetch', async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);
@@ -264,5 +317,52 @@ describe('external dependency degradation', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
     // The 4th sql call is the failed-attempt insert; confirm the specific, diagnosable reason.
     expect(calls[3].values).toContain('twilio_not_configured');
+  });
+
+  it('delivers a customer push via Web Push when the push channel is configured for it', async () => {
+    const env = { VAPID_PUBLIC_KEY: 'BAM0JQNDRMQc6mx4hTwKegRQINSNrmq9vni7JcjQ0FLS2_9TsyfM-J1cEb17YhyOmEMHy9IKJkVBH3F0fuTOCH0', VAPID_PRIVATE_KEY: '7B32_ctnbEjFGfKFybvwpA3W_O04XNLObkLcf3464c0', VAPID_SUBJECT: 'mailto:ops@roviq.test' };
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(null, { status: 201 }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const notification = { id: 'n5', channel: 'push', recipient_id: 'actor-5', template_key: 'customer_status_update', payload: { message: 'Your diagnostic is complete.' }, attempt_count: 0, max_attempts: 5, provider: null };
+    const subscription = { id: 'sub-1', endpoint: 'https://push.example.com/device-1', p256dh: 'BDhNqLUa9onVBmAAtHUZyNa4yua13Yd3Kb9DuSLvqrUKY9JkAsUDiWi_i0krvhOcyRKyqBk3P3W4jn_MuvfYN68', auth: 'hArI4wmKK2Gr5OeUttOBWg' };
+    const { tag: sql } = fakeSql([
+      [notification],
+      [{ channel: 'push', provider: 'webpush', enabled: true }],
+      [{ body_template: '{{message}}', subject_template: 'ROVIQ update' }],
+      [subscription],
+      [],
+      [],
+      []
+    ]);
+
+    const results = await processNotificationBatchNative(sql as never, env as never, 'test-worker', 10);
+
+    expect(results).toEqual([{ id: 'n5', state: 'sent', providerMessageId: expect.stringMatching(/^webpush:actor-5:/) }]);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit & { headers: Record<string, string> }];
+    expect(url).toBe('https://push.example.com/device-1');
+    expect(init.headers.authorization).toMatch(/^vapid t=.+, k=/);
+    expect(init.headers['content-encoding']).toBe('aes128gcm');
+  });
+
+  it('retries a push notification with a specific reason when VAPID is not configured, without touching fetch', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const notification = { id: 'n6', channel: 'push', recipient_id: 'actor-6', template_key: 'customer_status_update', payload: { message: 'Hi' }, attempt_count: 0, max_attempts: 5, provider: null };
+    const { tag: sql, calls } = fakeSql([
+      [notification],
+      [{ channel: 'push', provider: 'webpush', enabled: true }],
+      [{ body_template: '{{message}}', subject_template: 'ROVIQ update' }],
+      [],
+      []
+    ]);
+
+    const results = await processNotificationBatchNative(sql as never, {} as never, 'test-worker', 10);
+
+    expect(results).toEqual([{ id: 'n6', state: 'retry' }]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(calls[3].values).toContain('webpush_not_configured');
   });
 });

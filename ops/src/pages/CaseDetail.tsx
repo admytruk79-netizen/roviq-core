@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import { formatAmount, formatDateTime, formatMinorAmount, humanizeToken } from '../lib/format';
 import { StatusBadge } from '../components/StatusBadge';
+import { actionCopy, safeTransitions, splitTransitions } from '../lib/actionCopy';
 import type {
   ActorSummary,
   CaseTransition,
@@ -15,32 +16,12 @@ import type {
   TransportDispatch
 } from '../lib/types';
 
-const ACTION_COPY: Record<string,{label:string;description:string;tone?:'primary'|'secondary'}> = {
-  triage:{label:'Begin triage',description:'Review the request and determine the next service path.'},
-  diagnostic_pending:{label:'Request diagnosis',description:'Move this case into the diagnostic workflow.'},
-  diagnostic_in_progress:{label:'Diagnosis underway',description:'Confirm that diagnostic work has started.'},
-  provider_selection:{label:'Find repair provider',description:'Evaluate eligible repair capacity for this case.'},
-  provider_pending:{label:'Send to selected provider',description:'Move the case into provider acceptance.'},
-  repair_in_progress:{label:'Begin repair',description:'Confirm that the provider has started the repair.'},
-  tow_pending:{label:'Arrange transport',description:'Prepare a tow or valet handoff.'},
-  tow_in_progress:{label:'Transport underway',description:'Confirm the vehicle is moving to its destination.'},
-  awaiting_approval:{label:'Request customer approval',description:'Pause work until the customer approves the service.'},
-  approved:{label:'Continue approved work',description:'Resume the service using the approved plan.'},
-  completed:{label:'Complete service',description:'Mark the operational work complete.'},
-  closed:{label:'Close case',description:'Finish the case after all service obligations are complete.'},
-  cancelled:{label:'Cancel case',description:'Stop this service case.',tone:'secondary'}
-};
-
 function actorLabel(actor: ActorSummary) {
   const attributes = actor.attributes ?? {};
   const displayName = [attributes.displayName, attributes.name, attributes.businessName].find((value) => typeof value === 'string');
   return typeof displayName === 'string' && displayName.trim()
     ? displayName
     : humanizeToken(actor.actor_type);
-}
-
-function actionCopy(state:string){
-  return ACTION_COPY[state] ?? {label:humanizeToken(state),description:`Continue this case to ${humanizeToken(state).toLowerCase()}.`};
 }
 
 export function CaseDetail() {
@@ -145,6 +126,7 @@ export function CaseDetail() {
 
   async function runCaseAction(toState:string) {
     if (!id || transitioningTo) return;
+    if (toState === 'cancelled' && !window.confirm('Cancel this case? This cannot be undone.')) return;
     setTransitioningTo(toState);
     setTransitionError(null);
     try {
@@ -225,8 +207,8 @@ export function CaseDetail() {
   if (error) return <p className="text-sm text-red-600">{error}</p>;
   if (!caseData) return <p className="text-sm text-slate-500">Loading…</p>;
 
-  const primaryTransition=transitions[0] ?? null;
-  const secondaryTransitions=transitions.slice(1);
+  const {primary:primaryTransition,secondary:secondaryTransitions}=splitTransitions(safeTransitions(caseData.state,transitions));
+  const needsProviderSelection=caseData.state==='provider_selection' && !primaryTransition;
 
   return (
     <div className="space-y-6">
@@ -244,7 +226,7 @@ export function CaseDetail() {
 
       <section className="rounded-lg border border-slate-200 bg-white p-4">
         <p className="text-xs font-semibold uppercase tracking-[.12em] text-slate-400">Next action</p>
-        {primaryTransition ? (()=>{const copy=actionCopy(primaryTransition.toState);return <div className="mt-2 flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><div><h2 className="text-base font-semibold text-slate-800">{copy.label}</h2><p className="mt-1 text-sm text-slate-500">{copy.description}</p></div><button type="button" onClick={()=>void runCaseAction(primaryTransition.toState)} disabled={Boolean(transitioningTo)} className="min-h-11 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50">{transitioningTo===primaryTransition.toState?'Updating…':copy.label}</button></div>})() : <div className="mt-2"><h2 className="text-base font-semibold text-slate-800">No manual action required</h2><p className="mt-1 text-sm text-slate-500">This case is waiting on another role, customer response, or an automated Core event.</p></div>}
+        {primaryTransition ? (()=>{const copy=actionCopy(primaryTransition.toState);return <div className="mt-2 flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><div><h2 className="text-base font-semibold text-slate-800">{copy.label}</h2><p className="mt-1 text-sm text-slate-500">{copy.description}</p></div><button type="button" onClick={()=>void runCaseAction(primaryTransition.toState)} disabled={Boolean(transitioningTo)} className="min-h-11 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50">{transitioningTo===primaryTransition.toState?'Updating…':copy.label}</button></div>})() : needsProviderSelection ? <div className="mt-2"><h2 className="text-base font-semibold text-slate-800">Find a repair provider</h2><p className="mt-1 text-sm text-slate-500">Use the repair provider handoff below to evaluate eligible providers and send the offer.</p></div> : <div className="mt-2"><h2 className="text-base font-semibold text-slate-800">No manual action required</h2><p className="mt-1 text-sm text-slate-500">This case is waiting on another role, customer response, or an automated Core event.</p></div>}
         {secondaryTransitions.length>0 && <details className="mt-4 border-t border-slate-100 pt-3"><summary className="cursor-pointer text-sm font-medium text-slate-600">Other available actions</summary><div className="mt-3 flex flex-wrap gap-2">{secondaryTransitions.map(t=>{const copy=actionCopy(t.toState);return <button key={t.toState} type="button" onClick={()=>void runCaseAction(t.toState)} disabled={Boolean(transitioningTo)} className="min-h-10 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">{transitioningTo===t.toState?'Updating…':copy.label}</button>})}</div></details>}
         {transitionError && <p className="mt-3 text-sm text-red-600">{transitionError}</p>}
       </section>
