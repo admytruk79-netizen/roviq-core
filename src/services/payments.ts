@@ -22,8 +22,9 @@ function normalizeFinancialCurrency(currency:string|undefined){
 
 function assertFinancialAmount(amount:number,currency:string){
   if(!Number.isFinite(amount)||amount<0) throw new Error('invalid_financial_amount');
-  const scaled=ZERO_DECIMAL_CURRENCIES.has(currency)?amount:amount*100;
-  if(!Number.isSafeInteger(scaled)) throw new Error('invalid_financial_amount');
+  const factor=ZERO_DECIMAL_CURRENCIES.has(currency)?1:100;
+  const rounded=Math.round(amount*factor)/factor;
+  if(!Number.isSafeInteger(Math.round(amount*factor))||rounded!==amount) throw new Error('invalid_financial_amount');
 }
 
 async function assertFinancialCaseAccess(principal:Principal,caseId:string,client:Pick<PoolClient,'query'>){
