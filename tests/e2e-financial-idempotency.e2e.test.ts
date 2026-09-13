@@ -47,6 +47,20 @@ describe('financial provider replay and concurrency invariants',()=>{
     expect(Number(count.rows[0].n)).toBe(1);
   });
 
+  it('rejects money that cannot be represented exactly by the current currency/storage contract',async()=>{
+    await expect(createPaymentIntent(admin,{caseId,amount:10.005,currency:'USD'}))
+      .rejects.toThrow('invalid_financial_amount');
+    await expect(createPaymentIntent(admin,{caseId,amount:100.5,currency:'JPY'}))
+      .rejects.toThrow('invalid_financial_amount');
+    await expect(createPaymentIntent(admin,{caseId,amount:12.345,currency:'KWD'}))
+      .rejects.toThrow('currency_precision_unsupported');
+
+    const validUsd=await createPaymentIntent(admin,{caseId,amount:0.29,currency:'USD'});
+    const validJpy=await createPaymentIntent(admin,{caseId,amount:101,currency:'JPY'});
+    expect(Number(validUsd.amount)).toBe(0.29);
+    expect(Number(validJpy.amount)).toBe(101);
+  });
+
   it('serializes a replayed capture event and emits one event and one ledger posting',async()=>{
     const payment=await createPaymentIntent(admin,{caseId,amount:200,currency:'USD'});
     const providerEventId=`evt-capture-${Date.now()}-${Math.random()}`;
@@ -86,6 +100,21 @@ describe('financial provider replay and concurrency invariants',()=>{
     const ledger=await pool.query(`select count(*)::int as n from ledger_entries where payment_intent_id=$1 and entry_type='refund' and external_reference=$2`,[payment.id,refundEventId]);
     expect(Number(events.rows[0].n)).toBe(1);
     expect(Number(ledger.rows[0].n)).toBe(1);
+  });
+
+  it('requires provider proof before a non-manual payout can become paid',async()=>{
+    const payout=await createPayout(admin,{
+      caseId,counterpartyActorId:partnerActorId,amount:25,currency:'USD',provider:'test'
+    });
+    await updatePayoutState(admin,payout.id,'approved');
+    await updatePayoutState(admin,payout.id,'processing');
+
+    await expect(updatePayoutState(admin,payout.id,'paid'))
+      .rejects.toThrow('payout_provider_reference_required');
+
+    const paid=await updatePayoutState(admin,payout.id,'paid',`po-proof-${Date.now()}-${Math.random()}`);
+    expect(paid.state).toBe('paid');
+    expect(paid.provider_payout_id).toBeTruthy();
   });
 
   it('reuses provider payout references only when every canonical financial detail matches',async()=>{
