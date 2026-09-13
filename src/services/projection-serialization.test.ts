@@ -65,7 +65,7 @@ describe('operational projection serialization',()=>{
   it('locks deferred-service case before item and appointment when booking',()=>{
     const fn=body('shop-os-completion.ts','export async function updateDeferredService','export async function reconcileRepairOrder');
     const caseLock=fn.indexOf('await lockServiceCase(discoveredCaseId,client)');
-    const itemLock=fn.indexOf('select * from shop_deferred_service_items where id=$1 for update');
+    const itemLock=fn.indexOf('for update of d');
     const appointmentLock=fn.indexOf('from roviq_appointments where id=$1 for update');
     expect(caseLock).toBeGreaterThanOrEqual(0);
     expect(itemLock).toBeGreaterThan(caseLock);
