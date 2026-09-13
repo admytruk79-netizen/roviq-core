@@ -5,6 +5,9 @@ import { appendCaseEvent, finalizeExternalCaseTransition, transitionCase } from 
 import { audit } from './audit.js';
 import { setCustomerSnapshot } from './operations.js';
 
+const ZERO_DECIMAL_CURRENCIES=new Set([
+  'BIF','CLP','DJF','GNF','JPY','KMF','KRW','MGA','PYG','RWF','UGX','VND','VUV','XAF','XOF','XPF'
+]);
 const THREE_DECIMAL_CURRENCIES=new Set(['BHD','JOD','KWD','OMR','TND']);
 
 function amountEquals(a:unknown,b:unknown){
@@ -17,8 +20,10 @@ function normalizeFinancialCurrency(currency:string|undefined){
   return normalized;
 }
 
-function assertFinancialAmount(amount:number){
+function assertFinancialAmount(amount:number,currency:string){
   if(!Number.isFinite(amount)||amount<0) throw new Error('invalid_financial_amount');
+  const scaled=ZERO_DECIMAL_CURRENCIES.has(currency)?amount:amount*100;
+  if(!Number.isSafeInteger(scaled)) throw new Error('invalid_financial_amount');
 }
 
 async function assertFinancialCaseAccess(principal:Principal,caseId:string,client:Pick<PoolClient,'query'>){
@@ -50,8 +55,8 @@ async function insertFinancialAudit(client:Pick<PoolClient,'query'>,principal:Pr
 }
 
 export async function createPaymentIntent(principal: Principal, input:{ caseId:string; amount:number; currency?:string; description?:string; provider?:string; providerIntentId?:string; metadata?:Record<string,unknown> }) {
-  assertFinancialAmount(input.amount);
   const normalizedCurrency=normalizeFinancialCurrency(input.currency);
+  assertFinancialAmount(input.amount,normalizedCurrency);
   const client=await pool.connect();
   try{
     await client.query('begin');
@@ -102,6 +107,7 @@ export async function updatePaymentState(principal: Principal, paymentIntentId:s
     const current = await client.query('select * from payment_intents where id=$1 for update',[paymentIntentId]);
     if (!current.rowCount) throw new Error('payment_not_found');
     const p = current.rows[0];
+    if(input.amount!==undefined) assertFinancialAmount(input.amount,String(p.currency).toUpperCase());
 
     if(input.providerEventId){
       const prior=await client.query(`select payment_intent_id,event_type,amount from payment_events where provider_event_id=$1`,[input.providerEventId]);
@@ -151,14 +157,14 @@ export async function updatePaymentState(principal: Principal, paymentIntentId:s
 }
 
 export async function refundPayment(principal: Principal, paymentIntentId:string, amount:number, providerEventId?:string, payload:Record<string,unknown>={}) {
-  assertFinancialAmount(amount);
-  if(amount===0) throw new Error('invalid_refund_amount');
   const client = await pool.connect();
   try {
     await client.query('begin');
     const current = await client.query('select * from payment_intents where id=$1 for update',[paymentIntentId]);
     if (!current.rowCount) throw new Error('payment_not_found');
     const p = current.rows[0];
+    assertFinancialAmount(amount,String(p.currency).toUpperCase());
+    if(amount===0) throw new Error('invalid_refund_amount');
     await assertFinancialCaseAccess(principal,p.case_id,client);
     if(providerEventId){
       const prior=await client.query(`select payment_intent_id,event_type,amount from payment_events where provider_event_id=$1`,[providerEventId]);
@@ -185,8 +191,8 @@ export async function refundPayment(principal: Principal, paymentIntentId:string
 }
 
 export async function createPayout(principal: Principal, input:{ caseId:string; counterpartyActorId:string; paymentIntentId?:string; amount:number; currency?:string; provider?:string; providerPayoutId?:string; metadata?:Record<string,unknown> }) {
-  assertFinancialAmount(input.amount);
   const normalizedCurrency=normalizeFinancialCurrency(input.currency);
+  assertFinancialAmount(input.amount,normalizedCurrency);
   const client=await pool.connect();
   try{
     await client.query('begin');
@@ -227,14 +233,29 @@ export async function updatePayoutState(principal: Principal, payoutId:string, n
     if (!current.rowCount) throw new Error('payout_not_found');
     const p = current.rows[0];
     await assertFinancialCaseAccess(principal,p.case_id,client);
-    if(p.state===nextState){await client.query('commit');return p;}
-    const allowed:Record<string,string[]> = { pending:['approved','cancelled'], approved:['processing','paid','cancelled'], processing:['paid','failed'], paid:[], failed:['processing','cancelled'], cancelled:[] };
-    if (!allowed[p.state]?.includes(nextState)) throw new Error('invalid_payout_transition');
     let canonicalReference=p.provider_payout_id??null;
     if(nextState==='paid'&&externalReference){
-      if(canonicalReference&&canonicalReference!==externalReference) throw new Error('provider_payout_conflict');
-      canonicalReference=externalReference;
+      const suppliedReference=externalReference.trim();
+      if(!suppliedReference) throw new Error('payout_provider_reference_required');
+      if(canonicalReference&&canonicalReference!==suppliedReference) throw new Error('provider_payout_conflict');
+      canonicalReference=suppliedReference;
     }
+    if(nextState==='paid'&&p.provider!=='manual'&&!canonicalReference) throw new Error('payout_provider_reference_required');
+    if(p.state===nextState){
+      if(nextState==='paid'&&canonicalReference!==p.provider_payout_id){
+        try{
+          const repaired=await client.query(`update settlement_payouts set provider_payout_id=$1,updated_at=now() where id=$2 returning *`,[canonicalReference,payoutId]);
+          await client.query('commit');
+          return repaired.rows[0];
+        }catch(error){
+          if((error as {code?:string})?.code==='23505') throw new Error('provider_payout_conflict');
+          throw error;
+        }
+      }
+      await client.query('commit');return p;
+    }
+    const allowed:Record<string,string[]> = { pending:['approved','cancelled'], approved:['processing','paid','cancelled'], processing:['paid','failed'], paid:[], failed:['processing','cancelled'], cancelled:[] };
+    if (!allowed[p.state]?.includes(nextState)) throw new Error('invalid_payout_transition');
     if(nextState==='paid'&&p.payment_intent_id){
       const payment=await client.query(`select state from payment_intents where id=$1 for update`,[p.payment_intent_id]);
       if(!payment.rowCount) throw new Error('payment_not_found');
