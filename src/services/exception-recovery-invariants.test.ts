@@ -8,8 +8,8 @@ const ops=readFileSync(new URL('../../ops/src/pages/Exceptions.tsx',import.meta.
 
 describe('exception recovery invariants',()=>{
   it('filters the active queue on the server before applying its limit',()=>{
-    expect(routes).toContain("active:z.coerce.boolean().optional()");
-    expect(routes).toContain("states:query.active?['open','acknowledged','remediating']:undefined");
+    expect(routes).toContain("active:z.enum(['true','false']).transform(value=>value==='true').optional()");
+    expect(routes).toContain("states:query.active===true?['open','acknowledged','remediating']:undefined");
     expect(service).toContain("e.state=any($${params.length}::text[])");
   });
 
