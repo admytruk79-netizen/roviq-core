@@ -38,10 +38,13 @@ async function assertManageableServiceCase(principal:Principal,serviceCaseId:str
   if(!linked.rows[0]?.linked) throw httpError('service_case_tenant_mismatch',409);
 }
 async function assertOperationalServiceCase(serviceCaseId:string|null|undefined,db:Queryable,intent:'hold'|'confirm'){
-  if(!serviceCaseId)return; await syncOperationalConstraints(serviceCaseId,db); const projected=await db.query(`select constraint_type,status,details from case_constraints where service_case_id=$1`,[serviceCaseId]);
-  const constraints:ServiceabilityConstraint[]=projected.rows.filter((row:any)=>intent==='confirm'||row.constraint_type!=='customer_time').map((row:any)=>({type:row.constraint_type,status:row.status,required:true,details:row.details??{}}));
+  if(!serviceCaseId)return;
+  if(intent==='hold') return;
+  await syncOperationalConstraints(serviceCaseId,db);
+  const projected=await db.query(`select constraint_type,status,details from case_constraints where service_case_id=$1`,[serviceCaseId]);
+  const constraints:ServiceabilityConstraint[]=projected.rows.map((row:any)=>({type:row.constraint_type,status:row.status,required:true,details:row.details??{}}));
   const decision=evaluateServiceability({capacity:{capacityState:'available',confidence:'roviq_native',syncState:'current',capacityUnits:1},constraints,requirementsProjected:true,allowManualVerified:false,allowStaleHold:false});
-  const allowed=intent==='confirm'?decision.confirmable:decision.holdable;if(!allowed) throw httpError(intent==='confirm'?'service_case_not_confirmable':'service_case_not_bookable',409);
+  if(!decision.confirmable) throw httpError('service_case_not_confirmable',409);
 }
 async function assertConfirmableServiceCase(serviceCaseId:string|null|undefined,db:Queryable){await assertOperationalServiceCase(serviceCaseId,db,'confirm');}
 async function assertBookableServiceCase(serviceCaseId:string|null|undefined,db:Queryable){await assertOperationalServiceCase(serviceCaseId,db,'hold');}
