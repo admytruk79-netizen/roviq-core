@@ -30,7 +30,7 @@ export async function listDeferredAppointmentChoices(principal:Principal,input:{
             and d.status in ('open','reminded')
             and d.service_case_id is not null
             and d.service_case_id=a.service_case_id
-            and (l.service_category is null or l.service_category=a.service_category)
+            and (l.service_category is null or a.service_category is null or l.service_category=a.service_category)
         )
       order by a.starts_at,a.id
       limit $5`,[scope.organizationId,scope.locationId,input.afterStart??null,input.afterId??null,limit+1]);
