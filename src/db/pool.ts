@@ -22,7 +22,7 @@ pool.on('error', (error) => {
 // connection errors are retried; anything else (constraint violations, syntax errors,
 // application-thrown errors) is rethrown immediately.
 const RETRYABLE_CODES = new Set(['ECONNRESET', 'ETIMEDOUT', 'EPIPE', '57P01', '08006', '08003']);
-function isRetryableConnectionError(error: unknown): boolean {
+export function isRetryableConnectionError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   const code = (error as NodeJS.ErrnoException).code;
   if (code && RETRYABLE_CODES.has(code)) return true;
