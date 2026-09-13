@@ -47,7 +47,6 @@ async function setupDeferredBookingRace(){
   });
   await updateRepairOrder(admin,order.id,{action:'submit_estimate'});
   await updateRepairOrderLine(admin,order.id,deferredLine.line.id,{approvalStatus:'deferred'});
-  await updateRepairOrder(admin,order.id,{action:'approve'});
   const deferred=await deferRepairOrderLine(admin,{
     repairOrderId:order.id,repairOrderLineId:deferredLine.line.id,severity:'attention',reason:'Customer postponed repair'
   });
