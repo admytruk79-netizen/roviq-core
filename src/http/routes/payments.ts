@@ -80,6 +80,7 @@ export async function paymentRoutes(app: FastifyInstance) {
       const m=errorMessage(e,'payment_error');
       if (m==='forbidden') return reply.code(403).send({ error:m });
       if (m==='payment_not_found'||m==='case_not_found') return reply.code(404).send({ error:m });
+      if (m==='invalid_financial_amount') return reply.code(422).send({ error:m });
       if (['invalid_payment_transition','provider_event_conflict','capture_amount_mismatch'].includes(m)) return reply.code(409).send({ error:m });
       throw e;
     }
@@ -93,6 +94,7 @@ export async function paymentRoutes(app: FastifyInstance) {
       const m=errorMessage(e,'refund_error');
       if (m==='forbidden') return reply.code(403).send({ error:m });
       if (m==='payment_not_found') return reply.code(404).send({ error:m });
+      if (m==='invalid_financial_amount') return reply.code(422).send({ error:m });
       if (['refund_not_allowed','invalid_refund_amount','provider_event_conflict'].includes(m)) return reply.code(409).send({ error:m });
       throw e;
     }
@@ -119,7 +121,7 @@ export async function paymentRoutes(app: FastifyInstance) {
       const m=errorMessage(e,'payout_error');
       if (m==='forbidden') return reply.code(403).send({ error:m });
       if (['payout_not_found','payment_not_found'].includes(m)) return reply.code(404).send({ error:m });
-      if (['invalid_payout_transition','provider_payout_conflict','payout_payment_not_funded'].includes(m)) return reply.code(409).send({ error:m });
+      if (['invalid_payout_transition','provider_payout_conflict','payout_payment_not_funded','payout_provider_reference_required'].includes(m)) return reply.code(409).send({ error:m });
       throw e;
     }
   });
