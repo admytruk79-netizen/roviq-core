@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireRole } from '../middleware/principal.js';
 import { listDeferredAppointmentChoices } from '../../services/shop-os-deferred-appointment-choices.js';
+import { listWaitlistAppointmentChoices } from '../../services/shop-os-waitlist.js';
 
 export async function shopOsDeferredAppointmentChoiceRoutes(app:FastifyInstance){
   const allowed={preHandler:requireRole('admin','partner')};
@@ -19,5 +20,10 @@ export async function shopOsDeferredAppointmentChoiceRoutes(app:FastifyInstance)
       }
     }).parse(req.query);
     return await listDeferredAppointmentChoices(req.principal,query);
+  });
+
+  app.get('/api/shop-os/waitlist/:entryId/appointment-choices',allowed,async(req)=>{
+    const params=z.object({entryId:z.string().uuid()}).parse(req.params);
+    return await listWaitlistAppointmentChoices(req.principal,params.entryId);
   });
 }
