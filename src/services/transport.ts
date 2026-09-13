@@ -165,7 +165,7 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
     if (status === 'accepted') {
       const c = await client.query('select state from service_cases where id=$1',[caseId]);
       if(c.rows[0]?.state==='tow_pending'){
-        await transitionCase(principal,caseId,'tow_in_progress',{dispatchId},client);
+        await transitionCase(principal,caseId,'tow_in_progress',{dispatchId},client,'transport_dispatch');
         transitionedToTowInProgress=true;
       }
     } else if (status === 'declined') {
