@@ -116,12 +116,30 @@ function serviceabilityTrace(capability:string,serviceability:SelectionServiceab
   };
 }
 
+async function lockProviderReadiness(actorId:string,capability:string,client:PoolClient){
+  const actor=await client.query(`select id from actors where id=$1 for update`,[actorId]);
+  if(!actor.rowCount) return;
+  await client.query(`
+    select ac.id
+      from actor_capabilities ac
+      join capabilities c on c.id=ac.capability_id
+     where ac.actor_id=$1
+       and c.capability_code=$2
+     order by ac.id
+     for update of ac`,[actorId,capability]);
+}
+
 async function evaluateAndReserveSelection(
   caseId:string,
   actorId:string,
   capability:string,
   client:PoolClient
 ):Promise<SelectionServiceability>{
+  // Provider readiness is part of the authoritative selection transaction.
+  // Lock the provider first; the FK on actor_capabilities also makes concurrent
+  // capability inserts serialize behind this row lock, while existing matching
+  // capability assignments are locked explicitly before the eligibility read.
+  await lockProviderReadiness(actorId,capability,client);
   const serviceability=await evaluateActorServiceability(caseId,actorId,capability,'confirm',client);
   if(!serviceabilityAllows('confirm',serviceability.decision)) throw actorNotServiceable(serviceability.decision.reasons);
   if(serviceability.source!=='canonical_capacity'||!serviceability.capacityWindowId) return serviceability;
