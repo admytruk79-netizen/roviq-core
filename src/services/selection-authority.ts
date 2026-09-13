@@ -120,12 +120,12 @@ async function lockProviderReadiness(actorId:string,capability:string,client:Poo
   const actor=await client.query(`select id from actors where id=$1 for update`,[actorId]);
   if(!actor.rowCount) return;
   await client.query(`
-    select ac.id
+    select ac.actor_id,ac.capability_id
       from actor_capabilities ac
       join capabilities c on c.id=ac.capability_id
      where ac.actor_id=$1
        and c.capability_code=$2
-     order by ac.id
+     order by ac.capability_id
      for update of ac`,[actorId,capability]);
 }
 
