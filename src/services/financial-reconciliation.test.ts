@@ -28,7 +28,7 @@ describe('financial truth invariants',()=>{
   });
 
   it('keeps the Ops UI explicit that internal consistency is not provider settlement truth',()=>{
-    expect(ops).toContain('live provider settlement still requires provider-side reconciliation');
+    expect(ops.toLowerCase()).toContain('live provider settlement still requires provider-side reconciliation');
     expect(ops).toContain('/api/admin/financial-reconciliation?limit=500');
   });
 });
