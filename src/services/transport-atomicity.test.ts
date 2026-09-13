@@ -18,12 +18,12 @@ describe('transport transaction invariants',()=>{
 
     expect(insert).toBeGreaterThanOrEqual(0);
     expect(transition).toBeGreaterThan(insert);
-    expect(body.slice(transition,projection)).toContain(',client)');
+    expect(body.slice(transition,projection)).toContain(',client');
     expect(projection).toBeGreaterThan(transition);
     expect(commit).toBeGreaterThan(projection);
   });
 
-  it('performs accepted-to-tow-in-progress transition in the transport transaction',()=>{
+  it('performs accepted-to-tow-in-progress transition in the transport transaction with transport authority',()=>{
     const start=transport.indexOf('export async function updateTransportStatus');
     const end=transport.indexOf('export async function getTransportDispatch',start);
     const body=transport.slice(start,end);
@@ -32,7 +32,7 @@ describe('transport transaction invariants',()=>{
     const commit=body.indexOf("client.query('commit')");
 
     expect(transition).toBeGreaterThanOrEqual(0);
-    expect(body.slice(transition,projection)).toContain(',client)');
+    expect(body.slice(transition,projection)).toContain("client,'transport_dispatch'");
     expect(projection).toBeGreaterThan(transition);
     expect(commit).toBeGreaterThan(projection);
   });
