@@ -71,15 +71,30 @@ describe('financial provider replay and concurrency invariants',()=>{
     ]);
     expect(results.every(result=>result.status==='fulfilled')).toBe(true);
 
-    const events=await pool.query(`select count(*)::int as n from payment_events where provider_event_id=$1`,[providerEventId]);
+    const events=await pool.query(`select count(*)::int as n from payment_events where provider='manual' and provider_event_id=$1`,[providerEventId]);
     const ledger=await pool.query(`select count(*)::int as n from ledger_entries where payment_intent_id=$1 and entry_type='payment_capture'`,[payment.id]);
     expect(Number(events.rows[0].n)).toBe(1);
     expect(Number(ledger.rows[0].n)).toBe(1);
   });
 
-  it('rejects a provider event replayed against a different payment',async()=>{
-    const first=await createPaymentIntent(admin,{caseId,amount:80,currency:'USD'});
-    const second=await createPaymentIntent(admin,{caseId,amount:90,currency:'USD'});
+  it('keeps identical event IDs independent across provider namespaces',async()=>{
+    const alpha=await createPaymentIntent(admin,{caseId,amount:81,currency:'USD',provider:'alpha'});
+    const beta=await createPaymentIntent(admin,{caseId,amount:82,currency:'USD',provider:'beta'});
+    const providerEventId=`evt-shared-${Date.now()}-${Math.random()}`;
+
+    await updatePaymentState(admin,alpha.id,'authorized',{providerEventId});
+    await updatePaymentState(admin,beta.id,'authorized',{providerEventId});
+
+    const events=await pool.query(`select provider,payment_intent_id from payment_events where provider_event_id=$1 order by provider`,[providerEventId]);
+    expect(events.rows).toEqual([
+      expect.objectContaining({provider:'alpha',payment_intent_id:alpha.id}),
+      expect.objectContaining({provider:'beta',payment_intent_id:beta.id})
+    ]);
+  });
+
+  it('rejects a provider event replayed against a different payment in the same provider namespace',async()=>{
+    const first=await createPaymentIntent(admin,{caseId,amount:80,currency:'USD',provider:'same-provider'});
+    const second=await createPaymentIntent(admin,{caseId,amount:90,currency:'USD',provider:'same-provider'});
     const providerEventId=`evt-conflict-${Date.now()}-${Math.random()}`;
 
     await updatePaymentState(admin,first.id,'authorized',{providerEventId});
@@ -96,7 +111,7 @@ describe('financial provider replay and concurrency invariants',()=>{
     const replay=await refundPayment(admin,payment.id,50,refundEventId);
     expect(replay.id).toBe(first.id);
 
-    const events=await pool.query(`select count(*)::int as n from payment_events where provider_event_id=$1`,[refundEventId]);
+    const events=await pool.query(`select count(*)::int as n from payment_events where provider='manual' and provider_event_id=$1`,[refundEventId]);
     const ledger=await pool.query(`select count(*)::int as n from ledger_entries where payment_intent_id=$1 and entry_type='refund' and external_reference=$2`,[payment.id,refundEventId]);
     expect(Number(events.rows[0].n)).toBe(1);
     expect(Number(ledger.rows[0].n)).toBe(1);
