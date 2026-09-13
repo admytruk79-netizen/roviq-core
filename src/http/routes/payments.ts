@@ -6,12 +6,31 @@ import { createPaymentIntent, createPayout, refundPayment, updatePaymentState, u
 import { getFinancialReconciliation } from '../../services/financial-reconciliation.js';
 import { loadCaseForPrincipal } from '../../services/case-access.js';
 
+function errorMessage(error:unknown,fallback:string){
+  return error instanceof Error?error.message:fallback;
+}
+
+async function requireFinancialCaseAccess(principal:Parameters<typeof loadCaseForPrincipal>[0],caseId:string,reply:any){
+  try{
+    const serviceCase=await loadCaseForPrincipal(principal,caseId);
+    if(!serviceCase){reply.code(404).send({error:'case_not_found'});return false;}
+    return true;
+  }catch(error){
+    if(error instanceof Error&&error.message==='forbidden'){
+      reply.code(403).send({error:'forbidden'});
+      return false;
+    }
+    throw error;
+  }
+}
+
 export async function paymentRoutes(app: FastifyInstance) {
   app.post('/api/admin/payments', { preHandler: requireRole('admin') }, async (req, reply) => {
     const body = z.object({ caseId:z.string().uuid(), amount:z.number().nonnegative(), currency:z.string().length(3).default('USD'), description:z.string().optional(), provider:z.string().default('manual'), providerIntentId:z.string().optional(), metadata:z.record(z.unknown()).optional() }).parse(req.body);
     try { return reply.code(201).send({ payment:await createPaymentIntent(req.principal,body) }); }
     catch (e) {
-      const message=e instanceof Error?e.message:'payment_error';
+      const message=errorMessage(e,'payment_error');
+      if (message==='forbidden') return reply.code(403).send({ error:message });
       if (message==='case_not_found') return reply.code(404).send({ error:message });
       if (['quote_not_approved','provider_intent_conflict'].includes(message)) return reply.code(409).send({ error:message });
       throw e;
@@ -36,9 +55,10 @@ export async function paymentRoutes(app: FastifyInstance) {
     const body = z.object({ state:z.enum(['requires_action','authorized','captured','cancelled','failed']), amount:z.number().positive().optional(), providerEventId:z.string().optional(), payload:z.record(z.unknown()).optional() }).parse(req.body);
     try { return { payment:await updatePaymentState(req.principal,id,body.state,{ amount:body.amount,providerEventId:body.providerEventId,payload:body.payload }) }; }
     catch (e) {
-      const m=e instanceof Error?e.message:'payment_error';
+      const m=errorMessage(e,'payment_error');
+      if (m==='forbidden') return reply.code(403).send({ error:m });
       if (m==='payment_not_found'||m==='case_not_found') return reply.code(404).send({ error:m });
-      if (['invalid_payment_transition','provider_event_conflict'].includes(m)) return reply.code(409).send({ error:m });
+      if (['invalid_payment_transition','provider_event_conflict','capture_amount_mismatch'].includes(m)) return reply.code(409).send({ error:m });
       throw e;
     }
   });
@@ -48,7 +68,8 @@ export async function paymentRoutes(app: FastifyInstance) {
     const body = z.object({ amount:z.number().positive(), providerEventId:z.string().optional(), payload:z.record(z.unknown()).optional() }).parse(req.body);
     try { return { payment:await refundPayment(req.principal,id,body.amount,body.providerEventId,body.payload ?? {}) }; }
     catch (e) {
-      const m=e instanceof Error?e.message:'refund_error';
+      const m=errorMessage(e,'refund_error');
+      if (m==='forbidden') return reply.code(403).send({ error:m });
       if (m==='payment_not_found') return reply.code(404).send({ error:m });
       if (['refund_not_allowed','invalid_refund_amount','provider_event_conflict'].includes(m)) return reply.code(409).send({ error:m });
       throw e;
@@ -59,7 +80,8 @@ export async function paymentRoutes(app: FastifyInstance) {
     const body = z.object({ caseId:z.string().uuid(), counterpartyActorId:z.string().uuid(), paymentIntentId:z.string().uuid().optional(), amount:z.number().nonnegative(), currency:z.string().length(3).default('USD'), provider:z.string().default('manual'), providerPayoutId:z.string().optional(), metadata:z.record(z.unknown()).optional() }).parse(req.body);
     try{return reply.code(201).send({ payout:await createPayout(req.principal,body) });}
     catch(e){
-      const m=e instanceof Error?e.message:'payout_error';
+      const m=errorMessage(e,'payout_error');
+      if(m==='forbidden')return reply.code(403).send({error:m});
       if(['case_not_found','payment_not_found'].includes(m))return reply.code(404).send({error:m});
       if(['payout_counterparty_invalid','payout_payment_case_mismatch','payout_currency_mismatch','provider_payout_conflict'].includes(m))return reply.code(409).send({error:m});
       throw e;
@@ -70,7 +92,13 @@ export async function paymentRoutes(app: FastifyInstance) {
     const { id } = req.params as { id:string };
     const body = z.object({ state:z.enum(['approved','processing','paid','failed','cancelled']), externalReference:z.string().optional() }).parse(req.body);
     try { return { payout:await updatePayoutState(req.principal,id,body.state,body.externalReference) }; }
-    catch (e) { const m=e instanceof Error?e.message:'payout_error'; if (m==='payout_not_found') return reply.code(404).send({ error:m }); if (m==='invalid_payout_transition') return reply.code(409).send({ error:m }); throw e; }
+    catch (e) {
+      const m=errorMessage(e,'payout_error');
+      if (m==='forbidden') return reply.code(403).send({ error:m });
+      if (['payout_not_found','payment_not_found'].includes(m)) return reply.code(404).send({ error:m });
+      if (['invalid_payout_transition','provider_payout_conflict','payout_payment_not_funded'].includes(m)) return reply.code(409).send({ error:m });
+      throw e;
+    }
   });
 
   app.get('/api/partners/me/payouts', { preHandler: requireRole('partner','diagnostic','tow','parts','fleet') }, async (req) => {
@@ -78,8 +106,9 @@ export async function paymentRoutes(app: FastifyInstance) {
     return { payouts:r.rows };
   });
 
-  app.get('/api/admin/cases/:id/financials', { preHandler: requireRole('admin') }, async (req) => {
+  app.get('/api/admin/cases/:id/financials', { preHandler: requireRole('admin') }, async (req, reply) => {
     const { id } = req.params as { id:string };
+    if(!await requireFinancialCaseAccess(req.principal,id,reply)) return;
     const [payments,payouts,ledger] = await Promise.all([
       pool.query('select * from payment_intents where case_id=$1 order by created_at asc',[id]),
       pool.query('select * from settlement_payouts where case_id=$1 order by created_at asc',[id]),
@@ -88,8 +117,13 @@ export async function paymentRoutes(app: FastifyInstance) {
     return { payments:payments.rows,payouts:payouts.rows,ledger:ledger.rows };
   });
 
-  app.get('/api/admin/financial-reconciliation', { preHandler: requireRole('admin') }, async (req) => {
+  app.get('/api/admin/financial-reconciliation', { preHandler: requireRole('admin') }, async (req, reply) => {
     const query=z.object({limit:z.coerce.number().int().positive().max(500).default(200)}).parse(req.query??{});
-    return getFinancialReconciliation(req.principal,query.limit);
+    try{return await getFinancialReconciliation(req.principal,query.limit);}
+    catch(error){
+      const m=errorMessage(error,'financial_reconciliation_error');
+      if(['financial_admin_only','financial_global_admin_only','forbidden'].includes(m)) return reply.code(403).send({error:m});
+      throw error;
+    }
   });
 }
