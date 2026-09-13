@@ -1,4 +1,4 @@
-import { pool } from '../db/pool.js';
+import { isRetryableConnectionError, pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
 
 export type FinancialDiscrepancy = {
@@ -19,14 +19,12 @@ function forbidden(message:string){
   return error;
 }
 
-export async function getFinancialReconciliation(principal:Principal,limit=200){
-  if(principal.role!=='admin')throw forbidden('financial_admin_only');
-  if(principal.actorId)throw forbidden('financial_global_admin_only');
-  const bounded=Math.max(1,Math.min(500,limit));
+async function reconcileSnapshot(bounded:number){
   const client=await pool.connect();
-
+  let transactionStarted=false;
   try{
     await client.query('begin isolation level repeatable read read only');
+    transactionStarted=true;
     const payments=await client.query(`
       select p.id,p.case_id,p.provider,p.provider_intent_id,p.amount,p.currency,p.state,
         coalesce((select sum(pe.amount) from payment_events pe where pe.payment_intent_id=p.id and pe.event_type='REFUND'),0)::numeric as refunded_amount,
@@ -89,8 +87,8 @@ export async function getFinancialReconciliation(principal:Principal,limit=200){
       if(row.state!=='paid'&&ledger!==0){
         discrepancies.push({kind:'premature_payout_ledger_entry',severity:'critical',caseId:row.case_id,paymentIntentId:row.payment_intent_id,payoutId:row.id,provider:row.provider,providerReference:row.provider_payout_id,message:'A provider payout ledger entry exists before the payout is paid.',observed:{state:row.state,payoutLedgerAmount:ledger,currency:row.currency}});
       }
-      if(row.payment_intent_id&&row.payment_state&&['created','requires_action','authorized','cancelled','failed'].includes(row.payment_state)){
-        discrepancies.push({kind:'payout_linked_to_uncaptured_payment',severity:'critical',caseId:row.case_id,paymentIntentId:row.payment_intent_id,payoutId:row.id,provider:row.provider,providerReference:row.provider_payout_id,message:'Payout is linked to a payment that has not been captured.',observed:{payoutState:row.state,paymentState:row.payment_state}});
+      if(row.payment_intent_id&&row.payment_state&&['created','requires_action','authorized','cancelled','failed','refunded'].includes(row.payment_state)){
+        discrepancies.push({kind:'payout_linked_to_uncaptured_payment',severity:'critical',caseId:row.case_id,paymentIntentId:row.payment_intent_id,payoutId:row.id,provider:row.provider,providerReference:row.provider_payout_id,message:'Payout is linked to a payment with no remaining captured funding.',observed:{payoutState:row.state,paymentState:row.payment_state}});
       }
     }
 
@@ -110,11 +108,29 @@ export async function getFinancialReconciliation(principal:Principal,limit=200){
       discrepancies
     };
     await client.query('commit');
+    transactionStarted=false;
     return result;
   }catch(error){
-    await client.query('rollback');
+    if(transactionStarted){
+      try{await client.query('rollback');}catch(rollbackError){
+        console.warn('financial_reconciliation_rollback_failed',{message:rollbackError instanceof Error?rollbackError.message:String(rollbackError)});
+      }
+    }
     throw error;
   }finally{
     client.release();
+  }
+}
+
+export async function getFinancialReconciliation(principal:Principal,limit=200){
+  if(principal.role!=='admin')throw forbidden('financial_admin_only');
+  if(principal.actorId)throw forbidden('financial_global_admin_only');
+  const bounded=Math.max(1,Math.min(500,limit));
+  try{
+    return await reconcileSnapshot(bounded);
+  }catch(error){
+    if(!isRetryableConnectionError(error)) throw error;
+    console.warn('financial_reconciliation_transient_retry',{message:error instanceof Error?error.message:String(error)});
+    return await reconcileSnapshot(bounded);
   }
 }
