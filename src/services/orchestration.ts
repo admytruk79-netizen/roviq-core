@@ -17,6 +17,7 @@ export type CaseState =
   | 'repair_in_progress' | 'parts_pending' | 'payment_pending' | 'completed' | 'cancelled';
 
 export type SelectionMode = 'customer_choice' | 'dealer_controlled' | 'auto_dispatch' | 'ops_override';
+export type TransitionAuthority = 'transport_dispatch';
 
 export async function createServiceCase(principal: Principal, input: {
   demandId?: string; marketId?: string; locationId?: string; priority?: string;
@@ -115,7 +116,8 @@ export async function transitionCase(
   caseId: string,
   toState: CaseState,
   metadata: Record<string, unknown> = {},
-  transactionClient?:PoolClient
+  transactionClient?:PoolClient,
+  authority?:TransitionAuthority
 ) {
   const client = transactionClient ?? await pool.connect();
   const ownsTransaction = !transactionClient;
@@ -139,7 +141,8 @@ export async function transitionCase(
         'select * from case_transition_rules where from_state=$1 and to_state=$2', [c.state,toState]
       );
       if (!rule.rowCount) throw new Error('invalid_case_transition');
-      if (!rule.rows[0].allowed_roles.includes(principal.role)) throw new Error('transition_forbidden');
+      const transportOwnedStart=authority==='transport_dispatch'&&c.state==='tow_pending'&&toState==='tow_in_progress';
+      if (!transportOwnedStart&&!rule.rows[0].allowed_roles.includes(principal.role)) throw new Error('transition_forbidden');
     }
     const terminalSql = toState === 'completed' ? ', completed_at=now()' : toState === 'cancelled' ? ', cancelled_at=now()' : '';
     const updated = await client.query(
