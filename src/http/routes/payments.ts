@@ -49,6 +49,7 @@ export async function paymentRoutes(app: FastifyInstance) {
       const message=errorMessage(e,'payment_error');
       if (message==='forbidden') return reply.code(403).send({ error:message });
       if (message==='case_not_found') return reply.code(404).send({ error:message });
+      if (['currency_precision_unsupported','invalid_financial_amount'].includes(message)) return reply.code(422).send({ error:message });
       if (['quote_not_approved','provider_intent_conflict'].includes(message)) return reply.code(409).send({ error:message });
       throw e;
     }
@@ -104,6 +105,7 @@ export async function paymentRoutes(app: FastifyInstance) {
       const m=errorMessage(e,'payout_error');
       if(m==='forbidden')return reply.code(403).send({error:m});
       if(['case_not_found','payment_not_found'].includes(m))return reply.code(404).send({error:m});
+      if(['currency_precision_unsupported','invalid_financial_amount'].includes(m))return reply.code(422).send({error:m});
       if(['payout_counterparty_invalid','payout_payment_case_mismatch','payout_currency_mismatch','provider_payout_conflict'].includes(m))return reply.code(409).send({error:m});
       throw e;
     }
@@ -112,11 +114,6 @@ export async function paymentRoutes(app: FastifyInstance) {
   app.post('/api/admin/payouts/:id/state', { preHandler: requireRole('admin') }, async (req, reply) => {
     const { id } = req.params as { id:string };
     const body = z.object({ state:z.enum(['approved','processing','paid','failed','cancelled']), externalReference:z.string().optional() }).parse(req.body);
-    if(body.state==='paid'){
-      const funding=await pool.query(`select s.payment_intent_id,p.state as payment_state from settlement_payouts s left join payment_intents p on p.id=s.payment_intent_id where s.id=$1`,[id]);
-      if(!funding.rowCount) return reply.code(404).send({error:'payout_not_found'});
-      if(funding.rows[0].payment_intent_id&&funding.rows[0].payment_state==='refunded') return reply.code(409).send({error:'payout_payment_not_funded'});
-    }
     try { return { payout:await updatePayoutState(req.principal,id,body.state,body.externalReference) }; }
     catch (e) {
       const m=errorMessage(e,'payout_error');
