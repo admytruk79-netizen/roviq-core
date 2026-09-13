@@ -17,6 +17,13 @@ jobs:
   worker-check:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/roviq_unit_test
+      ADMIN_API_KEY: ci-admin-key
+      JWT_SECRET: ci-worker-check-jwt-secret-32-characters-minimum
+      JWT_ISSUER: roviq-core
+      JWT_AUDIENCE: roviq-apps
+      ALLOW_DEV_HEADERS: 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
