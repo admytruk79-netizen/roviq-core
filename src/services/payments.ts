@@ -14,6 +14,11 @@ function amountEquals(a:unknown,b:unknown){
   return Number(a)===Number(b);
 }
 
+function normalizeProvider(provider:unknown){
+  const normalized=String(provider??'manual').trim().toLowerCase();
+  return normalized||'manual';
+}
+
 function normalizeFinancialCurrency(currency:string|undefined){
   const normalized=(currency??'USD').toUpperCase();
   if(THREE_DECIMAL_CURRENCIES.has(normalized)) throw new Error('currency_precision_unsupported');
@@ -57,6 +62,7 @@ async function insertFinancialAudit(client:Pick<PoolClient,'query'>,principal:Pr
 
 export async function createPaymentIntent(principal: Principal, input:{ caseId:string; amount:number; currency?:string; description?:string; provider?:string; providerIntentId?:string; metadata?:Record<string,unknown> }) {
   const normalizedCurrency=normalizeFinancialCurrency(input.currency);
+  const normalizedProvider=normalizeProvider(input.provider);
   assertFinancialAmount(input.amount,normalizedCurrency);
   const client=await pool.connect();
   try{
@@ -73,7 +79,7 @@ export async function createPaymentIntent(principal: Principal, input:{ caseId:s
     }
 
     if(input.providerIntentId){
-      const existing=await client.query(`select * from payment_intents where provider=$1 and provider_intent_id=$2`,[input.provider??'manual',input.providerIntentId]);
+      const existing=await client.query(`select * from payment_intents where provider=$1 and provider_intent_id=$2`,[normalizedProvider,input.providerIntentId]);
       if(existing.rowCount){
         const row=existing.rows[0];
         if(row.case_id!==input.caseId||!amountEquals(row.amount,input.amount)||row.currency!==normalizedCurrency) throw new Error('provider_intent_conflict');
@@ -83,7 +89,7 @@ export async function createPaymentIntent(principal: Principal, input:{ caseId:s
     }
 
     const r = await client.query(`insert into payment_intents(case_id,customer_actor_id,provider,provider_intent_id,amount,currency,description,metadata) values($1,$2,$3,$4,$5,$6,$7,$8) returning *`,[
-      input.caseId,customerActorId,input.provider ?? 'manual',input.providerIntentId ?? null,input.amount,normalizedCurrency,input.description ?? null,JSON.stringify(input.metadata ?? {})
+      input.caseId,customerActorId,normalizedProvider,input.providerIntentId ?? null,input.amount,normalizedCurrency,input.description ?? null,JSON.stringify(input.metadata ?? {})
     ]);
     const p = r.rows[0];
     await appendCaseEvent(input.caseId,'PAYMENT_INTENT_CREATED',principal,{ paymentIntentId:p.id, amount:p.amount, currency:p.currency },client);
@@ -108,10 +114,11 @@ export async function updatePaymentState(principal: Principal, paymentIntentId:s
     const current = await client.query('select * from payment_intents where id=$1 for update',[paymentIntentId]);
     if (!current.rowCount) throw new Error('payment_not_found');
     const p = current.rows[0];
+    const eventProvider=normalizeProvider(p.provider);
     if(input.amount!==undefined) assertFinancialAmount(input.amount,String(p.currency).toUpperCase());
 
     if(input.providerEventId){
-      const prior=await client.query(`select payment_intent_id,event_type,amount from payment_events where provider_event_id=$1`,[input.providerEventId]);
+      const prior=await client.query(`select payment_intent_id,event_type,amount from payment_events where provider=$1 and provider_event_id=$2`,[eventProvider,input.providerEventId]);
       if(prior.rowCount){
         const event=prior.rows[0];
         if(event.payment_intent_id!==paymentIntentId||event.event_type!==nextState.toUpperCase()||(input.amount!==undefined&&event.amount!==null&&!amountEquals(event.amount,input.amount))) throw new Error('provider_event_conflict');
@@ -128,9 +135,9 @@ export async function updatePaymentState(principal: Principal, paymentIntentId:s
     const canonicalAmount=nextState==='captured'?Number(p.amount):(input.amount??null);
     const stamp = nextState === 'authorized' ? ',authorized_at=now()' : nextState === 'captured' ? ',captured_at=now()' : nextState === 'cancelled' ? ',cancelled_at=now()' : '';
     const updated = await client.query(`update payment_intents set state=$1,updated_at=now() ${stamp} where id=$2 returning *`,[nextState,paymentIntentId]);
-    await client.query(`insert into payment_events(payment_intent_id,event_type,amount,provider_event_id,payload) values($1,$2,$3,$4,$5)`,[paymentIntentId,nextState.toUpperCase(),canonicalAmount,input.providerEventId ?? null,JSON.stringify(input.payload ?? {})]);
+    await client.query(`insert into payment_events(payment_intent_id,event_type,amount,provider,provider_event_id,payload) values($1,$2,$3,$4,$5,$6)`,[paymentIntentId,nextState.toUpperCase(),canonicalAmount,eventProvider,input.providerEventId ?? null,JSON.stringify(input.payload ?? {})]);
     if (nextState === 'captured') {
-      await client.query(`insert into ledger_entries(case_id,payment_intent_id,entry_type,account_code,amount,currency,state,external_reference,metadata) values($1,$2,'payment_capture','customer_receivable',$3,$4,'posted',$5,$6)`,[p.case_id,paymentIntentId,p.amount,p.currency,input.providerEventId ?? null,JSON.stringify({ provider:p.provider })]);
+      await client.query(`insert into ledger_entries(case_id,payment_intent_id,entry_type,account_code,amount,currency,state,external_reference,metadata) values($1,$2,'payment_capture','customer_receivable',$3,$4,'posted',$5,$6)`,[p.case_id,paymentIntentId,p.amount,p.currency,input.providerEventId ?? null,JSON.stringify({ provider:eventProvider })]);
       capturedCaseId=p.case_id;
     }
     await appendCaseEvent(p.case_id,`PAYMENT_${nextState.toUpperCase()}`,principal,{ paymentIntentId, amount:canonicalAmount??p.amount },client);
@@ -164,11 +171,12 @@ export async function refundPayment(principal: Principal, paymentIntentId:string
     const current = await client.query('select * from payment_intents where id=$1 for update',[paymentIntentId]);
     if (!current.rowCount) throw new Error('payment_not_found');
     const p = current.rows[0];
+    const eventProvider=normalizeProvider(p.provider);
     assertFinancialAmount(amount,String(p.currency).toUpperCase());
     if(amount===0) throw new Error('invalid_refund_amount');
     await assertFinancialCaseAccess(principal,p.case_id,client);
     if(providerEventId){
-      const prior=await client.query(`select payment_intent_id,event_type,amount from payment_events where provider_event_id=$1`,[providerEventId]);
+      const prior=await client.query(`select payment_intent_id,event_type,amount from payment_events where provider=$1 and provider_event_id=$2`,[eventProvider,providerEventId]);
       if(prior.rowCount){
         const event=prior.rows[0];
         if(event.payment_intent_id!==paymentIntentId||event.event_type!=='REFUND'||!amountEquals(event.amount,amount)) throw new Error('provider_event_conflict');
@@ -182,8 +190,8 @@ export async function refundPayment(principal: Principal, paymentIntentId:string
     if (totalRefunded > Number(p.amount)) throw new Error('invalid_refund_amount');
     const nextState = totalRefunded === Number(p.amount) ? 'refunded' : 'partially_refunded';
     const updated = await client.query('update payment_intents set state=$1,updated_at=now() where id=$2 returning *',[nextState,paymentIntentId]);
-    await client.query(`insert into payment_events(payment_intent_id,event_type,amount,provider_event_id,payload) values($1,'REFUND',$2,$3,$4)`,[paymentIntentId,amount,providerEventId ?? null,JSON.stringify(payload)]);
-    await client.query(`insert into ledger_entries(case_id,payment_intent_id,entry_type,account_code,amount,currency,state,external_reference,metadata) values($1,$2,'refund','customer_refund',$3,$4,'posted',$5,$6)`,[p.case_id,paymentIntentId,-Math.abs(amount),p.currency,providerEventId ?? null,JSON.stringify({ provider:p.provider })]);
+    await client.query(`insert into payment_events(payment_intent_id,event_type,amount,provider,provider_event_id,payload) values($1,'REFUND',$2,$3,$4,$5)`,[paymentIntentId,amount,eventProvider,providerEventId ?? null,JSON.stringify(payload)]);
+    await client.query(`insert into ledger_entries(case_id,payment_intent_id,entry_type,account_code,amount,currency,state,external_reference,metadata) values($1,$2,'refund','customer_refund',$3,$4,'posted',$5,$6)`,[p.case_id,paymentIntentId,-Math.abs(amount),p.currency,providerEventId ?? null,JSON.stringify({ provider:eventProvider })]);
     await appendCaseEvent(p.case_id,'PAYMENT_REFUNDED',principal,{ paymentIntentId, amount, state:nextState },client);
     await client.query('commit');
     await audit(principal,'refund_payment','payment_intent',paymentIntentId,'refund',{ amount });
@@ -193,6 +201,7 @@ export async function refundPayment(principal: Principal, paymentIntentId:string
 
 export async function createPayout(principal: Principal, input:{ caseId:string; counterpartyActorId:string; paymentIntentId?:string; amount:number; currency?:string; provider?:string; providerPayoutId?:string; metadata?:Record<string,unknown> }) {
   const normalizedCurrency=normalizeFinancialCurrency(input.currency);
+  const normalizedProvider=normalizeProvider(input.provider);
   assertFinancialAmount(input.amount,normalizedCurrency);
   const client=await pool.connect();
   try{
@@ -210,14 +219,14 @@ export async function createPayout(principal: Principal, input:{ caseId:string; 
       if(payment.rows[0].currency!==normalizedCurrency) throw new Error('payout_currency_mismatch');
     }
     if(input.providerPayoutId){
-      const existing=await client.query(`select * from settlement_payouts where provider=$1 and provider_payout_id=$2`,[input.provider??'manual',input.providerPayoutId]);
+      const existing=await client.query(`select * from settlement_payouts where provider=$1 and provider_payout_id=$2`,[normalizedProvider,input.providerPayoutId]);
       if(existing.rowCount){
         const row=existing.rows[0];
         if(row.case_id!==input.caseId||row.counterparty_actor_id!==input.counterpartyActorId||!amountEquals(row.amount,input.amount)||row.currency!==normalizedCurrency||(row.payment_intent_id??null)!==requestedPaymentIntentId) throw new Error('provider_payout_conflict');
         await client.query('commit');return row;
       }
     }
-    const r = await client.query(`insert into settlement_payouts(case_id,counterparty_actor_id,payment_intent_id,amount,currency,provider,provider_payout_id,metadata) values($1,$2,$3,$4,$5,$6,$7,$8) returning *`,[input.caseId,input.counterpartyActorId,requestedPaymentIntentId,input.amount,normalizedCurrency,input.provider ?? 'manual',input.providerPayoutId ?? null,JSON.stringify(input.metadata ?? {})]);
+    const r = await client.query(`insert into settlement_payouts(case_id,counterparty_actor_id,payment_intent_id,amount,currency,provider,provider_payout_id,metadata) values($1,$2,$3,$4,$5,$6,$7,$8) returning *`,[input.caseId,input.counterpartyActorId,requestedPaymentIntentId,input.amount,normalizedCurrency,normalizedProvider,input.providerPayoutId ?? null,JSON.stringify(input.metadata ?? {})]);
     const payout = r.rows[0];
     await appendCaseEvent(input.caseId,'PAYOUT_CREATED',principal,{ payoutId:payout.id, counterpartyActorId:input.counterpartyActorId, amount:input.amount },client);
     await insertFinancialAudit(client,principal,'create_payout','settlement_payout',payout.id,'provider_settlement',{caseId:input.caseId});
@@ -241,7 +250,7 @@ export async function updatePayoutState(principal: Principal, payoutId:string, n
       if(canonicalReference&&canonicalReference!==suppliedReference) throw new Error('provider_payout_conflict');
       canonicalReference=suppliedReference;
     }
-    if(nextState==='paid'&&p.provider!=='manual'&&!canonicalReference) throw new Error('payout_provider_reference_required');
+    if(nextState==='paid'&&normalizeProvider(p.provider)!=='manual'&&!canonicalReference) throw new Error('payout_provider_reference_required');
     if(p.state===nextState){
       if(nextState==='paid'&&canonicalReference!==p.provider_payout_id){
         try{
@@ -270,7 +279,7 @@ export async function updatePayoutState(principal: Principal, payoutId:string, n
       throw error;
     }
     if (nextState === 'paid') {
-      await client.query(`insert into ledger_entries(case_id,payment_intent_id,payout_id,entry_type,account_code,counterparty_actor_id,amount,currency,state,external_reference,metadata) values($1,$2,$3,'provider_payout','provider_payable',$4,$5,$6,'posted',$7,$8)`,[p.case_id,p.payment_intent_id ?? null,payoutId,p.counterparty_actor_id,-Math.abs(Number(p.amount)),p.currency,canonicalReference,JSON.stringify({ provider:p.provider })]);
+      await client.query(`insert into ledger_entries(case_id,payment_intent_id,payout_id,entry_type,account_code,counterparty_actor_id,amount,currency,state,external_reference,metadata) values($1,$2,$3,'provider_payout','provider_payable',$4,$5,$6,'posted',$7,$8)`,[p.case_id,p.payment_intent_id ?? null,payoutId,p.counterparty_actor_id,-Math.abs(Number(p.amount)),p.currency,canonicalReference,JSON.stringify({ provider:normalizeProvider(p.provider) })]);
     }
     await appendCaseEvent(p.case_id,`PAYOUT_${nextState.toUpperCase()}`,principal,{ payoutId, counterpartyActorId:p.counterparty_actor_id, amount:p.amount },client);
     await client.query('commit');
