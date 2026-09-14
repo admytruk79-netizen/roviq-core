@@ -8,9 +8,22 @@ const LAUNCHER = LAUNCHER_URL;
 const ARTIFACT_DIR = path.resolve(process.env.BROWSER_ARTIFACT_DIR ?? 'artifacts/production-browser');
 fs.mkdirSync(ARTIFACT_DIR, { recursive: true });
 
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
 async function stable(page, url) {
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 });
   await page.locator('body').waitFor({ state: 'visible', timeout: 15_000 });
+}
+
+async function waitForEmbeddedBranding(frameBody, name, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  let text = '';
+  while (Date.now() < deadline) {
+    text = (await frameBody.innerText().catch(() => '')).trim();
+    if (/ROVIQ/i.test(text)) return;
+    await sleep(500);
+  }
+  throw new Error(`${name} portal iframe did not render ROVIQ branding; last body=${JSON.stringify(text.slice(0, 500))}`);
 }
 
 async function selectPortal(page, name, expectedStage) {
@@ -42,8 +55,7 @@ async function selectPortal(page, name, expectedStage) {
 
   const frameBody = page.frameLocator('#portalFrame').locator('body');
   await frameBody.waitFor({ state: 'visible', timeout: 30_000 });
-  const text = (await frameBody.innerText()).trim();
-  assert.match(text, /ROVIQ/i, `${name} portal should render inside launcher`);
+  await waitForEmbeddedBranding(frameBody, name);
 }
 
 const browser = await chromium.launch({ headless: true });
