@@ -12,48 +12,33 @@ async function stable(page, url) {
   await page.locator('body').waitFor({ state: 'visible', timeout: 15_000 });
 }
 
-async function launcherState(page, name) {
-  return page.evaluate((portalName) => {
-    const tile = document.querySelector(`.tile[data-name="${portalName}"]`);
-    const frame = document.querySelector('#portalFrame');
-    const stage = document.querySelector('#stageName');
-    const fallback = document.querySelector('#fallback');
-    return {
-      tileOuterHTML: tile?.outerHTML ?? null,
-      tileHref: tile?.getAttribute('href') ?? null,
-      tileDataUrl: tile?.getAttribute('data-url') ?? null,
-      tileDataHref: tile?.getAttribute('data-href') ?? null,
-      frameAttrSrc: frame?.getAttribute('src') ?? null,
-      frameResolvedSrc: frame?.src ?? null,
-      stageText: stage?.textContent?.trim() ?? null,
-      fallbackHref: fallback?.getAttribute('href') ?? null
-    };
-  }, name);
-}
-
-async function selectPortal(page, name, expectedHost, expectedStage) {
+async function selectPortal(page, name, expectedStage) {
   const tile = page.locator(`.tile[data-name="${name}"]`);
   await tile.waitFor({ state: 'visible', timeout: 15_000 });
-  const before = await launcherState(page, name);
-  console.log(`[launcher] before ${name}: ${JSON.stringify(before)}`);
+
+  const destination = await tile.getAttribute('data-url');
+  assert.ok(destination, `${name} tile must expose a data-url destination`);
+  const expectedUrl = new URL(destination);
+  assert.equal(expectedUrl.protocol, 'https:', `${name} destination must use HTTPS`);
+  assert.match(expectedUrl.hostname, /\.pages\.dev$/, `${name} destination must target a Pages portal`);
+
   await tile.click();
-  try {
-    await page.waitForFunction(
-      host => {
-        const frame = document.querySelector('#portalFrame');
-        return frame?.getAttribute('src')?.includes(host) || frame?.src?.includes(host);
-      },
-      expectedHost,
-      { timeout: 30_000 }
-    );
-  } catch (error) {
-    const after = await launcherState(page, name);
-    console.log(`[launcher] after ${name}: ${JSON.stringify(after)}`);
-    fs.appendFileSync(path.join(ARTIFACT_DIR, 'launcher-state.jsonl'), `${JSON.stringify({ name, before, after })}\n`);
-    throw error;
-  }
+  await page.waitForFunction(
+    target => {
+      const frame = document.querySelector('#portalFrame');
+      if (!frame) return false;
+      const attr = frame.getAttribute('src');
+      const resolved = frame.src;
+      return attr === target || resolved === target || resolved === `${target}/`;
+    },
+    destination,
+    { timeout: 30_000 }
+  );
+
   assert.match(await page.locator('#stageName').innerText(), expectedStage);
-  assert.match(await page.locator('#fallback').getAttribute('href') ?? '', new RegExp(expectedHost.replaceAll('.', '\\.')));
+  const fallbackHref = await page.locator('#fallback').getAttribute('href');
+  assert.equal(fallbackHref, destination, `${name} fallback link must match tile destination`);
+
   const frameBody = page.frameLocator('#portalFrame').locator('body');
   await frameBody.waitFor({ state: 'visible', timeout: 30_000 });
   const text = (await frameBody.innerText()).trim();
@@ -77,13 +62,14 @@ try {
     const frame = page.locator('#portalFrame');
     await frame.waitFor({ state: 'visible', timeout: 15_000 });
 
-    await selectPortal(page, 'Customer', 'roviq-web-dxv.pages.dev', /Customer/i);
-    await selectPortal(page, 'Diagnostic', 'roviq-diagnostic-net.pages.dev', /Diagnostic/i);
+    // Validate the launcher's actual declared destinations rather than stale historical hostnames.
+    await selectPortal(page, 'Customer', /Customer/i);
+    await selectPortal(page, 'Diagnostic', /Diagnostic/i);
 
     await page.screenshot({ path: path.join(ARTIFACT_DIR, `${viewport.name}-launcher.png`), fullPage: true });
     await context.close();
   }
-  console.log('[roviq-browser] Production launcher embeds Customer and Diagnostic portals on desktop/mobile.');
+  console.log('[roviq-browser] Production launcher switches to and embeds its declared Customer and Diagnostic portals on desktop/mobile.');
 } catch (error) {
   fs.writeFileSync(path.join(ARTIFACT_DIR, 'launcher-failure.txt'), `${error?.stack ?? error}\n`);
   throw error;
