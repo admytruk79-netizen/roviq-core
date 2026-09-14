@@ -228,24 +228,23 @@ async function productionLifecycle(browser) {
     'queue',
     item => item.case_id === caseId
   );
-  const demandId = diagnosticItem.demand_id;
-  assert.ok(demandId, 'Diagnostic queue item is missing demand_id');
+  assert.ok(diagnosticItem.demand_id, 'Diagnostic queue item is missing demand_id');
   const diagnosticContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const diagnostic = await diagnosticContext.newPage();
   await setPortalSession(diagnostic, PORTALS.diagnostic, 'roviq_diagnostic_token', 'roviq_diagnostic_principal', diagnosticSession);
-  const diagnosticCard = diagnostic.locator('button.queue-card').filter({ hasText: `Demand ${demandId.slice(0, 8)}` }).first();
+  const diagnosticCard = diagnostic.locator(`button.queue-card[data-case-id="${caseId}"]`).first();
   await diagnosticCard.waitFor({ state: 'visible', timeout: 30_000 });
   await diagnosticCard.click();
   if (diagnosticItem.outcome === 'offered') {
     const accept = await waitForButton(diagnostic, 'Accept assignment');
     await accept.click();
   }
-  const findingForm = diagnostic.locator('form').filter({ hasText: 'Accepted assignment' }).first();
+  const findingForm = diagnostic.locator('form.finding-form');
   await findingForm.waitFor({ state: 'visible', timeout: 30_000 });
   await findingForm.locator('textarea').fill('Browser acceptance: verified non-drivable vehicle requiring tow to repair provider.');
-  await findingForm.getByLabel('Drivability').selectOption('non_drivable');
-  await findingForm.getByLabel('Next handoff').selectOption('route_to_tow');
-  await findingForm.getByRole('button', { name: 'Save finding' }).click();
+  await findingForm.getByLabel('Vehicle condition').selectOption('non_drivable');
+  await findingForm.getByLabel('Recommended next step').selectOption('route_to_tow');
+  await findingForm.getByRole('button', { name: 'Save finding & hand off' }).click();
   await waitForCaseState(caseId, adminToken, 'tow_pending');
   await screenshot(diagnostic, 'lifecycle-03-diagnostic-to-tow');
 
