@@ -73,17 +73,24 @@ export function CaseDetail() {
     if (!id) return;
     setError(null);
     try {
-      const [caseRes, planRes, paymentsRes, timelineRes, transitionsRes, actorsRes, dispatchRes] = await Promise.all([
-        api.get<{ case: ServiceCase; customerSnapshot: CustomerSnapshot }>(`/api/maintenance/cases/${id}`),
-        api.get<ServicePlanResponse>(`/api/maintenance/cases/${id}/service-plan`).catch(() => null),
-        api.get<{ payments: PaymentIntent[] }>(`/api/maintenance/cases/${id}/payments`),
-        api.get<{ timeline: TimelineEvent[] }>(`/api/maintenance/cases/${id}/timeline`),
-        api.get<{ transitions: CaseTransition[] }>(`/api/maintenance/cases/${id}/transitions`),
-        api.get<{ actors: ActorSummary[] }>('/api/admin/actors?status=active'),
-        api.get<{ dispatches: TransportDispatch[] }>(`/api/admin/transport?caseId=${id}`).catch(() => ({ dispatches: [] }))
-      ]);
+      // The Service Case is authoritative operational state. Load and publish it first so
+      // a failure in an auxiliary panel can never leave Ops rendering a stale workflow state.
+      const caseRes = await api.get<{ case: ServiceCase; customerSnapshot: CustomerSnapshot }>(`/api/maintenance/cases/${id}`);
       setCaseData(caseRes.case);
       setSnapshot(caseRes.customerSnapshot);
+      if (caseRes.case.state !== 'provider_selection') {
+        setRoutingCandidates([]);
+        setRepairActorId('');
+      }
+
+      const [planRes, paymentsRes, timelineRes, transitionsRes, actorsRes, dispatchRes] = await Promise.all([
+        api.get<ServicePlanResponse>(`/api/maintenance/cases/${id}/service-plan`).catch(() => null),
+        api.get<{ payments: PaymentIntent[] }>(`/api/maintenance/cases/${id}/payments`).catch(() => ({ payments: [] })),
+        api.get<{ timeline: TimelineEvent[] }>(`/api/maintenance/cases/${id}/timeline`).catch(() => ({ timeline: [] })),
+        api.get<{ transitions: CaseTransition[] }>(`/api/maintenance/cases/${id}/transitions`).catch(() => ({ transitions: [] })),
+        api.get<{ actors: ActorSummary[] }>('/api/admin/actors?status=active').catch(() => ({ actors: [] })),
+        api.get<{ dispatches: TransportDispatch[] }>(`/api/admin/transport?caseId=${id}`).catch(() => ({ dispatches: [] }))
+      ]);
       setPlan(planRes);
       setPayments(paymentsRes.payments);
       setTimeline(timelineRes.timeline);
@@ -92,10 +99,6 @@ export function CaseDetail() {
       setDispatches(dispatchRes.dispatches);
       setDiagnosticActorId((current) => current && actorsRes.actors.some((actor) => actor.id === current && actor.actor_type === 'diagnostic') ? current : '');
       setTowActorId((current) => current && actorsRes.actors.some((actor) => actor.id === current && actor.actor_type === 'tow') ? current : '');
-      if (caseRes.case.state !== 'provider_selection') {
-        setRoutingCandidates([]);
-        setRepairActorId('');
-      }
     } catch (e) {
       setError(e instanceof ApiError && e.status === 403 ? "You don't have access to this case." : 'Could not load this case.');
     }
