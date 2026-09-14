@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
+import { EDGE_URL, PORTALS } from './production-config.mjs';
 
-const EDGE_URL = process.env.EDGE_URL ?? 'https://roviq-core.admytruk79.workers.dev';
-const CUSTOMER_URL = 'https://roviq-web-dxv.pages.dev';
+const CUSTOMER_URL = PORTALS.customer;
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL?.trim() ?? '';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? '';
 const ARTIFACT_DIR = path.resolve(process.env.BROWSER_ARTIFACT_DIR ?? 'artifacts/production-browser');
@@ -26,6 +26,23 @@ async function call(pathname, init = {}) {
   try { body = text ? JSON.parse(text) : null; } catch { body = text || null; }
   console.log(`[auth-probe] ${init.method ?? 'GET'} ${pathname} -> ${response.status} ${JSON.stringify(safeBody(body))}`);
   return { response, body };
+}
+
+async function gotoStable(page, url, attempts = 3) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+      if (response && response.status() >= 400) throw new Error(`GET ${url} -> ${response.status()}`);
+      await page.locator('body').waitFor({ state: 'visible', timeout: 15_000 });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts) break;
+      await page.waitForTimeout(1500 * attempt);
+    }
+  }
+  throw lastError;
 }
 
 assert.ok(ADMIN_EMAIL && ADMIN_PASSWORD, 'ADMIN_EMAIL / ADMIN_PASSWORD are required');
@@ -65,7 +82,7 @@ try {
     console.log(`[auth-probe] browser ${new URL(url).pathname} -> ${response.status()} ${JSON.stringify(safeBody(body))}`);
   });
 
-  await page.goto(`${CUSTOMER_URL}/login`, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+  await gotoStable(page, `${CUSTOMER_URL}/login`);
   await page.locator('#email').fill(ADMIN_EMAIL);
   await page.locator('#password').fill(ADMIN_PASSWORD);
   await page.getByRole('button', { name: 'Sign in' }).click();
