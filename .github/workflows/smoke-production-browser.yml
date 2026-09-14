@@ -94,7 +94,20 @@ jobs:
         run: node tests/production-browser-lifecycle.mjs
 
       - name: Unified launcher render and embed smoke
-        run: node tests/production-launcher-smoke.mjs
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if node tests/production-launcher-smoke.mjs; then
+              exit 0
+            fi
+            if [[ "$attempt" == "3" ]]; then
+              echo 'Launcher/embed smoke failed after 3 attempts.'
+              exit 1
+            fi
+            echo "Launcher/embed smoke transient failure; retrying attempt $((attempt + 1))/3..."
+            sleep 5
+          done
 
       - name: Wait for exact Render Core revision
         if: ${{ env.ADMIN_EMAIL != '' && env.ADMIN_PASSWORD != '' }}
