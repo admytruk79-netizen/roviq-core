@@ -76,6 +76,23 @@ async function waitForCollectionItem(endpoint, token, key, predicate, timeoutMs 
   throw new Error(`No matching ${key} item from ${endpoint}; count=${last.length}`);
 }
 
+async function waitForCustomerSession(page, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await page.evaluate(() => {
+      const token = localStorage.getItem('roviq_access_token');
+      const rawPrincipal = localStorage.getItem('roviq_principal');
+      let principal = null;
+      try { principal = rawPrincipal ? JSON.parse(rawPrincipal) : null; } catch { principal = null; }
+      return { hasToken: Boolean(token), principal };
+    }).catch(() => null);
+    if (last?.hasToken && last?.principal?.role === 'customer' && last?.principal?.actorId) return last;
+    await sleep(250);
+  }
+  throw new Error(`Customer UI did not establish authenticated scoped session; last=${JSON.stringify(last)}`);
+}
+
 async function setPortalSession(page, portalUrl, tokenKey, principalKey, session) {
   await gotoStable(page, portalUrl);
   await page.evaluate(({ tokenKey, principalKey, session }) => {
@@ -124,7 +141,7 @@ async function productionLifecycle(browser) {
   await customer.locator('#email').fill(ADMIN_EMAIL);
   await customer.locator('#password').fill(ADMIN_PASSWORD);
   await customer.getByRole('button', { name: 'Sign in' }).click();
-  await customer.waitForURL(url => !url.pathname.endsWith('/login'), { timeout: 30_000 });
+  await waitForCustomerSession(customer);
   await gotoStable(customer, `${PORTALS.customer}/cases/new`);
   await customer.locator('#issueType').selectOption('wont_start');
   await customer.locator('#description').fill(marker);
