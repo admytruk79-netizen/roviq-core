@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
+import { LAUNCHER_URL } from './production-config.mjs';
 
-const LAUNCHER = 'https://roviq-portals.pages.dev';
+const LAUNCHER = LAUNCHER_URL;
 const ARTIFACT_DIR = path.resolve(process.env.BROWSER_ARTIFACT_DIR ?? 'artifacts/production-browser');
 fs.mkdirSync(ARTIFACT_DIR, { recursive: true });
 
@@ -62,7 +63,6 @@ try {
     const frame = page.locator('#portalFrame');
     await frame.waitFor({ state: 'visible', timeout: 15_000 });
 
-    // Validate the launcher's actual declared destinations rather than stale historical hostnames.
     await selectPortal(page, 'Customer', /Customer/i);
     await selectPortal(page, 'Diagnostic', /Diagnostic/i);
 
