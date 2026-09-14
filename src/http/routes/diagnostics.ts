@@ -26,8 +26,12 @@ export async function diagnosticRoutes(app: FastifyInstance) {
   app.get('/api/diagnostics/me/queue', { preHandler: requireRoleOrCapability('diagnostics','diagnostic') }, async (req) => {
     const r = await pool.query(
       `select m.id as offer_id, m.case_id, m.demand_id, m.outcome, m.offered_at, d.demand_type, d.urgency, d.location, d.attributes
-       from matches_offers m join demand_requests d on d.id=m.demand_id
-       where m.actor_id=$1 and m.outcome in ('offered','accepted')
+       from matches_offers m
+       join demand_requests d on d.id=m.demand_id
+       join service_cases sc on sc.id=m.case_id
+       where m.actor_id=$1
+         and m.outcome in ('offered','accepted')
+         and sc.state in ('diagnostic_pending','diagnostic_in_progress')
        order by d.urgency desc, m.offered_at asc`, [req.principal.actorId]
     );
     return { queue: r.rows };
