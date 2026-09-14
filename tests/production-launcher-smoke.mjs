@@ -12,14 +12,46 @@ async function stable(page, url) {
   await page.locator('body').waitFor({ state: 'visible', timeout: 15_000 });
 }
 
+async function launcherState(page, name) {
+  return page.evaluate((portalName) => {
+    const tile = document.querySelector(`.tile[data-name="${portalName}"]`);
+    const frame = document.querySelector('#portalFrame');
+    const stage = document.querySelector('#stageName');
+    const fallback = document.querySelector('#fallback');
+    return {
+      tileOuterHTML: tile?.outerHTML ?? null,
+      tileHref: tile?.getAttribute('href') ?? null,
+      tileDataUrl: tile?.getAttribute('data-url') ?? null,
+      tileDataHref: tile?.getAttribute('data-href') ?? null,
+      frameAttrSrc: frame?.getAttribute('src') ?? null,
+      frameResolvedSrc: frame?.src ?? null,
+      stageText: stage?.textContent?.trim() ?? null,
+      fallbackHref: fallback?.getAttribute('href') ?? null
+    };
+  }, name);
+}
+
 async function selectPortal(page, name, expectedHost, expectedStage) {
   const tile = page.locator(`.tile[data-name="${name}"]`);
   await tile.waitFor({ state: 'visible', timeout: 15_000 });
+  const before = await launcherState(page, name);
+  console.log(`[launcher] before ${name}: ${JSON.stringify(before)}`);
   await tile.click();
-  await page.waitForFunction(
-    host => document.querySelector('#portalFrame')?.getAttribute('src')?.includes(host),
-    expectedHost
-  );
+  try {
+    await page.waitForFunction(
+      host => {
+        const frame = document.querySelector('#portalFrame');
+        return frame?.getAttribute('src')?.includes(host) || frame?.src?.includes(host);
+      },
+      expectedHost,
+      { timeout: 30_000 }
+    );
+  } catch (error) {
+    const after = await launcherState(page, name);
+    console.log(`[launcher] after ${name}: ${JSON.stringify(after)}`);
+    fs.appendFileSync(path.join(ARTIFACT_DIR, 'launcher-state.jsonl'), `${JSON.stringify({ name, before, after })}\n`);
+    throw error;
+  }
   assert.match(await page.locator('#stageName').innerText(), expectedStage);
   assert.match(await page.locator('#fallback').getAttribute('href') ?? '', new RegExp(expectedHost.replaceAll('.', '\\.')));
   const frameBody = page.frameLocator('#portalFrame').locator('body');
@@ -45,8 +77,6 @@ try {
     const frame = page.locator('#portalFrame');
     await frame.waitFor({ state: 'visible', timeout: 15_000 });
 
-    // The launcher may remember or default to any workspace. Explicitly select each portal
-    // before asserting its embedded content so the smoke test validates behavior, not default state.
     await selectPortal(page, 'Customer', 'roviq-web-dxv.pages.dev', /Customer/i);
     await selectPortal(page, 'Diagnostic', 'roviq-diagnostic-net.pages.dev', /Diagnostic/i);
 
