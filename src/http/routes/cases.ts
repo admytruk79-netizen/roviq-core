@@ -17,7 +17,32 @@ const createCaseBody=z.object({
 });
 const state=z.enum(['intake','triage','diagnostic_pending','diagnostic_in_progress','tow_pending','tow_in_progress','provider_selection','provider_pending','repair_in_progress','parts_pending','payment_pending','completed','cancelled']);
 
+const preferredTransitionByState:Record<string,string>={
+ intake:'triage',
+ triage:'diagnostic_pending',
+ diagnostic_pending:'diagnostic_in_progress',
+ diagnostic_in_progress:'provider_selection',
+ tow_pending:'tow_in_progress',
+ tow_in_progress:'provider_selection',
+ provider_selection:'provider_pending',
+ provider_pending:'repair_in_progress',
+ repair_in_progress:'parts_pending',
+ parts_pending:'repair_in_progress',
+ payment_pending:'completed'
+};
+
+type TransitionRow={to_state:string;terminal:boolean};
 type TimelineEvent = { id:string; event_type:string; actor_id:string|null; occurred_at:string; payload:Record<string,unknown> };
+
+function orderTransitions(fromState:string,rows:TransitionRow[]){
+ const preferred=preferredTransitionByState[fromState];
+ return [...rows].sort((a,b)=>{
+  if(a.to_state===preferred&&b.to_state!==preferred)return -1;
+  if(b.to_state===preferred&&a.to_state!==preferred)return 1;
+  if(a.terminal!==b.terminal)return Number(a.terminal)-Number(b.terminal);
+  return a.to_state.localeCompare(b.to_state);
+ });
+}
 
 function projectTimeline(role:string, events:TimelineEvent[]) {
   if (role==='admin') return events;
@@ -34,7 +59,7 @@ export async function caseRoutes(app:FastifyInstance){
  app.get('/api/admin/cases',{preHandler:requireRole('admin')},async(req)=>{const query=z.object({state:state.optional(),limit:z.coerce.number().int().positive().max(200).default(100)}).parse(req.query??{});const scope=await getAdminActorScope(req.principal,pool);const params:unknown[]=[];const clauses:string[]=[];if(query.state){params.push(query.state);clauses.push(`c.state=$${params.length}`);}if(scope){params.push(scope.organizationId);const org=params.length;params.push(scope.locationId);const loc=params.length;clauses.push(`exists(select 1 from service_cases sc left join actors owner on owner.id=sc.current_owner_actor_id left join actors selected on selected.id=sc.selected_actor_id left join actors recommended on recommended.id=sc.recommended_actor_id where sc.id=c.id and ((owner.organization_id=$${org} and ($${loc}::uuid is null or owner.location_id=$${loc})) or (selected.organization_id=$${org} and ($${loc}::uuid is null or selected.location_id=$${loc})) or (recommended.organization_id=$${org} and ($${loc}::uuid is null or recommended.location_id=$${loc})) or exists(select 1 from matches_offers mo join actors provider on provider.id=mo.actor_id where mo.case_id=sc.id and mo.outcome='accepted' and provider.organization_id=$${org} and ($${loc}::uuid is null or provider.location_id=$${loc}))))`);}params.push(query.limit);const where=clauses.length?`where ${clauses.join(' and ')}`:'';const r=await pool.query(`select c.* from service_cases c ${where} order by c.updated_at desc limit $${params.length}`,params);return{cases:r.rows};});
  app.get('/api/maintenance/cases/:id',async(req,reply)=>{const{id}=req.params as{id:string};try{const c=await loadCaseForPrincipal(req.principal,id);if(!c)return reply.code(404).send({error:'case_not_found'});const snapshot=await pool.query('select * from case_snapshots where case_id=$1',[id]);const{has_provider_relation:_,has_transport_relation:__,has_parts_relation:___,has_mobility_relation:____,...caseProjection}=c;return{case:caseProjection,customerSnapshot:snapshot.rows[0]??null};}catch(error){if(error instanceof Error&&error.message==='forbidden')return reply.code(403).send({error:'forbidden'});throw error;}});
  app.post('/api/maintenance/cases/:id/select-provider',async(req,reply)=>{const{id}=req.params as{id:string};const body=z.object({actorId:z.string().uuid(),rationale:z.record(z.unknown()).optional()}).parse(req.body);try{const selection=await selectCaseActor(req.principal,id,body.actorId,body.rationale??{});return{selection,offer:selection.offer,case:selection.case};}catch(e){const m=e instanceof Error?e.message:'selection_failed';if(m==='case_not_found')return reply.code(404).send({error:m});if(m==='selection_forbidden')return reply.code(403).send({error:m});if(['actor_not_eligible','actor_not_serviceable','case_not_selectable','selection_already_recorded','case_demand_missing'].includes(m))return reply.code(409).send({error:m});throw e;}});
- app.get('/api/maintenance/cases/:id/transitions',async(req,reply)=>{const{id}=req.params as{id:string};try{const c=await loadCaseForPrincipal(req.principal,id);if(!c)return reply.code(404).send({error:'case_not_found'});const rules=await pool.query(`select to_state,terminal from case_transition_rules where from_state=$1 and $2=any(allowed_roles)`,[c.state,req.principal.role]);const canCancel=c.state!=='completed'&&c.state!=='cancelled'&&['admin','customer'].includes(req.principal.role);const transitions=rules.rows.map(r=>({toState:r.to_state,terminal:r.terminal}));if(canCancel)transitions.push({toState:'cancelled',terminal:true});return{transitions};}catch(error){if(error instanceof Error&&error.message==='forbidden')return reply.code(403).send({error:'forbidden'});throw error;}});
+ app.get('/api/maintenance/cases/:id/transitions',async(req,reply)=>{const{id}=req.params as{id:string};try{const c=await loadCaseForPrincipal(req.principal,id);if(!c)return reply.code(404).send({error:'case_not_found'});const rules=await pool.query<TransitionRow>(`select to_state,terminal from case_transition_rules where from_state=$1 and $2=any(allowed_roles)`,[c.state,req.principal.role]);const canCancel=c.state!=='completed'&&c.state!=='cancelled'&&['admin','customer'].includes(req.principal.role);const transitions=orderTransitions(c.state,rules.rows).map(r=>({toState:r.to_state,terminal:r.terminal}));if(canCancel)transitions.push({toState:'cancelled',terminal:true});return{transitions};}catch(error){if(error instanceof Error&&error.message==='forbidden')return reply.code(403).send({error:'forbidden'});throw error;}});
  app.get('/api/maintenance/cases/:id/timeline',async(req,reply)=>{const{id}=req.params as{id:string};try{const c=await loadCaseForPrincipal(req.principal,id);if(!c)return reply.code(404).send({error:'case_not_found'});return{timeline:projectTimeline(req.principal.role,await getCaseTimeline(id) as TimelineEvent[])};}catch(error){if(error instanceof Error&&error.message==='forbidden')return reply.code(403).send({error:'forbidden'});throw error;}});
  app.post('/api/maintenance/cases/:id/transition',async(req,reply)=>{const{id}=req.params as{id:string};const body=z.object({toState:state,metadata:z.record(z.unknown()).optional()}).parse(req.body);try{const c=await transitionCase(req.principal,id,body.toState,body.metadata??{});if(!c)return reply.code(404).send({error:'case_not_found'});return{case:c};}catch(e){const m=e instanceof Error?e.message:'transition_failed';if(m==='transition_forbidden'||m==='forbidden')return reply.code(403).send({error:m});if(m==='invalid_case_transition')return reply.code(409).send({error:m});throw e;}});
  app.put('/api/admin/cases/:id/customer-snapshot',{preHandler:requireRole('admin')},async(req)=>{const{id}=req.params as{id:string};await assertAdminCaseScope(req.principal,id,pool);const b=z.object({status:z.string().min(1),message:z.string().optional(),nextAction:z.string().optional(),etaAt:z.string().datetime().optional()}).parse(req.body);return{snapshot:await setCustomerSnapshot(id,b.status,b.message,b.nextAction,b.etaAt)};});
