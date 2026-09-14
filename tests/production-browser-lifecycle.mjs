@@ -135,7 +135,11 @@ async function productionLifecycle(browser) {
   const marker = `browser-acceptance-${Date.now()}`;
 
   log('1/10 Customer: sign in through the real UI and create a tagged case.');
-  const customerContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const customerContext = await browser.newContext({
+    viewport: { width: 1280, height: 900 },
+    geolocation: { latitude: 45.5152, longitude: -122.6784 },
+    permissions: ['geolocation']
+  });
   const customer = await customerContext.newPage();
   await gotoStable(customer, `${PORTALS.customer}/login`);
   await customer.locator('#email').fill(ADMIN_EMAIL);
@@ -146,10 +150,21 @@ async function productionLifecycle(browser) {
   await customer.locator('#issueType').selectOption('wont_start');
   await customer.locator('#description').fill(marker);
   await customer.locator('#urgency').selectOption('urgent');
+  await customer.getByRole('button', { name: 'Capture GPS' }).click();
+  await customer.getByText(/GPS ready for dispatch/i).waitFor({ state: 'visible', timeout: 20_000 });
+  const demandResponsePromise = customer.waitForResponse(
+    response => response.url().includes('/api/demands') && response.request().method() === 'POST',
+    { timeout: 30_000 }
+  );
   await customer.getByRole('button', { name: 'Submit' }).click();
-  await customer.waitForURL(/\/cases\/[0-9a-f-]{36}$/i, { timeout: 30_000 });
-  const caseId = customer.url().match(/\/cases\/([0-9a-f-]{36})$/i)?.[1];
-  assert.ok(caseId, 'Customer case id was not present after submission');
+  const demandResponse = await demandResponsePromise;
+  const demandText = await demandResponse.text();
+  assert.ok(demandResponse.ok(), `Customer demand submission failed: ${demandResponse.status()} ${demandText.slice(0, 1000)}`);
+  let demandPayload;
+  try { demandPayload = JSON.parse(demandText); } catch { demandPayload = null; }
+  const caseId = demandPayload?.case?.id;
+  assert.match(caseId ?? '', /^[0-9a-f-]{36}$/i, 'Customer demand response did not return a case id');
+  await gotoStable(customer, `${PORTALS.customer}/cases/${caseId}`);
   const casePrefix = caseId.slice(0, 8);
   const customerToken = await customer.evaluate(() => localStorage.getItem('roviq_access_token'));
   assert.ok(customerToken, 'Customer UI did not persist its scoped access token');
