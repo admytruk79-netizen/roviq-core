@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { Navigate, useNavigate } from 'react-router-dom';
+import { Navigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 
 export function Login() {
@@ -7,13 +7,15 @@ export function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const navigate = useNavigate();
 
   if (principal) return <Navigate to="/" replace />;
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    try { await login(email.trim(), password); navigate('/'); } catch { /* surfaced by auth state */ }
+    try {
+      await login(email.trim(), password);
+      window.location.replace('/');
+    } catch { /* surfaced by auth state */ }
   }
 
   return (
