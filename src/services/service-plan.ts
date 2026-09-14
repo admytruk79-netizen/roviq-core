@@ -2,6 +2,12 @@ import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
 import { assertCaseAccess } from './case-access.js';
 import { audit } from './audit.js';
+import { syncApprovalOperationalConstraint } from './case-constraint-projection.js';
+
+async function lockServiceCase(caseId:string,client:{query:(text:string,params?:unknown[])=>Promise<any>}){
+  const result=await client.query('select id from service_cases where id=$1 for update',[caseId]);
+  if(!result.rowCount) throw new Error('case_not_found');
+}
 
 export async function getServicePlan(principal:Principal, caseId:string) {
   await assertCaseAccess(principal,caseId);
@@ -29,6 +35,7 @@ export async function reviseServicePlan(principal:Principal, caseId:string, inpu
   const client = await pool.connect();
   try {
     await client.query('begin');
+    await lockServiceCase(caseId,client);
     await assertCaseAccess(principal,caseId,client);
     if (principal.role === 'partner') {
       if (!principal.actorId) throw new Error('forbidden');
@@ -78,6 +85,7 @@ export async function reviseServicePlan(principal:Principal, caseId:string, inpu
       approval = approvalResult.rows[0];
     }
 
+    await syncApprovalOperationalConstraint(caseId,client);
     await client.query(
       `insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload)
        values('service_case',$1,'SERVICE_PLAN_REVISED',$2,$3)`,
@@ -98,17 +106,13 @@ export async function decideApproval(principal:Principal, caseId:string, approva
   const client = await pool.connect();
   try {
     await client.query('begin');
+    await lockServiceCase(caseId,client);
     await assertCaseAccess(principal,caseId,client);
     const current = await client.query('select * from case_approvals where id=$1 and case_id=$2 for update',[approvalId,caseId]);
     if (!current.rowCount) throw new Error('approval_not_found');
     const approval = current.rows[0];
     if (approval.state !== 'pending') throw new Error('approval_already_decided');
     if (principal.role !== 'admin' && approval.requested_from_actor_id !== principal.actorId) throw new Error('forbidden');
-    // reviseServicePlan leaves an older revision's approval row 'pending' rather than invalidating
-    // it when it creates a new one, so a decision here could otherwise land on terms the plan has
-    // already moved past. Lock the same service_plans row reviseServicePlan locks (by id, matching
-    // its own by-case_id lock) so a concurrent revision can't race this decision, and require the
-    // approval still match the plan's current terms.
     const plan = await client.query('select current_revision from service_plans where id=$1 for update',[approval.service_plan_id]);
     if (!plan.rowCount) throw new Error('service_plan_not_found');
     if (Number(plan.rows[0].current_revision) !== Number(approval.revision)) throw new Error('approval_revision_stale');
@@ -116,6 +120,7 @@ export async function decideApproval(principal:Principal, caseId:string, approva
       `update case_approvals set state=$1,decision_by_actor_id=$2,decision_reason=$3,decided_at=now() where id=$4 returning *`,
       [decision,principal.actorId ?? null,reason ?? null,approvalId]
     );
+    await syncApprovalOperationalConstraint(caseId,client);
     await client.query(
       `insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload)
        values('service_case',$1,'CASE_APPROVAL_DECIDED',$2,$3)`,

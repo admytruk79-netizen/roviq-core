@@ -26,7 +26,11 @@ export async function updateExceptionState(principal: Principal, exceptionId: st
       resolved:[],
       dismissed:[]
     };
-    if (row.state !== input.state && !(allowed[row.state] ?? []).includes(input.state)) {
+    if (row.state === input.state) {
+      await client.query('commit');
+      return row;
+    }
+    if (!(allowed[row.state] ?? []).includes(input.state)) {
       throw new Error('invalid_exception_transition');
     }
     if (input.state === 'resolved' && !input.resolutionCode) throw new Error('resolution_code_required');
@@ -87,7 +91,7 @@ export async function assignException(principal: Principal, exceptionId: string,
   } finally { client.release(); }
 }
 
-export async function getExceptionQueue(principal:Principal,input:{ state?:ExceptionState; severity?:string; limit?:number }={}) {
+export async function getExceptionQueue(principal:Principal,input:{ state?:ExceptionState; states?:ExceptionState[]; severity?:string; limit?:number }={}) {
   if(principal.role!=='admin') throw new Error('exception_admin_only');
   const client=await pool.connect();
   try{
@@ -95,6 +99,7 @@ export async function getExceptionQueue(principal:Principal,input:{ state?:Excep
     const params:unknown[]=[];
     const clauses:string[]=[];
     if(input.state){params.push(input.state);clauses.push(`e.state=$${params.length}`);}
+    else if(input.states?.length){params.push(input.states);clauses.push(`e.state=any($${params.length}::text[])`);}
     if(input.severity){params.push(input.severity);clauses.push(`e.severity=$${params.length}`);}
     if(scope){
       params.push(scope.organizationId);const orgParam=params.length;

@@ -121,19 +121,42 @@ describe('canonical serviceability gate',()=>{
     const queries:string[]=[];
     const db:any={query:async(sql:string)=>{
       queries.push(sql);
-      if(queries.length===1) return {rowCount:1,rows:[{organization_id:'22222222-2222-2222-2222-222222222222',location_id:'33333333-3333-3333-3333-333333333333',has_connection_model:true}]};
+      if(queries.length===1) return {rowCount:1,rows:[{organization_id:'22222222-2222-2222-2222-222222222222',location_id:'33333333-3333-3333-3333-333333333333',status:'active',has_connection_model:true,has_active_capability:true}]};
       return {rowCount:1,rows:[row({id:'org-global',capacity_units:3})]};
     }};
     const result=await evaluateActorServiceability(null,'44444444-4444-4444-4444-444444444444','repair','confirm',db,new Date('2026-09-04T23:00:00Z'));
     expect(result.capacityWindowId).toBe('org-global');
     expect(result.capacityUnits).toBe(3);
     expect(queries[0]).toContain('psc.organization_id=a.organization_id and psc.location_id is null');
+    expect(queries[0]).toContain('ac.active=true');
     expect(queries[1]).toContain('cw.organization_id=$2 and cw.location_id is null');
+  });
+
+  it('fails closed when the candidate provider is inactive even when capacity is available',async()=>{
+    const db:any={query:async(sql:string)=>{
+      if(sql.includes('from actors')) return {rowCount:1,rows:[{organization_id:'22222222-2222-2222-2222-222222222222',location_id:null,status:'inactive',has_connection_model:true,has_active_capability:true}]};
+      if(sql.includes('from capacity_windows')) return {rowCount:1,rows:[row({id:'inactive-provider-capacity'})]};
+      throw new Error(`unexpected query: ${sql}`);
+    }};
+    const result=await evaluateActorServiceability(null,'44444444-4444-4444-4444-444444444444','repair','confirm',db,new Date('2026-09-04T23:00:00Z'));
+    expect(result.decision.confirmable).toBe(false);
+    expect(result.decision.reasons).toContain('constraint_provider_blocked');
+  });
+
+  it('fails closed when the candidate provider lacks an active requested capability',async()=>{
+    const db:any={query:async(sql:string)=>{
+      if(sql.includes('from actors')) return {rowCount:1,rows:[{organization_id:'22222222-2222-2222-2222-222222222222',location_id:null,status:'active',has_connection_model:true,has_active_capability:false}]};
+      if(sql.includes('from capacity_windows')) return {rowCount:1,rows:[row({id:'missing-capability-capacity'})]};
+      throw new Error(`unexpected query: ${sql}`);
+    }};
+    const result=await evaluateActorServiceability(null,'44444444-4444-4444-4444-444444444444','repair','confirm',db,new Date('2026-09-04T23:00:00Z'));
+    expect(result.decision.confirmable).toBe(false);
+    expect(result.decision.reasons).toContain('constraint_capability_blocked');
   });
 
   it('does not fall back to legacy capacity after an actor has entered the canonical connection model',async()=>{
     const db:any={query:async(sql:string)=>{
-      if(sql.includes('from actors')) return {rowCount:1,rows:[{organization_id:'22222222-2222-2222-2222-222222222222',location_id:'33333333-3333-3333-3333-333333333333',has_connection_model:true}]};
+      if(sql.includes('from actors')) return {rowCount:1,rows:[{organization_id:'22222222-2222-2222-2222-222222222222',location_id:'33333333-3333-3333-3333-333333333333',status:'active',has_connection_model:true,has_active_capability:true}]};
       if(sql.includes('from capacity_windows')) return {rowCount:0,rows:[]};
       throw new Error('legacy capacity should not be queried');
     }};

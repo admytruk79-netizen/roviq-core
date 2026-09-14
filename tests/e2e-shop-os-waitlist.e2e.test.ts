@@ -38,9 +38,7 @@ describe('Shop OS waitlist',()=>{
     const entry=await createShopWaitlistEntry(partner,{requestedServiceCategory:'repair',priority:10,estimatedDurationMinutes:60});
     expect(entry.state).toBe('waiting');
 
-    const offered=await updateShopWaitlistEntry(partner,entry.id,{
-      action:'offer',offerExpiresAt:new Date(Date.now()+30*60_000).toISOString()
-    });
+    const offered=await updateShopWaitlistEntry(partner,entry.id,{action:'offer'});
     expect(offered.state).toBe('offered');
     expect(offered.offer_expires_at).toBeTruthy();
 
@@ -57,24 +55,21 @@ describe('Shop OS waitlist',()=>{
     expect(bookedEntries.entries.find((item)=>item.id===entry.id)).toBeTruthy();
   });
 
-  it('rejects past and exactly-current offer deadlines and rejects booking an expired offered entry',async()=>{
+  it('uses a server-authoritative 30-minute offer deadline and rejects booking after expiry',async()=>{
     const shop=await setupShop();
     const partner={role:'partner',actorId:shop.actorId} as const;
-    const past=await createShopWaitlistEntry(partner,{requestedServiceCategory:'repair'});
-    await expect(updateShopWaitlistEntry(partner,past.id,{action:'offer',offerExpiresAt:new Date(Date.now()-1000).toISOString()}))
-      .rejects.toMatchObject({message:'offer_expiry_invalid',statusCode:400});
+    const entry=await createShopWaitlistEntry(partner,{requestedServiceCategory:'repair'});
+    const offered=await updateShopWaitlistEntry(partner,entry.id,{action:'offer'});
+    const remaining=await pool.query(`select extract(epoch from ($1::timestamptz-now()))::numeric as seconds`,[offered.offer_expires_at]);
+    const seconds=Number(remaining.rows[0].seconds);
+    expect(seconds).toBeGreaterThan(29*60);
+    expect(seconds).toBeLessThanOrEqual(30*60);
 
-    const exact=await createShopWaitlistEntry(partner,{requestedServiceCategory:'repair'});
-    await expect(updateShopWaitlistEntry(partner,exact.id,{action:'offer',offerExpiresAt:new Date().toISOString()}))
-      .rejects.toMatchObject({message:'offer_expiry_invalid',statusCode:400});
-
-    const expiring=await createShopWaitlistEntry(partner,{requestedServiceCategory:'repair'});
-    await updateShopWaitlistEntry(partner,expiring.id,{action:'offer',offerExpiresAt:new Date(Date.now()+30*60_000).toISOString()});
-    await pool.query(`update shop_waitlist_entries set offer_expires_at=now()-interval '1 second' where id=$1`,[expiring.id]);
+    await pool.query(`update shop_waitlist_entries set offer_expires_at=now()-interval '1 second' where id=$1`,[entry.id]);
     const start=new Date(Date.now()+60*60_000).toISOString();
     const end=new Date(Date.now()+120*60_000).toISOString();
     const appointment=await createShopOsAppointment(partner,{resourceId:shop.resourceId,startsAt:start,endsAt:end,serviceCategory:'repair',status:'confirmed'});
-    await expect(updateShopWaitlistEntry(partner,expiring.id,{action:'book',appointmentId:appointment.id}))
+    await expect(updateShopWaitlistEntry(partner,entry.id,{action:'book',appointmentId:appointment.id}))
       .rejects.toMatchObject({message:'waitlist_offer_expired',statusCode:409});
   });
 
@@ -82,7 +77,7 @@ describe('Shop OS waitlist',()=>{
     const shop=await setupShop();
     const partner={role:'partner',actorId:shop.actorId} as const;
     const entry=await createShopWaitlistEntry(partner,{requestedServiceCategory:'repair'});
-    await updateShopWaitlistEntry(partner,entry.id,{action:'offer',offerExpiresAt:new Date(Date.now()+5*60_000).toISOString()});
+    await updateShopWaitlistEntry(partner,entry.id,{action:'offer'});
     const expired=await updateShopWaitlistEntry(partner,entry.id,{action:'expire'});
     expect(expired.state).toBe('expired');
     const requeued=await updateShopWaitlistEntry(partner,entry.id,{action:'requeue'});

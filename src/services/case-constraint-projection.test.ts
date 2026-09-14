@@ -47,7 +47,22 @@ describe('operational constraint projection',()=>{
   it('requires a destination and accepted transport before downstream confirmation',()=>{
     expect(deriveTransportConstraint('accepted',{}).status).toBe('required');
     expect(deriveTransportConstraint('assigned',{address:'123 Main St'}).status).toBe('required');
-    expect(deriveTransportConstraint('accepted',{address:'123 Main St'})).toMatchObject({status:'satisfied',destinationReady:true});
     expect(deriveTransportConstraint('failed',{address:'123 Main St'}).status).toBe('blocked');
+  });
+
+  it('requires an active provider once transport has been accepted',()=>{
+    expect(deriveTransportConstraint('accepted',{address:'123 Main St'},null,null)).toMatchObject({status:'blocked',providerReady:null});
+    expect(deriveTransportConstraint('accepted',{address:'123 Main St'},'actor-1','inactive')).toMatchObject({status:'blocked',providerReady:false});
+    expect(deriveTransportConstraint('accepted',{address:'123 Main St'},'actor-1','active')).toMatchObject({status:'satisfied',destinationReady:true,providerReady:true});
+  });
+
+  it('keeps requested transport pending until assignment and blocks inactive assigned providers',()=>{
+    expect(deriveTransportConstraint('requested',{address:'123 Main St'},null,null).status).toBe('required');
+    expect(deriveTransportConstraint('assigned',{address:'123 Main St'},'actor-1','active').status).toBe('required');
+    expect(deriveTransportConstraint('assigned',{address:'123 Main St'},'actor-1','inactive')).toMatchObject({status:'blocked',providerReady:false});
+  });
+
+  it('does not retroactively block a delivered dispatch if the provider later becomes inactive',()=>{
+    expect(deriveTransportConstraint('delivered',{address:'123 Main St'},'actor-1','inactive')).toMatchObject({status:'satisfied',providerReady:false});
   });
 });

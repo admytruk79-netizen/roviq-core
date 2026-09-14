@@ -1,15 +1,20 @@
 import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
-import { appendCaseEvent, createDeadline, transitionCase } from './orchestration.js';
+import { appendCaseEvent, createDeadline, finalizeExternalCaseTransition, transitionCase } from './orchestration.js';
 import { audit } from './audit.js';
 import { queueNotification, setCustomerSnapshot } from './operations.js';
-import { hasRelatedRepairPartner } from './selection-authority.js';
+import { syncTransportOperationalConstraint } from './case-constraint-projection.js';
 
 export type TransportStatus = 'requested'|'assigned'|'accepted'|'en_route'|'arrived'|'vehicle_loaded'|'in_transit'|'delivered'|'declined'|'cancelled'|'failed';
 
 function hasLocation(value:unknown) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   return Object.keys(value as Record<string,unknown>).length > 0;
+}
+
+async function lockServiceCase(caseId:string,client:{query:(text:string,params?:unknown[])=>Promise<any>}){
+  const result=await client.query('select id from service_cases where id=$1 for update',[caseId]);
+  if(!result.rowCount) throw new Error('case_not_found');
 }
 
 export async function createTransportDispatch(principal: Principal, input:{
@@ -21,42 +26,59 @@ export async function createTransportDispatch(principal: Principal, input:{
   etaAt?:string;
   metadata?:Record<string,unknown>;
 }) {
-  const c = await pool.query('select * from service_cases where id=$1',[input.caseId]);
-  if (!c.rowCount) throw new Error('case_not_found');
-  const r = await pool.query(
-    `insert into transport_dispatches(case_id,transport_type,pickup_location,dropoff_location,vehicle_context,eta_at,metadata)
-     values($1,$2,$3,$4,$5,$6,$7) returning *`,
-    [input.caseId,input.transportType,JSON.stringify(input.pickupLocation ?? {}),JSON.stringify(input.dropoffLocation ?? {}),JSON.stringify(input.vehicleContext ?? {}),input.etaAt ?? null,JSON.stringify(input.metadata ?? {})]
-  );
-  const dispatch = r.rows[0];
-
-  const spatialPickup = input.metadata?.pickupSource === 'explicit_dispatch' ? undefined : input.pickupLocation;
-  const spatialDropoff = input.metadata?.dropoffSource === 'explicit_dispatch' ? undefined : input.dropoffLocation;
-  if (spatialPickup || spatialDropoff) {
-    await pool.query(
-      `insert into case_spatial_context(case_id,origin,current_vehicle,destination,route_context,source,updated_at)
-       values($1,$2::jsonb,$2::jsonb,$3::jsonb,'{}'::jsonb,'transport_dispatch',now())
-       on conflict(case_id) do update set
-         origin=coalesce(excluded.origin,case_spatial_context.origin),
-         current_vehicle=coalesce(excluded.current_vehicle,case_spatial_context.current_vehicle),
-         destination=coalesce(excluded.destination,case_spatial_context.destination),
-         source='transport_dispatch',
-         updated_at=now()`,
-      [input.caseId,spatialPickup ? JSON.stringify(spatialPickup) : null,spatialDropoff ? JSON.stringify(spatialDropoff) : null]
+  const client=await pool.connect();
+  let dispatch:any;
+  let caseRow:any;
+  let transitionedToTowPending=false;
+  try{
+    await client.query('begin');
+    const c = await client.query('select * from service_cases where id=$1 for update',[input.caseId]);
+    if (!c.rowCount) throw new Error('case_not_found');
+    caseRow=c.rows[0];
+    const r = await client.query(
+      `insert into transport_dispatches(case_id,transport_type,pickup_location,dropoff_location,vehicle_context,eta_at,metadata)
+       values($1,$2,$3,$4,$5,$6,$7) returning *`,
+      [input.caseId,input.transportType,JSON.stringify(input.pickupLocation ?? {}),JSON.stringify(input.dropoffLocation ?? {}),JSON.stringify(input.vehicleContext ?? {}),input.etaAt ?? null,JSON.stringify(input.metadata ?? {})]
     );
-  }
+    dispatch=r.rows[0];
 
-  if (c.rows[0].state !== 'tow_pending' && c.rows[0].state !== 'tow_in_progress') {
-    await transitionCase(principal,input.caseId,'tow_pending',{ transportDispatchId:dispatch.id, transportType:input.transportType });
-  }
+    const spatialPickup = input.metadata?.pickupSource === 'explicit_dispatch' ? undefined : input.pickupLocation;
+    const spatialDropoff = input.metadata?.dropoffSource === 'explicit_dispatch' ? undefined : input.dropoffLocation;
+    if (spatialPickup || spatialDropoff) {
+      await client.query(
+        `insert into case_spatial_context(case_id,origin,current_vehicle,destination,route_context,source,updated_at)
+         values($1,$2::jsonb,$2::jsonb,$3::jsonb,'{}'::jsonb,'transport_dispatch',now())
+         on conflict(case_id) do update set
+           origin=coalesce(excluded.origin,case_spatial_context.origin),
+           current_vehicle=coalesce(excluded.current_vehicle,case_spatial_context.current_vehicle),
+           destination=coalesce(excluded.destination,case_spatial_context.destination),
+           source='transport_dispatch',
+           updated_at=now()`,
+        [input.caseId,spatialPickup ? JSON.stringify(spatialPickup) : null,spatialDropoff ? JSON.stringify(spatialDropoff) : null]
+      );
+    }
+    if (caseRow.state !== 'tow_pending' && caseRow.state !== 'tow_in_progress') {
+      await transitionCase(principal,input.caseId,'tow_pending',{ transportDispatchId:dispatch.id, transportType:input.transportType },client);
+      transitionedToTowPending=true;
+    }
+    await syncTransportOperationalConstraint(input.caseId,client);
+    await client.query('commit');
+  }catch(e){
+    await client.query('rollback').catch(()=>{});
+    throw e;
+  }finally{client.release();}
 
-  const sideEffects = await Promise.allSettled([
+  const sideEffects:Promise<unknown>[] = [
     appendCaseEvent(input.caseId,'TRANSPORT_REQUESTED',principal,{ dispatchId:dispatch.id, transportType:input.transportType }),
     setCustomerSnapshot(input.caseId,'transport_requested','Vehicle transport has been requested.','Waiting for a transport provider',input.etaAt),
     createDeadline(input.caseId,'transport_assignment',new Date(Date.now()+5*60*1000).toISOString(),'escalate_transport_assignment',{ dispatchId:dispatch.id }),
     audit(principal,'create_transport_dispatch','transport_dispatch',dispatch.id,'transport_requested',{ caseId:input.caseId, transportType:input.transportType })
-  ]);
-  const failedSideEffects = sideEffects.filter((result) => result.status === 'rejected');
+  ];
+  if(transitionedToTowPending){
+    sideEffects.push(finalizeExternalCaseTransition(principal,input.caseId,caseRow.state,'tow_pending',{ transportDispatchId:dispatch.id, transportType:input.transportType }));
+  }
+  const results = await Promise.allSettled(sideEffects);
+  const failedSideEffects = results.filter((result) => result.status === 'rejected');
   if (failedSideEffects.length > 0) console.warn('transport_creation_side_effect_failed',{dispatchId:dispatch.id,caseId:input.caseId,failedCount:failedSideEffects.length});
   return dispatch;
 }
@@ -68,9 +90,14 @@ export async function assignTransportDispatch(principal: Principal, dispatchId:s
   let updated: any;
   try {
     await client.query('begin');
+    const discovered=await client.query('select case_id from transport_dispatches where id=$1',[dispatchId]);
+    if(!discovered.rowCount) throw new Error('dispatch_not_found');
+    const caseId=discovered.rows[0].case_id as string;
+    await lockServiceCase(caseId,client);
     const d = await client.query('select * from transport_dispatches where id=$1 for update',[dispatchId]);
     if (!d.rowCount) throw new Error('dispatch_not_found');
     current = d.rows[0];
+    if(current.case_id!==caseId) throw new Error('transport_case_changed');
     if (!['requested','declined','failed'].includes(current.status)) {
       if (current.provider_actor_id === providerActorId) {
         await client.query('commit');
@@ -89,7 +116,8 @@ export async function assignTransportDispatch(principal: Principal, dispatchId:s
     const allowed = current.transport_type === 'tow' ? (provider.rows[0].actor_type === 'tow' || provider.rows[0].tow_participation || provider.rows[0].has_tow_capability) : provider.rows[0].valet_participation;
     if (!allowed) throw new Error('provider_not_transport_capable');
     updated = await client.query(`update transport_dispatches set provider_actor_id=$1,status='assigned',assigned_at=now(),eta_at=coalesce($2,eta_at),updated_at=now() where id=$3 returning *`,[providerActorId,etaAt ?? null,dispatchId]);
-    await client.query(`update service_cases set current_owner_role='tow',current_owner_actor_id=$1,updated_at=now() where id=$2`,[providerActorId,current.case_id]);
+    await client.query(`update service_cases set current_owner_role='tow',current_owner_actor_id=$1,updated_at=now() where id=$2`,[providerActorId,caseId]);
+    await syncTransportOperationalConstraint(caseId,client);
     await client.query('commit');
     committed = true;
   } catch (e) {
@@ -113,13 +141,17 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
   let committed = false;
   let current: any;
   let updated: any;
-  let caseStateForTransition: string | null = null;
-  let needsRepairHandoffDeadline = false;
+  let transitionedToTowInProgress=false;
   try {
     await client.query('begin');
+    const discovered=await client.query('select case_id from transport_dispatches where id=$1',[dispatchId]);
+    if(!discovered.rowCount) throw new Error('dispatch_not_found');
+    const caseId=discovered.rows[0].case_id as string;
+    await lockServiceCase(caseId,client);
     const d = await client.query('select * from transport_dispatches where id=$1 for update',[dispatchId]);
     if (!d.rowCount) throw new Error('dispatch_not_found');
     current = d.rows[0];
+    if(current.case_id!==caseId) throw new Error('transport_case_changed');
     if (principal.role !== 'admin' && current.provider_actor_id !== principal.actorId) throw new Error('dispatch_forbidden');
     const allowed:Record<string,TransportStatus[]> = {
       assigned:['accepted','declined','cancelled'],accepted:['en_route','cancelled','failed'],en_route:['arrived','failed'],
@@ -131,32 +163,26 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
     const ts = timestampColumn[status] ? `, ${timestampColumn[status]}=now()` : '';
     updated = await client.query(`update transport_dispatches set status=$1,metadata=metadata || $2::jsonb,updated_at=now() ${ts} where id=$3 returning *`,[status,JSON.stringify(metadata),dispatchId]);
     if (status === 'accepted') {
-      const c = await client.query('select state from service_cases where id=$1',[current.case_id]);
-      caseStateForTransition = c.rows[0]?.state ?? null;
+      const c = await client.query('select state from service_cases where id=$1',[caseId]);
+      if(c.rows[0]?.state==='tow_pending'){
+        await transitionCase(principal,caseId,'tow_in_progress',{dispatchId},client,'transport_dispatch');
+        transitionedToTowInProgress=true;
+      }
     } else if (status === 'declined') {
-      await client.query(`update service_cases set current_owner_role=null,current_owner_actor_id=null,updated_at=now() where id=$1 and current_owner_actor_id=$2`,[current.case_id,current.provider_actor_id]);
+      await client.query(`update service_cases set current_owner_role=null,current_owner_actor_id=null,updated_at=now() where id=$1 and current_owner_actor_id=$2`,[caseId,current.provider_actor_id]);
       updated = await client.query(
         `update transport_dispatches
          set status='requested',provider_actor_id=null,assigned_at=null,accepted_at=null,updated_at=now(),metadata=metadata || $2::jsonb
          where id=$1 returning *`,
         [dispatchId,JSON.stringify({lastDeclinedBy:principal.actorId??null,lastDeclinedAt:new Date().toISOString()})]
       );
-      await client.query(`insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload) values('service_case',$1,'TRANSPORT_RELEASED_FOR_REASSIGNMENT',$2,$3)`,[current.case_id,principal.actorId??null,JSON.stringify({dispatchId,declinedProviderActorId:current.provider_actor_id})]);
+      await client.query(`insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload) values('service_case',$1,'TRANSPORT_RELEASED_FOR_REASSIGNMENT',$2,$3)`,[caseId,principal.actorId??null,JSON.stringify({dispatchId,declinedProviderActorId:current.provider_actor_id})]);
     } else if (status === 'failed') {
-      await client.query(`update service_cases set current_owner_role=null,current_owner_actor_id=null,updated_at=now() where id=$1 and current_owner_actor_id=$2`,[current.case_id,current.provider_actor_id]);
+      await client.query(`update service_cases set current_owner_role=null,current_owner_actor_id=null,updated_at=now() where id=$1 and current_owner_actor_id=$2`,[caseId,current.provider_actor_id]);
     } else if (status === 'delivered') {
-      await client.query(`update workflow_deadlines set state='resolved',resolved_at=now() where case_id=$1 and deadline_type like 'transport_%' and state='open'`,[current.case_id]);
-      const c = await client.query('select state from service_cases where id=$1',[current.case_id]);
-      const caseState = c.rows[0]?.state ?? null;
-      if (caseState === 'tow_in_progress') {
-        // A repair partner already related to this case (dealer-controlled, or an offer seeded
-        // before the tow) does its own explicit tow -> repair handoff. Only cases with no such
-        // relation need to re-enter the general provider_selection pool -- otherwise they used to
-        // sit in tow_in_progress forever with no automatic advance and no alert.
-        if (await hasRelatedRepairPartner(current.case_id,client)) needsRepairHandoffDeadline = true;
-        else caseStateForTransition = caseState;
-      }
+      await client.query(`update workflow_deadlines set state='resolved',resolved_at=now() where case_id=$1 and deadline_type like 'transport_%' and state='open'`,[caseId]);
     }
+    await syncTransportOperationalConstraint(caseId,client);
     await client.query(`insert into audit_log(principal_role,principal_actor_id,action,object_type,object_id,rule_basis,metadata) values($1,$2,'update_transport_status','transport_dispatch',$3,$4,$5)`,[principal.role,principal.actorId??null,dispatchId,status==='declined'?`${current.status}->declined`:`${current.status}->${status}`,JSON.stringify(metadata)]);
     await client.query('commit');
     committed = true;
@@ -165,18 +191,13 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
     throw e;
   } finally { client.release(); }
 
-  if (caseStateForTransition === 'tow_pending') await transitionCase(principal,current.case_id,'tow_in_progress',{ dispatchId });
-  else if (caseStateForTransition === 'tow_in_progress') await transitionCase(principal,current.case_id,'provider_selection',{ dispatchId });
-
   const eventType = status === 'declined' ? 'TRANSPORT_DECLINED' : `TRANSPORT_${status.toUpperCase()}`;
   const sideEffects: Promise<unknown>[] = [appendCaseEvent(current.case_id,eventType,principal,{ dispatchId,...metadata })];
+  if(transitionedToTowInProgress) sideEffects.push(finalizeExternalCaseTransition(principal,current.case_id,'tow_pending','tow_in_progress',{dispatchId}));
   if (status === 'accepted') sideEffects.push(setCustomerSnapshot(current.case_id,'transport_confirmed','Your transport provider has confirmed the job.','Provider is preparing for pickup',updated.rows[0].eta_at));
   else if (status === 'en_route') sideEffects.push(setCustomerSnapshot(current.case_id,'transport_en_route','Your transport provider is on the way.','Prepare vehicle for pickup',updated.rows[0].eta_at));
   else if (status === 'arrived') sideEffects.push(setCustomerSnapshot(current.case_id,'transport_arrived','Your transport provider has arrived.','Vehicle handoff in progress',updated.rows[0].eta_at));
-  else if (status === 'delivered') {
-    sideEffects.push(setCustomerSnapshot(current.case_id,'transport_delivered','Your vehicle has reached its destination.','Service journey continues'));
-    if (needsRepairHandoffDeadline) sideEffects.push(createDeadline(current.case_id,'repair_handoff',new Date(Date.now()+30*60*1000).toISOString(),'escalate_repair_handoff',{ dispatchId }));
-  }
+  else if (status === 'delivered') sideEffects.push(setCustomerSnapshot(current.case_id,'transport_delivered','Your vehicle has reached its destination.','Service journey continues'));
   else if (status === 'declined' || status === 'failed') sideEffects.push(setCustomerSnapshot(current.case_id,'transport_reassignment','A new transport provider is being arranged.','Reassigning transport'));
   const results = await Promise.allSettled(sideEffects);
   const failedSideEffects = results.filter((r) => r.status === 'rejected');

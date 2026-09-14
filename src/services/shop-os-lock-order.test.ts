@@ -20,6 +20,24 @@ describe('Shop OS scheduling lock order',()=>{
     expect(resourceLock).toBeGreaterThan(caseLock);
   });
 
+  it('locks the linked service case before the appointment and resources on updates',()=>{
+    const start=source.indexOf('export async function updateShopOsAppointment');
+    const end=source.indexOf('export async function listShopOsSchedule',start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const updateBody=source.slice(start,end);
+
+    const preview=updateBody.indexOf('select service_case_id from roviq_appointments where id=$1');
+    const caseLock=updateBody.indexOf('await lockSchedulingCase(previewCaseId,client)');
+    const appointmentLock=updateBody.indexOf('select * from roviq_appointments where id=$1 for update');
+    const resourceLock=updateBody.indexOf('await lockSchedulingResources([existing.resource_id,nextResourceId],client)');
+
+    expect(preview).toBeGreaterThanOrEqual(0);
+    expect(caseLock).toBeGreaterThan(preview);
+    expect(appointmentLock).toBeGreaterThan(caseLock);
+    expect(resourceLock).toBeGreaterThan(appointmentLock);
+  });
+
   it('implements the case lock as a row-level FOR UPDATE lock',()=>{
     const start=source.indexOf('export async function lockSchedulingCase');
     const end=source.indexOf('async function assertManageableServiceCase',start);
@@ -27,19 +45,5 @@ describe('Shop OS scheduling lock order',()=>{
     expect(end).toBeGreaterThan(start);
     const helper=source.slice(start,end);
     expect(helper).toContain('from service_cases where id=$1 for update');
-  });
-
-  it('locks the linked service case before resource locking in appointment update/confirm/reschedule', () => {
-    const start=source.indexOf('export async function updateShopOsAppointment');
-    const end=source.indexOf('export async function listShopOsSchedule',start);
-    expect(start).toBeGreaterThanOrEqual(0);
-    expect(end).toBeGreaterThan(start);
-    const updateBody=source.slice(start,end);
-
-    const caseLock=updateBody.indexOf('await lockSchedulingCase(existing.service_case_id,client)');
-    const resourceLock=updateBody.indexOf('await lockSchedulingResources(');
-
-    expect(caseLock).toBeGreaterThanOrEqual(0);
-    expect(resourceLock).toBeGreaterThan(caseLock);
   });
 });

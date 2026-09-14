@@ -83,8 +83,13 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return body as T;
 }
 
+function jsonMutation<T>(method:'POST'|'PUT'|'PATCH',path:string,payload?:unknown){
+  return request<T>(path,{method,body:payload!==undefined?JSON.stringify(payload):undefined});
+}
+
 export const api = {
   get: <T>(path: string) => request<T>(path),
-  post: <T>(path: string, payload?: unknown) =>
-    request<T>(path, { method: 'POST', body: payload !== undefined ? JSON.stringify(payload) : undefined })
+  post: <T>(path: string, payload?: unknown) => jsonMutation<T>('POST',path,payload),
+  put: <T>(path: string, payload?: unknown) => jsonMutation<T>('PUT',path,payload),
+  patch: <T>(path: string, payload?: unknown) => jsonMutation<T>('PATCH',path,payload)
 };
