@@ -293,10 +293,10 @@ async function productionLifecycle(browser) {
   assert.equal(providerSelectionCase.case.state, 'provider_selection', `Repair routing did not remain in provider_selection; got ${providerSelectionCase.case.state}`);
   assert.ok(providerSelectionCase.case.demand_id, 'Provider-selection case lost its originating demand_id');
   const providerTransitions = await requestJson(`/api/maintenance/cases/${caseId}/transitions`, { token: adminToken });
-  const repairSection = ops.locator('section').filter({ hasText: 'Repair provider handoff' }).first();
-  const evaluateRepair = repairSection.getByRole('button', { name: 'Evaluate repair providers' });
+  const repairHeading = ops.getByRole('heading', { name: 'Repair provider handoff', exact: true });
+  const evaluateRepair = ops.getByRole('button', { name: 'Evaluate repair providers', exact: true });
   try {
-    await repairSection.waitFor({ state: 'visible', timeout: 10_000 });
+    await repairHeading.waitFor({ state: 'visible', timeout: 10_000 });
     await evaluateRepair.waitFor({ state: 'visible', timeout: 10_000 });
   } catch (error) {
     const bodyText = (await ops.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 4000);
@@ -307,13 +307,13 @@ async function productionLifecycle(browser) {
   }
   await screenshot(ops, 'lifecycle-05-ops-provider-selection');
   await evaluateRepair.click();
-  const repairSelect = repairSection.locator('select');
+  const repairSelect = ops.locator('select').filter({ hasText: 'Select eligible provider' }).first();
   await repairSelect.waitFor({ state: 'visible', timeout: 30_000 });
   const partnerId = partnerSession.principal.actorId;
   const partnerOption = repairSelect.locator(`option[value="${partnerId}"]`);
   assert.ok(await partnerOption.count(), 'Test partner is not eligible in Ops repair routing');
   await repairSelect.selectOption(partnerId);
-  await repairSection.getByRole('button', { name: 'Select and offer repair' }).click();
+  await ops.getByRole('button', { name: 'Select and offer repair', exact: true }).click();
   await waitForCaseState(caseId, adminToken, 'provider_pending');
 
   const routedDispatch = await waitForCollectionItem(
