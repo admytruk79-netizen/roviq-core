@@ -42,7 +42,12 @@ export function setToken(token: string | null) {
 }
 
 async function doFetch(path: string, options: RequestInit, headers: Headers) {
-  return fetch(`${API_BASE}${path}`, { ...options, headers });
+  const method = (options.method ?? 'GET').toUpperCase();
+  return fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers,
+    ...(method === 'GET' ? { cache: 'no-store' as RequestCache } : {})
+  });
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
