@@ -52,17 +52,39 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Align lifecycle with current Ops next-action UI
+      - name: Align lifecycle with deployed Ops transition UI
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
           path = Path('tests/production-browser-lifecycle.mjs')
           text = path.read_text()
-          old = """  const moveSection = ops.locator('section').filter({ hasText: 'Move case state' }).first();\n  await moveSection.locator('select').selectOption('diagnostic_pending');\n  await moveSection.getByRole('button', { name: 'Transition' }).click();"""
-          new = """  const nextActionSection = ops.locator('section').filter({ hasText: 'Next action' }).first();\n  const nextActionButton = nextActionSection.getByRole('button').first();\n  await nextActionButton.waitFor({ state: 'visible', timeout: 30_000 });\n  await nextActionButton.click();"""
+          old = """  const moveSection = ops.locator('section').filter({ hasText: 'Move case state' }).first();
+            await moveSection.locator('select').selectOption('diagnostic_pending');
+            await moveSection.getByRole('button', { name: 'Transition' }).click();"""
+          new = """  const legacyMoveSection = ops.locator('section').filter({ hasText: 'Move case state' }).first();
+            const legacySelect = legacyMoveSection.locator('select');
+            if (await legacySelect.isVisible().catch(() => false)) {
+              await legacySelect.selectOption('diagnostic_pending');
+              await legacyMoveSection.getByRole('button', { name: 'Transition' }).click();
+            } else {
+              let liveCase = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken });
+              if (liveCase?.case?.state === 'intake') {
+                const beginTriage = ops.getByRole('button', { name: 'Begin triage', exact: true });
+                await beginTriage.waitFor({ state: 'visible', timeout: 30_000 });
+                await beginTriage.click();
+                await waitForCaseState(caseId, adminToken, 'triage');
+                await gotoStable(ops, `${PORTALS.ops}/cases/${caseId}`);
+                liveCase = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken });
+              }
+              if (liveCase?.case?.state === 'triage') {
+                const requestDiagnosis = ops.getByRole('button', { name: 'Request diagnosis', exact: true });
+                await requestDiagnosis.waitFor({ state: 'visible', timeout: 30_000 });
+                await requestDiagnosis.click();
+              }
+            }"""
           if old not in text:
-              raise SystemExit('Expected legacy Ops transition selector was not found; update the lifecycle source contract.')
+              raise SystemExit('Expected legacy Ops transition block was not found; update production lifecycle source contract.')
           path.write_text(text.replace(old, new, 1))
           PY
 
