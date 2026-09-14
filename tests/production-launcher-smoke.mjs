@@ -12,6 +12,22 @@ async function stable(page, url) {
   await page.locator('body').waitFor({ state: 'visible', timeout: 15_000 });
 }
 
+async function selectPortal(page, name, expectedHost, expectedStage) {
+  const tile = page.locator(`.tile[data-name="${name}"]`);
+  await tile.waitFor({ state: 'visible', timeout: 15_000 });
+  await tile.click();
+  await page.waitForFunction(
+    host => document.querySelector('#portalFrame')?.getAttribute('src')?.includes(host),
+    expectedHost
+  );
+  assert.match(await page.locator('#stageName').innerText(), expectedStage);
+  assert.match(await page.locator('#fallback').getAttribute('href') ?? '', new RegExp(expectedHost.replaceAll('.', '\\.')));
+  const frameBody = page.frameLocator('#portalFrame').locator('body');
+  await frameBody.waitFor({ state: 'visible', timeout: 30_000 });
+  const text = (await frameBody.innerText()).trim();
+  assert.match(text, /ROVIQ/i, `${name} portal should render inside launcher`);
+}
+
 const browser = await chromium.launch({ headless: true });
 try {
   for (const viewport of [
@@ -28,18 +44,11 @@ try {
 
     const frame = page.locator('#portalFrame');
     await frame.waitFor({ state: 'visible', timeout: 15_000 });
-    await page.frameLocator('#portalFrame').locator('body').waitFor({ state: 'visible', timeout: 30_000 });
-    const customerBody = (await page.frameLocator('#portalFrame').locator('body').innerText()).trim();
-    assert.match(customerBody, /ROVIQ/i, 'Customer portal should render inside launcher');
 
-    const diagnosticTile = page.locator('.tile[data-name="Diagnostic"]');
-    await diagnosticTile.click();
-    await page.waitForFunction(() => document.querySelector('#portalFrame')?.getAttribute('src')?.includes('roviq-diagnostic-net.pages.dev'));
-    assert.match(await page.locator('#stageName').innerText(), /Diagnostic/i);
-    assert.match(await page.locator('#fallback').getAttribute('href') ?? '', /roviq-diagnostic-net\.pages\.dev/);
-    await page.frameLocator('#portalFrame').locator('body').waitFor({ state: 'visible', timeout: 30_000 });
-    const diagnosticBody = (await page.frameLocator('#portalFrame').locator('body').innerText()).trim();
-    assert.match(diagnosticBody, /ROVIQ/i, 'Diagnostic portal should render inside launcher');
+    // The launcher may remember or default to any workspace. Explicitly select each portal
+    // before asserting its embedded content so the smoke test validates behavior, not default state.
+    await selectPortal(page, 'Customer', 'roviq-web-dxv.pages.dev', /Customer/i);
+    await selectPortal(page, 'Diagnostic', 'roviq-diagnostic-net.pages.dev', /Diagnostic/i);
 
     await page.screenshot({ path: path.join(ARTIFACT_DIR, `${viewport.name}-launcher.png`), fullPage: true });
     await context.close();
