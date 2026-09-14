@@ -165,7 +165,6 @@ async function productionLifecycle(browser) {
   const caseId = demandPayload?.case?.id;
   assert.match(caseId ?? '', /^[0-9a-f-]{36}$/i, 'Customer demand response did not return a case id');
   await gotoStable(customer, `${PORTALS.customer}/cases/${caseId}`);
-  const casePrefix = caseId.slice(0, 8);
   const customerToken = await customer.evaluate(() => localStorage.getItem('roviq_access_token'));
   assert.ok(customerToken, 'Customer UI did not persist its scoped access token');
   await screenshot(customer, 'lifecycle-01-customer-created');
@@ -284,15 +283,30 @@ async function productionLifecycle(browser) {
   const liveInTransit = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken });
   if (liveInTransit.case.state !== 'provider_selection') {
     assert.equal(liveInTransit.case.state, 'tow_in_progress', `Expected tow_in_progress before repair routing, got ${liveInTransit.case.state}`);
-    const next = ops.locator('section').filter({ hasText: 'Next action' }).getByRole('button').first();
-    await next.waitFor({ state: 'visible', timeout: 30_000 });
-    await next.click();
+    const findRepair = await waitForButton(ops, 'Find repair provider');
+    await findRepair.click();
     await waitForCaseState(caseId, adminToken, 'provider_selection');
     await gotoStable(ops, `${PORTALS.ops}/cases/${caseId}`);
   }
 
+  const providerSelectionCase = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken });
+  assert.equal(providerSelectionCase.case.state, 'provider_selection', `Repair routing did not remain in provider_selection; got ${providerSelectionCase.case.state}`);
+  assert.ok(providerSelectionCase.case.demand_id, 'Provider-selection case lost its originating demand_id');
+  const providerTransitions = await requestJson(`/api/maintenance/cases/${caseId}/transitions`, { token: adminToken });
   const repairSection = ops.locator('section').filter({ hasText: 'Repair provider handoff' }).first();
-  await repairSection.getByRole('button', { name: 'Evaluate repair providers' }).click();
+  const evaluateRepair = repairSection.getByRole('button', { name: 'Evaluate repair providers' });
+  try {
+    await repairSection.waitFor({ state: 'visible', timeout: 10_000 });
+    await evaluateRepair.waitFor({ state: 'visible', timeout: 10_000 });
+  } catch (error) {
+    const bodyText = (await ops.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 4000);
+    log(`STEP6 Core state=${providerSelectionCase.case.state} demandId=${providerSelectionCase.case.demand_id} transitions=${JSON.stringify(providerTransitions.transitions ?? [])}`);
+    log(`STEP6 Ops url=${ops.url()} body=${bodyText}`);
+    await screenshot(ops, 'lifecycle-05-ops-provider-selection-debug');
+    throw error;
+  }
+  await screenshot(ops, 'lifecycle-05-ops-provider-selection');
+  await evaluateRepair.click();
   const repairSelect = repairSection.locator('select');
   await repairSelect.waitFor({ state: 'visible', timeout: 30_000 });
   const partnerId = partnerSession.principal.actorId;
@@ -316,16 +330,16 @@ async function productionLifecycle(browser) {
   const deliver = await waitForButton(tow, 'Mark delivered');
   await deliver.click();
   await waitForCollectionItem('/api/transport/me/dispatches', towSession.accessToken, 'dispatches', item => item.id === dispatch.id && item.status === 'delivered');
-  await screenshot(tow, 'lifecycle-05-tow-delivered');
+  await screenshot(tow, 'lifecycle-06-tow-delivered');
 
   const partnerContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const partner = await partnerContext.newPage();
   await setPortalSession(partner, PORTALS.partner, 'roviq_partner_token', 'roviq_partner_principal', partnerSession);
-  const offerCard = partner.locator('[data-case-id]').filter({ hasText: casePrefix }).first();
+  const offerCard = partner.locator(`[data-case-id="${caseId}"]`).first();
   await offerCard.waitFor({ state: 'visible', timeout: 30_000 });
   await offerCard.getByRole('button', { name: /Accept/i }).click();
   await waitForCaseState(caseId, adminToken, 'repair_in_progress');
-  await screenshot(partner, 'lifecycle-06-partner-accepted');
+  await screenshot(partner, 'lifecycle-07-partner-accepted');
 
   log('7/10 Partner + Parts: create/approve repair work and hand off a parts request through the real portals.');
   const repairOrder = await requestJson(`/api/shop-os/cases/${caseId}/repair-order`, { token: partnerSession.accessToken }).catch(() => null);
@@ -366,7 +380,7 @@ async function productionLifecycle(browser) {
     await button.click();
     await waitForCollectionItem('/api/parts/me/requests', partsSession.accessToken, 'requests', item => item.id === partsRequestId && item.status === expected);
   }
-  await screenshot(parts, 'lifecycle-07-parts-received');
+  await screenshot(parts, 'lifecycle-08-parts-received');
 
   log('8/10 Partner: finish the repair and confirm completion.');
   const currentOrder = await requestJson(`/api/shop-os/repair-orders/${orderId}`, { token: partnerSession.accessToken });
@@ -380,7 +394,7 @@ async function productionLifecycle(browser) {
   }
   const completedOrder = await requestJson(`/api/shop-os/repair-orders/${orderId}`, { token: partnerSession.accessToken });
   assert.equal(completedOrder.order.status, 'completed', 'Repair order did not complete');
-  await screenshot(partner, 'lifecycle-08-repair-complete');
+  await screenshot(partner, 'lifecycle-09-repair-complete');
 
   log('9/10 Payment: advance the case to payment when Core exposes that transition, then exercise the payment handoff.');
   await gotoStable(ops, `${PORTALS.ops}/cases/${caseId}`);
@@ -400,7 +414,7 @@ async function productionLifecycle(browser) {
     await paymentLink.click();
     await ops.waitForLoadState('domcontentloaded');
   }
-  await screenshot(ops, 'lifecycle-09-payment-handoff');
+  await screenshot(ops, 'lifecycle-10-payment-handoff');
 
   log('10/10 Core: verify authority and require the case to reach the payment/completion stage.');
   const finalCase = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken });
