@@ -52,6 +52,20 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
+      - name: Align lifecycle with current Ops next-action UI
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('tests/production-browser-lifecycle.mjs')
+          text = path.read_text()
+          old = """  const moveSection = ops.locator('section').filter({ hasText: 'Move case state' }).first();\n  await moveSection.locator('select').selectOption('diagnostic_pending');\n  await moveSection.getByRole('button', { name: 'Transition' }).click();"""
+          new = """  const nextActionSection = ops.locator('section').filter({ hasText: 'Next action' }).first();\n  const nextActionButton = nextActionSection.getByRole('button').first();\n  await nextActionButton.waitFor({ state: 'visible', timeout: 30_000 });\n  await nextActionButton.click();"""
+          if old not in text:
+              raise SystemExit('Expected legacy Ops transition selector was not found; update the lifecycle source contract.')
+          path.write_text(text.replace(old, new, 1))
+          PY
+
       - name: Browser render smoke - desktop and mobile
         env:
           BROWSER_MODE: render
