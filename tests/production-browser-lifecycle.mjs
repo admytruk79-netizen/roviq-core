@@ -248,7 +248,7 @@ async function productionLifecycle(browser) {
   await waitForCaseState(caseId, adminToken, 'tow_pending');
   await screenshot(diagnostic, 'lifecycle-03-diagnostic-to-tow');
 
-  log('5/10 Ops + Tow: assign Tow / Valet, then drive every dispatch status to delivered through the Tow UI.');
+  log('5/10 Ops + Tow: assign Tow / Valet and drive the vehicle through pickup into transit.');
   await gotoStable(ops, `${PORTALS.ops}/cases/${caseId}`);
   const towSection = ops.locator('section').filter({ hasText: 'Tow handoff' }).first();
   const towSelect = towSection.locator('select');
@@ -271,25 +271,26 @@ async function productionLifecycle(browser) {
     ['Mark en route', 'en_route'],
     ['Mark arrived', 'arrived'],
     ['Mark vehicle loaded', 'vehicle_loaded'],
-    ['Mark in transit', 'in_transit'],
-    ['Mark delivered', 'delivered']
+    ['Mark in transit', 'in_transit']
   ]) {
     const button = await waitForButton(tow, buttonName);
     await button.click();
     await waitForCollectionItem('/api/transport/me/dispatches', towSession.accessToken, 'dispatches', item => item.id === dispatch.id && item.status === expected);
   }
-  await screenshot(tow, 'lifecycle-04-tow-delivered');
+  await screenshot(tow, 'lifecycle-04-tow-in-transit');
 
-  log('6/10 Ops + Partner: route/select a repair provider and accept it in Partner.');
+  log('6/10 Ops + Tow + Partner: select the repair destination, deliver there, then accept the repair handoff.');
   await gotoStable(ops, `${PORTALS.ops}/cases/${caseId}`);
-  const liveAfterTow = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken });
-  if (liveAfterTow.case.state !== 'provider_selection') {
+  const liveInTransit = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken });
+  if (liveInTransit.case.state !== 'provider_selection') {
+    assert.equal(liveInTransit.case.state, 'tow_in_progress', `Expected tow_in_progress before repair routing, got ${liveInTransit.case.state}`);
     const next = ops.locator('section').filter({ hasText: 'Next action' }).getByRole('button').first();
     await next.waitFor({ state: 'visible', timeout: 30_000 });
     await next.click();
     await waitForCaseState(caseId, adminToken, 'provider_selection');
     await gotoStable(ops, `${PORTALS.ops}/cases/${caseId}`);
   }
+
   const repairSection = ops.locator('section').filter({ hasText: 'Repair provider handoff' }).first();
   await repairSection.getByRole('button', { name: 'Evaluate repair providers' }).click();
   const repairSelect = repairSection.locator('select');
@@ -301,6 +302,22 @@ async function productionLifecycle(browser) {
   await repairSection.getByRole('button', { name: 'Select and offer repair' }).click();
   await waitForCaseState(caseId, adminToken, 'provider_pending');
 
+  const routedDispatch = await waitForCollectionItem(
+    '/api/transport/me/dispatches',
+    towSession.accessToken,
+    'dispatches',
+    item => item.id === dispatch.id
+      && item.status === 'in_transit'
+      && item.dropoff_location
+      && Object.keys(item.dropoff_location).length > 0
+  );
+  assert.equal(routedDispatch.dropoff_location.providerActorId, partnerId, 'Tow destination was not projected from the selected repair provider');
+
+  const deliver = await waitForButton(tow, 'Mark delivered');
+  await deliver.click();
+  await waitForCollectionItem('/api/transport/me/dispatches', towSession.accessToken, 'dispatches', item => item.id === dispatch.id && item.status === 'delivered');
+  await screenshot(tow, 'lifecycle-05-tow-delivered');
+
   const partnerContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const partner = await partnerContext.newPage();
   await setPortalSession(partner, PORTALS.partner, 'roviq_partner_token', 'roviq_partner_principal', partnerSession);
@@ -308,7 +325,7 @@ async function productionLifecycle(browser) {
   await offerCard.waitFor({ state: 'visible', timeout: 30_000 });
   await offerCard.getByRole('button', { name: /Accept/i }).click();
   await waitForCaseState(caseId, adminToken, 'repair_in_progress');
-  await screenshot(partner, 'lifecycle-05-partner-accepted');
+  await screenshot(partner, 'lifecycle-06-partner-accepted');
 
   log('7/10 Partner + Parts: create/approve repair work and hand off a parts request through the real portals.');
   const repairOrder = await requestJson(`/api/shop-os/cases/${caseId}/repair-order`, { token: partnerSession.accessToken }).catch(() => null);
@@ -349,7 +366,7 @@ async function productionLifecycle(browser) {
     await button.click();
     await waitForCollectionItem('/api/parts/me/requests', partsSession.accessToken, 'requests', item => item.id === partsRequestId && item.status === expected);
   }
-  await screenshot(parts, 'lifecycle-06-parts-received');
+  await screenshot(parts, 'lifecycle-07-parts-received');
 
   log('8/10 Partner: finish the repair and confirm completion.');
   const currentOrder = await requestJson(`/api/shop-os/repair-orders/${orderId}`, { token: partnerSession.accessToken });
@@ -363,7 +380,7 @@ async function productionLifecycle(browser) {
   }
   const completedOrder = await requestJson(`/api/shop-os/repair-orders/${orderId}`, { token: partnerSession.accessToken });
   assert.equal(completedOrder.order.status, 'completed', 'Repair order did not complete');
-  await screenshot(partner, 'lifecycle-07-repair-complete');
+  await screenshot(partner, 'lifecycle-08-repair-complete');
 
   log('9/10 Payment: advance the case to payment when Core exposes that transition, then exercise the payment handoff.');
   await gotoStable(ops, `${PORTALS.ops}/cases/${caseId}`);
@@ -383,7 +400,7 @@ async function productionLifecycle(browser) {
     await paymentLink.click();
     await ops.waitForLoadState('domcontentloaded');
   }
-  await screenshot(ops, 'lifecycle-08-payment-handoff');
+  await screenshot(ops, 'lifecycle-09-payment-handoff');
 
   log('10/10 Core: verify authority and require the case to reach the payment/completion stage.');
   const finalCase = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken });
