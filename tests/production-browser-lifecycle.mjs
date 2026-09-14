@@ -266,10 +266,15 @@ async function productionLifecycle(browser) {
   const tow = await towContext.newPage();
   await setPortalSession(tow, PORTALS.tow, 'roviq_tow_token', 'roviq_tow_principal', towSession);
   await gotoStable(tow, `${PORTALS.tow}/dispatches/${dispatch.id}`);
-  for (const [label, expected] of [
-    ['Accept job', 'accepted'], ['En route', 'en_route'], ['Arrived', 'arrived'], ['Vehicle loaded', 'loaded'], ['Deliver vehicle', 'delivered']
+  for (const [buttonName, expected] of [
+    ['Accept', 'accepted'],
+    ['Mark en route', 'en_route'],
+    ['Mark arrived', 'arrived'],
+    ['Mark vehicle loaded', 'vehicle_loaded'],
+    ['Mark in transit', 'in_transit'],
+    ['Mark delivered', 'delivered']
   ]) {
-    const button = await waitForButton(tow, label);
+    const button = await waitForButton(tow, buttonName);
     await button.click();
     await waitForCollectionItem('/api/transport/me/dispatches', towSession.accessToken, 'dispatches', item => item.id === dispatch.id && item.status === expected);
   }
