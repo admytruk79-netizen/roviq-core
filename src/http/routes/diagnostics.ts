@@ -11,7 +11,7 @@ const findingBody = z.object({
   findingCode: z.string().optional(),
   summary: z.string().min(3),
   drivability: z.enum(['drivable','limited','non_drivable','unknown']),
-  disposition: z.enum(['diagnose_only','diagnose_and_fix','route_to_shop','route_to_tow']),
+  disposition: z.enum(['diagnose_only','diagnose_and_fix','route_to_shop','route_to_tow','field_service_assessment']),
   confidence: z.number().min(0).max(1).optional(),
   details: z.record(z.unknown()).default({})
 });
@@ -127,7 +127,7 @@ export async function diagnosticRoutes(app: FastifyInstance) {
       [id,req.principal.actorId,JSON.stringify({ findingId:r.rows[0].id, caseId, drivability:b.drivability, disposition:b.disposition })]
     );
     await audit(req.principal,'record_diagnostic_finding','demand_request',id,'assigned_diagnostic_only',{ caseId, disposition:b.disposition });
-    return reply.code(201).send({ finding:r.rows[0], demandState:nextDemandState, case:serviceCase });
+    return reply.code(201).send({ finding:r.rows[0], demandState:nextDemandState, case:serviceCase, fieldServiceRequired: b.disposition === 'field_service_assessment' });
   });
 
   app.get('/api/demands/:id/diagnostic-findings', { preHandler: requireRole('admin','customer','diagnostic','partner','tow') }, async (req, reply) => {
