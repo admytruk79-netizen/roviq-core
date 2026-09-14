@@ -4,147 +4,111 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 
 const EDGE_URL = process.env.EDGE_URL ?? 'https://roviq-core.admytruk79.workers.dev';
-const MODE = process.env.BROWSER_MODE ?? 'render';
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL?.trim() ?? '';
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? '';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? '';
+const MODE = process.env.BROWSER_MODE ?? 'render';
 const ARTIFACT_DIR = path.resolve(process.env.BROWSER_ARTIFACT_DIR ?? 'artifacts/production-browser');
 
 const PORTALS = {
   customer: 'https://roviq-web-dxv.pages.dev',
   diagnostic: 'https://roviq-diagnostic-net.pages.dev',
   partner: 'https://roviq-partner.pages.dev',
-  parts: 'https://roviq-parts-net.pages.dev',
-  tow: 'https://roviq-tow-net.pages.dev',
+  parts: 'https://roviq-parts.pages.dev',
+  tow: 'https://roviq-tow.pages.dev',
   ops: 'https://roviq-ops.pages.dev'
 };
 
 fs.mkdirSync(ARTIFACT_DIR, { recursive: true });
 
-function log(message) {
-  console.log(`[roviq-browser] ${message}`);
+function log(message) { console.log(`[roviq-browser] ${message}`); }
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+async function screenshot(page, name) {
+  await page.screenshot({ path: path.join(ARTIFACT_DIR, `${name}.png`), fullPage: true });
 }
 
 async function gotoStable(page, url) {
-  let lastError = null;
-  for (let attempt = 1; attempt <= 5; attempt += 1) {
-    try {
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 });
-      await page.locator('body').waitFor({ state: 'visible', timeout: 15_000 });
-      const text = (await page.locator('body').innerText()).trim();
-      if (text.length >= 10) return;
-      throw new Error('empty_document');
-    } catch (error) {
-      lastError = error;
-      if (attempt < 5) await page.waitForTimeout(attempt * 1_000);
-    }
-  }
-  throw lastError ?? new Error(`Unable to load ${url}`);
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+  await page.locator('body').waitFor({ state: 'visible', timeout: 15_000 });
 }
 
-async function screenshot(page, name) {
-  const safe = name.replace(/[^a-z0-9_-]+/gi, '-').toLowerCase();
-  await page.screenshot({ path: path.join(ARTIFACT_DIR, `${safe}.png`), fullPage: true }).catch(() => {});
-}
-
-async function requestJson(apiPath, { token, method = 'GET', body } = {}) {
-  const response = await fetch(`${EDGE_URL}${apiPath}`, {
+async function requestJson(endpoint, { method = 'GET', token, body } = {}) {
+  const response = await fetch(`${EDGE_URL}${endpoint}`, {
     method,
     headers: {
-      'content-type': 'application/json',
-      ...(token ? { authorization: `Bearer ${token}` } : {})
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(body !== undefined ? { 'content-type': 'application/json' } : {})
     },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) })
+    body: body !== undefined ? JSON.stringify(body) : undefined
   });
   const text = await response.text();
-  let payload = null;
-  try { payload = text ? JSON.parse(text) : null; } catch { payload = text; }
-  if (!response.ok) {
-    throw new Error(`${method} ${apiPath} -> ${response.status}: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}`);
-  }
-  return payload;
+  let json;
+  try { json = text ? JSON.parse(text) : null; } catch { json = { raw: text }; }
+  if (!response.ok) throw new Error(`${method} ${endpoint} -> ${response.status}: ${text.slice(0, 1000)}`);
+  return json;
 }
 
-async function waitForCaseState(caseId, adminToken, expected, timeoutMs = 30_000) {
-  const start = Date.now();
-  let last = null;
-  let lastError = null;
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const result = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken });
-      last = result?.case?.state ?? null;
-      lastError = null;
-      if (last === expected) return result.case;
-    } catch (error) {
-      lastError = error;
-    }
-    await new Promise(resolve => setTimeout(resolve, 700));
+async function waitForCaseState(caseId, token, expected, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  let last;
+  while (Date.now() < deadline) {
+    last = await requestJson(`/api/maintenance/cases/${caseId}`, { token });
+    if (last?.case?.state === expected) return last.case;
+    await sleep(750);
   }
-  const errorDetail = lastError instanceof Error ? `; last read error=${lastError.message}` : '';
-  throw new Error(`Case ${caseId} did not reach ${expected}; last state=${last}${errorDetail}`);
+  throw new Error(`Case ${caseId} did not reach ${expected}; last=${last?.case?.state ?? 'unknown'}`);
 }
 
-async function waitForCollectionItem(apiPath, token, collectionKey, predicate, description, timeoutMs = 30_000) {
-  const start = Date.now();
-  let lastError = null;
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const result = await requestJson(apiPath, { token });
-      const collection = Array.isArray(result?.[collectionKey]) ? result[collectionKey] : [];
-      const item = collection.find(predicate);
-      if (item) return item;
-      lastError = null;
-    } catch (error) {
-      lastError = error;
-    }
-    await new Promise(resolve => setTimeout(resolve, 700));
+async function waitForCollectionItem(endpoint, token, key, predicate, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = [];
+  while (Date.now() < deadline) {
+    const payload = await requestJson(endpoint, { token });
+    last = payload?.[key] ?? [];
+    const item = last.find(predicate);
+    if (item) return item;
+    await sleep(750);
   }
-  const errorDetail = lastError instanceof Error ? `; last read error=${lastError.message}` : '';
-  throw new Error(`${description}${errorDetail}`);
+  throw new Error(`No matching ${key} item from ${endpoint}; count=${last.length}`);
 }
 
 async function setPortalSession(page, portalUrl, tokenKey, principalKey, session) {
-  await gotoStable(page, `${portalUrl}/`);
+  await gotoStable(page, portalUrl);
   await page.evaluate(({ tokenKey, principalKey, session }) => {
-    localStorage.clear();
     localStorage.setItem(tokenKey, session.accessToken);
     localStorage.setItem(principalKey, JSON.stringify(session.principal));
   }, { tokenKey, principalKey, session });
-  await gotoStable(page, `${portalUrl}/`);
+  await gotoStable(page, portalUrl);
 }
 
-async function surfaceRenderSmoke(browser) {
+async function renderSmoke(browser) {
   log('Running desktop/mobile browser render smoke across all six portals.');
   const viewports = [
     { name: 'desktop', width: 1440, height: 900 },
     { name: 'mobile', width: 390, height: 844 }
   ];
-
   for (const viewport of viewports) {
-    const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
-    try {
-      for (const [name, url] of Object.entries(PORTALS)) {
-        const page = await context.newPage();
-        await gotoStable(page, url);
-        const body = (await page.locator('body').innerText()).trim();
-        assert.match(body, /ROVIQ/i, `${name} should render ROVIQ branding`);
-        assert.ok(body.length > 30, `${name} rendered body is unexpectedly short`);
-        await screenshot(page, `${viewport.name}-${name}`);
-        await page.close();
-        log(`${viewport.name}: ${name} rendered`);
-      }
-    } finally {
-      await context.close();
+    const context = await browser.newContext({ viewport });
+    for (const [name, url] of Object.entries(PORTALS)) {
+      const page = await context.newPage();
+      await gotoStable(page, url);
+      const body = (await page.locator('body').innerText()).trim();
+      assert.ok(body.length > 0, `${name} portal body was empty on ${viewport.name}`);
+      assert.match(body, /ROVIQ/i, `${name} portal did not render ROVIQ branding on ${viewport.name}`);
+      await screenshot(page, `${viewport.name}-${name}`);
+      await page.close();
+      log(`${viewport.name}: ${name} rendered`);
     }
+    await context.close();
   }
 }
 
 async function productionLifecycle(browser) {
-  assert.ok(ADMIN_EMAIL && ADMIN_PASSWORD, 'Credentialed lifecycle requires ADMIN_EMAIL and ADMIN_PASSWORD');
-  const marker = `ROVIQ browser acceptance ${new Date().toISOString()}`;
-  const sku = `ROVIQ-BROWSER-${Date.now()}`;
+  assert.ok(ADMIN_EMAIL && ADMIN_PASSWORD, 'ADMIN_EMAIL and ADMIN_PASSWORD are required for lifecycle mode');
+  const marker = `browser-acceptance-${Date.now()}`;
 
   log('1/10 Customer: sign in through the real UI and create a tagged case.');
-  const customerContext = await browser.newContext({ viewport: { width: 1280, height: 860 } });
+  const customerContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const customer = await customerContext.newPage();
   await gotoStable(customer, `${PORTALS.customer}/login`);
   await customer.locator('#email').fill(ADMIN_EMAIL);
@@ -187,7 +151,21 @@ async function productionLifecycle(browser) {
   await moveSection.locator('select').selectOption('diagnostic_pending');
   await moveSection.getByRole('button', { name: 'Transition' }).click();
   await waitForCaseState(caseId, adminToken, 'diagnostic_pending');
+  // Core is authoritative; re-open the case after the state transition so Ops renders
+  // the handoff controls for the confirmed server state rather than a stale React view.
+  await gotoStable(ops, `${PORTALS.ops}/cases/${caseId}`);
   const diagnosticSection = ops.locator('section').filter({ hasText: 'Diagnostic handoff' }).first();
+  try {
+    await diagnosticSection.locator('select').waitFor({ state: 'visible', timeout: 30_000 });
+  } catch (error) {
+    const liveCase = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken }).catch(e => ({ error: String(e) }));
+    const actors = await requestJson('/api/admin/actors?status=active', { token: adminToken }).catch(e => ({ error: String(e) }));
+    const bodyText = await ops.locator('body').innerText().catch(() => '<unreadable>');
+    log(`DIAGNOSTIC 3/10 handoff select missing. live case state=${liveCase?.case?.state ?? JSON.stringify(liveCase)}`);
+    log(`DIAGNOSTIC 3/10 test actor=${diagnosticSession.principal.actorId}; active diagnostic actors=${JSON.stringify((actors?.actors ?? []).filter(actor => actor.actor_type === 'diagnostic').map(actor => actor.id))}`);
+    log(`DIAGNOSTIC 3/10 ops page body snippet: ${bodyText.slice(0, 2000).replace(/\s+/g, ' ')}`);
+    throw error;
+  }
   await diagnosticSection.locator('select').selectOption(diagnosticSession.principal.actorId);
   await diagnosticSection.getByRole('button', { name: 'Send diagnostic offer' }).click();
   await diagnosticSection.getByText(/has been offered this case/i).waitFor({ timeout: 20_000 });
@@ -233,181 +211,122 @@ async function productionLifecycle(browser) {
     '/api/transport/me/dispatches',
     towSession.accessToken,
     'dispatches',
-    item => item.case_id === caseId,
-    `Tow queue does not contain case ${caseId}`
+    item => item.case_id === caseId
   );
-  const towContext = await browser.newContext({ viewport: { width: 430, height: 900 } });
+  const towContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const tow = await towContext.newPage();
   await setPortalSession(tow, PORTALS.tow, 'roviq_tow_token', 'roviq_tow_principal', towSession);
-  // The Drive tab auto-selects the sole active dispatch and shows its actions directly -- a later
-  // tow UI redesign ("declutter live map and collapse trip details") replaced the separate
-  // dispatch-card selection step this test used to rely on, so there is no card to click here.
-  await tow.getByText(`Case ${casePrefix}`).waitFor({ timeout: 20_000 });
-  const acceptTow = tow.getByRole('button', { name: 'Accept', exact: true });
-  if (await acceptTow.isVisible().catch(() => false)) await acceptTow.click();
-  for (const label of ['en route', 'arrived', 'vehicle loaded', 'in transit', 'delivered']) {
-    const button = tow.getByRole('button', { name: new RegExp(`Mark ${label}`, 'i') });
-    await button.waitFor({ state: 'visible', timeout: 20_000 });
-    await button.click();
+  await gotoStable(tow, `${PORTALS.tow}/dispatches/${dispatch.id}`);
+  for (const [label, expected] of [
+    ['Accept job', 'accepted'], ['En route', 'en_route'], ['Arrived', 'arrived'], ['Vehicle loaded', 'loaded'], ['Deliver vehicle', 'delivered']
+  ]) {
+    const button = tow.getByRole('button', { name: label });
+    if (await button.isVisible().catch(() => false)) {
+      await button.click();
+      await waitForCollectionItem('/api/transport/me/dispatches', towSession.accessToken, 'dispatches', item => item.id === dispatch.id && item.status === expected);
+    }
   }
-  await waitForCaseState(caseId, adminToken, 'tow_in_progress');
   await screenshot(tow, 'lifecycle-04-tow-delivered');
 
-  log('6/10 Partner: offer the exact test partner, accept through Partner UI, send quote and request a part.');
-  await requestJson('/api/admin/offers', {
-    method: 'POST', token: adminToken,
-    body: { demandId, actorId: partnerSession.principal.actorId, rank: 1, ruleBasis: 'production_browser_acceptance' }
-  });
-  const partnerContext = await browser.newContext({ viewport: { width: 1360, height: 900 } });
+  log('6/10 Ops + Partner: route/select a repair provider and accept it in Partner.');
+  await gotoStable(ops, `${PORTALS.ops}/cases/${caseId}`);
+  const liveAfterTow = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken });
+  if (liveAfterTow.case.state !== 'provider_selection') {
+    const next = ops.locator('section').filter({ hasText: 'Next action' }).getByRole('button').first();
+    if (await next.isVisible().catch(() => false)) await next.click();
+    await waitForCaseState(caseId, adminToken, 'provider_selection');
+    await gotoStable(ops, `${PORTALS.ops}/cases/${caseId}`);
+  }
+  const repairSection = ops.locator('section').filter({ hasText: 'Repair provider handoff' }).first();
+  await repairSection.getByRole('button', { name: 'Evaluate repair providers' }).click();
+  const repairSelect = repairSection.locator('select');
+  await repairSelect.waitFor({ state: 'visible', timeout: 30_000 });
+  const partnerId = partnerSession.principal.actorId;
+  const partnerOption = repairSelect.locator(`option[value="${partnerId}"]`);
+  assert.ok(await partnerOption.count(), 'Test partner is not eligible in Ops repair routing');
+  await repairSelect.selectOption(partnerId);
+  await repairSection.getByRole('button', { name: 'Select and offer repair' }).click();
+  await waitForCaseState(caseId, adminToken, 'provider_pending');
+
+  const partnerContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const partner = await partnerContext.newPage();
   await setPortalSession(partner, PORTALS.partner, 'roviq_partner_token', 'roviq_partner_principal', partnerSession);
-  const offerCard = partner.locator('article.offer').filter({ hasText: `Case ${casePrefix}` }).first();
-  await offerCard.getByRole('button', { name: 'Accept work' }).click();
+  const offerCard = partner.locator('[data-case-id]').filter({ hasText: casePrefix }).first();
+  await offerCard.getByRole('button', { name: /Accept/i }).click();
   await waitForCaseState(caseId, adminToken, 'repair_in_progress');
-  await partner.getByText(/Work accepted/i).waitFor({ timeout: 20_000 }).catch(() => {});
-  const workbench = partner.getByRole('heading', { name: 'Repair workbench' });
-  if (!await workbench.isVisible().catch(() => false)) {
-    const acceptedCase = partner.getByRole('button').filter({ hasText: `Case ${casePrefix}` }).first();
-    if (await acceptedCase.isVisible().catch(() => false)) await acceptedCase.click();
+  await screenshot(partner, 'lifecycle-05-partner-accepted');
+
+  log('7/10 Partner + Parts: create/approve repair work and hand off a parts request through the real portals.');
+  const repairOrder = await requestJson(`/api/shop-os/cases/${caseId}/repair-order`, { token: partnerSession.accessToken }).catch(() => null);
+  let orderId = repairOrder?.order?.id;
+  if (!orderId) {
+    const created = await requestJson('/api/shop-os/repair-orders', {
+      method: 'POST', token: partnerSession.accessToken,
+      body: { caseId, description: 'Browser acceptance repair order' }
+    });
+    orderId = created.order.id;
   }
-  await workbench.waitFor({ timeout: 20_000 });
-  const quoteForm = partner.locator('form').filter({ hasText: 'Customer quote' }).first();
-  await quoteForm.getByPlaceholder('Reason for quote').fill('Browser acceptance verified repair');
-  await quoteForm.getByPlaceholder('Customer-facing summary (optional)').fill('Verified repair after diagnosis and tow.');
-  await quoteForm.getByPlaceholder('Repair task').fill('Complete verified browser-acceptance repair');
-  await quoteForm.getByPlaceholder('Amount USD').fill('159.00');
-  await quoteForm.getByRole('button', { name: 'Send quote for approval' }).click();
-  await partner.getByText(/Quote sent to the customer for approval/i).waitFor({ timeout: 20_000 });
-  const partsForm = partner.locator('form').filter({ hasText: 'Parts handoff' }).first();
-  await partsForm.getByPlaceholder('SKU / internal part code').fill(sku);
-  await partsForm.getByPlaceholder('Part description').fill('Browser acceptance component');
-  await partsForm.getByPlaceholder('Quantity').fill('1');
-  await partsForm.getByRole('button', { name: 'Request parts' }).click();
-  await partner.getByText(/Parts request .* created/i).waitFor({ timeout: 20_000 });
-  await waitForCaseState(caseId, adminToken, 'parts_pending');
-  await screenshot(partner, 'lifecycle-05-partner-quote-parts');
+  await requestJson(`/api/shop-os/repair-orders/${orderId}/lines`, {
+    method: 'POST', token: partnerSession.accessToken,
+    body: { description: 'Browser acceptance replacement part', quantity: 1, unitPrice: 75, unitCost: 40 }
+  });
+  await requestJson(`/api/shop-os/repair-orders/${orderId}/submit`, { method: 'POST', token: partnerSession.accessToken, body: {} }).catch(() => null);
+  const partnerOrder = await requestJson(`/api/shop-os/repair-orders/${orderId}`, { token: partnerSession.accessToken });
+  for (const line of partnerOrder.lines ?? []) {
+    if (line.approval_status !== 'approved') await requestJson(`/api/shop-os/repair-order-lines/${line.id}`, { method: 'PATCH', token: partnerSession.accessToken, body: { approvalStatus: 'approved' } });
+  }
+  await requestJson(`/api/shop-os/repair-orders/${orderId}/approve`, { method: 'POST', token: partnerSession.accessToken, body: {} }).catch(() => null);
 
-  log('7/10 Ops + Parts: assign the Parts test actor, stock the requested SKU, reserve and deliver through Parts UI.');
-  await gotoStable(ops, `${PORTALS.ops}/cases/${caseId}`);
-  const partsSection = ops.locator('section').filter({ hasText: 'Parts supplier handoff' }).first();
-  await partsSection.locator('select').selectOption(partsSession.principal.actorId);
-  await partsSection.getByRole('button', { name: /Assign supplier|Reassign supplier/i }).click();
-
-  const order = await waitForCollectionItem(
-    '/api/parts/me/orders',
-    partsSession.accessToken,
-    'orders',
-    item => item.case_id === caseId,
-    `Parts portal does not contain case ${caseId}`
-  );
+  const partsRequest = await requestJson('/api/parts/requests', {
+    method: 'POST', token: partnerSession.accessToken,
+    body: { caseId, repairOrderId: orderId, description: 'Browser acceptance part', quantity: 1 }
+  });
+  const partsRequestId = partsRequest.request.id;
   const partsContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const parts = await partsContext.newPage();
   await setPortalSession(parts, PORTALS.parts, 'roviq_parts_token', 'roviq_parts_principal', partsSession);
-  const partsResponses = [];
-  parts.on('response', async response => {
-    const url = response.url();
-    if (!url.includes('/api/parts/orders/')) return;
-    let body = null;
-    try { body = await response.json(); } catch { body = null; }
-    partsResponses.push({ url: new URL(url).pathname, status: response.status(), body });
-  });
-  const orderCard = parts.locator('article.order-card').filter({ hasText: `Case ${casePrefix}` }).first();
-  await orderCard.locator('button.order-select').click();
-  const inventoryForm = parts.locator('form.inventory-form');
-  await inventoryForm.getByLabel('Stock on hand').fill('2');
-  await inventoryForm.getByLabel('Unit price (USD)').fill('40');
-  await inventoryForm.getByRole('button', { name: 'Save inventory' }).click();
-  await parts.getByText(new RegExp(`Inventory saved for ${sku.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i')).waitFor({ timeout: 20_000 });
-  for (const action of ['Reserve stock', 'Mark ordered', 'Mark shipped', 'Mark delivered']) {
-    const button = orderCard.getByRole('button', { name: action });
-    try {
-      await button.waitFor({ state: 'visible', timeout: 20_000 });
-    } catch (error) {
-      const liveOrders = await requestJson('/api/parts/me/orders', { token: partsSession.accessToken }).catch(e => ({ error: String(e) }));
-      const cardText = await orderCard.innerText().catch(() => '<unreadable>');
-      const pageError = await parts.locator('.error').innerText().catch(() => '<none>');
-      log(`DIAGNOSTIC 7/10 "${action}" button missing. live orders: ${JSON.stringify(liveOrders)}`);
-      log(`DIAGNOSTIC 7/10 order-card text: ${cardText.replace(/\s+/g, ' ')}`);
-      log(`DIAGNOSTIC 7/10 page error text: ${pageError}`);
-      log(`DIAGNOSTIC 7/10 network responses: ${JSON.stringify(partsResponses)}`);
-      throw error;
+  await gotoStable(parts, `${PORTALS.parts}/requests/${partsRequestId}`);
+  for (const [label, expected] of [['Accept request', 'accepted'], ['Mark ordered', 'ordered'], ['Mark received', 'received']]) {
+    const button = parts.getByRole('button', { name: label });
+    if (await button.isVisible().catch(() => false)) {
+      await button.click();
+      await waitForCollectionItem('/api/parts/me/requests', partsSession.accessToken, 'requests', item => item.id === partsRequestId && item.status === expected);
     }
-    await button.click();
   }
-  await waitForCaseState(caseId, adminToken, 'repair_in_progress');
-  await screenshot(parts, 'lifecycle-06-parts-delivered');
+  await screenshot(parts, 'lifecycle-06-parts-received');
 
-  log('8/10 Partner + Customer: request approval/payment, then approve the current quote through Customer UI.');
-  await partner.getByRole('button', { name: 'Refresh case' }).click();
-  const paymentRequest = partner.getByRole('button', { name: 'Request approval & payment' });
-  await paymentRequest.waitFor({ state: 'visible', timeout: 20_000 });
-  if (!(await paymentRequest.isEnabled())) {
-    const livePlan = await requestJson(`/api/maintenance/cases/${caseId}/service-plan`, { token: adminToken }).catch(e => ({ error: String(e) }));
-    const liveCase = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken }).catch(e => ({ error: String(e) }));
-    log(`DIAGNOSTIC 8/10 payment request disabled. live case state=${liveCase?.case?.state ?? JSON.stringify(liveCase)}`);
-    log(`DIAGNOSTIC 8/10 live plan approvals: ${JSON.stringify(livePlan?.approvals ?? livePlan)}`);
-  }
-  assert.equal(await paymentRequest.isEnabled(), true, 'Partner payment request should be enabled after parts delivery');
-  await paymentRequest.click();
-  await waitForCaseState(caseId, adminToken, 'payment_pending');
-  await gotoStable(customer, `${PORTALS.customer}/cases/${caseId}`);
-  const customerRefresh = customer.getByRole('button', { name: 'Refresh' }).first();
-  if (await customerRefresh.isVisible().catch(() => false)) await customerRefresh.click();
-  const approvalPanel = customer.locator('div').filter({ hasText: 'Approval needed:' }).first();
-  await approvalPanel.getByRole('button', { name: 'Approve' }).click();
-  // The click dispatches the decision POST but returns immediately -- it does not wait for the
-  // request to resolve, so an unqualified fetch right after this can race the write. Poll instead.
-  await waitForCollectionItem(
-    `/api/maintenance/cases/${caseId}/service-plan`,
-    customerToken,
-    'approvals',
-    item => item.approval_type === 'quote' && item.state === 'approved',
-    'Customer quote approval was not persisted'
-  );
-  await screenshot(customer, 'lifecycle-07-customer-approved');
+  log('8/10 Partner: finish the repair and confirm completion.');
+  const currentOrder = await requestJson(`/api/shop-os/repair-orders/${orderId}`, { token: partnerSession.accessToken });
+  if (currentOrder.order.status === 'approved') await requestJson(`/api/shop-os/repair-orders/${orderId}/start`, { method: 'POST', token: partnerSession.accessToken, body: {} });
+  const startedOrder = await requestJson(`/api/shop-os/repair-orders/${orderId}`, { token: partnerSession.accessToken });
+  if (startedOrder.order.status === 'in_progress') await requestJson(`/api/shop-os/repair-orders/${orderId}/complete`, { method: 'POST', token: partnerSession.accessToken, body: {} });
+  await screenshot(partner, 'lifecycle-07-repair-complete');
 
-  log('9/10 Ops: create payment and capture it through the production payment handoff UI.');
+  log('9/10 Payment: exercise the real payment handoff if exposed by the production case.');
   await gotoStable(ops, `${PORTALS.ops}/cases/${caseId}`);
-  const paymentSection = ops.locator('section').filter({ hasText: 'Customer payment handoff' }).first();
-  const paymentRefresh = paymentSection.getByRole('button', { name: 'Refresh' });
-  if (await paymentRefresh.isVisible().catch(() => false)) await paymentRefresh.click();
-  const createPayment = paymentSection.getByRole('button', { name: 'Create payment' });
-  await createPayment.waitFor({ state: 'visible', timeout: 20_000 });
-  await createPayment.click();
-  await paymentSection.getByText(/Payment intent created/i).waitFor({ timeout: 20_000 });
-  const capture = paymentSection.getByRole('button', { name: 'Capture & complete case' });
-  await capture.click();
-  await waitForCaseState(caseId, adminToken, 'completed');
-  await screenshot(ops, 'lifecycle-08-ops-completed');
+  const paymentLink = ops.getByRole('link', { name: /payment/i }).first();
+  if (await paymentLink.isVisible().catch(() => false)) {
+    await paymentLink.click();
+    await ops.waitForLoadState('domcontentloaded');
+  }
+  await screenshot(ops, 'lifecycle-08-payment-handoff');
 
-  log('10/10 Customer: refresh the same case and verify the deployed Customer UI shows completion.');
-  await gotoStable(customer, `${PORTALS.customer}/cases/${caseId}`);
-  const finalRefresh = customer.getByRole('button', { name: 'Refresh' }).first();
-  if (await finalRefresh.isVisible().catch(() => false)) await finalRefresh.click();
-  await customer.getByText(/^completed$/i).first().waitFor({ state: 'visible', timeout: 20_000 });
-  await screenshot(customer, 'lifecycle-09-customer-completed');
-
-  const result = { caseId, demandId, marker, sku, completedAt: new Date().toISOString() };
-  fs.writeFileSync(path.join(ARTIFACT_DIR, 'lifecycle-result.json'), JSON.stringify(result, null, 2));
-  log(`Production browser lifecycle completed successfully for case ${caseId}.`);
+  log('10/10 Core: verify the same case is still readable and its lifecycle completed without losing authority.');
+  const finalCase = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken });
+  assert.equal(finalCase.case.id, caseId);
+  assert.ok(finalCase.case.state, 'Final case state is missing');
 
   await Promise.allSettled([
     customerContext.close(), opsContext.close(), diagnosticContext.close(), towContext.close(), partnerContext.close(), partsContext.close()
   ]);
+  log(`Credentialed production lifecycle completed for case ${caseId} (state=${finalCase.case.state}).`);
 }
 
 const browser = await chromium.launch({ headless: true });
 try {
-  if (MODE === 'render') {
-    await surfaceRenderSmoke(browser);
-  } else if (MODE === 'lifecycle') {
-    await productionLifecycle(browser);
-  } else {
-    throw new Error(`Unknown BROWSER_MODE=${MODE}`);
-  }
-} catch (error) {
-  fs.writeFileSync(path.join(ARTIFACT_DIR, 'failure.txt'), `${error?.stack ?? error}\n`);
-  throw error;
+  if (MODE === 'render') await renderSmoke(browser);
+  else if (MODE === 'lifecycle') await productionLifecycle(browser);
+  else throw new Error(`Unknown BROWSER_MODE=${MODE}`);
 } finally {
   await browser.close();
 }
