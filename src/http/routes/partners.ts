@@ -73,8 +73,18 @@ export async function partnerRoutes(app: FastifyInstance) {
 
   app.get('/api/partners/me/offers', { preHandler: requireRole('partner','diagnostic','tow','parts','fleet') }, async (req) => {
     const r = await pool.query(
-      `select m.*, d.demand_type, d.urgency, d.attributes from matches_offers m
-       join demand_requests d on d.id=m.demand_id where m.actor_id=$1 order by m.offered_at desc`,
+      `select m.*, d.demand_type, d.urgency, d.attributes, sc.state as case_state
+         from matches_offers m
+         join demand_requests d on d.id=m.demand_id
+         join service_cases sc on sc.id=m.case_id
+        where m.actor_id=$1
+          and sc.selected_actor_id=$1
+          and (
+            (m.outcome='offered' and sc.state='provider_pending')
+            or (m.outcome='accepted' and sc.state in ('repair_in_progress','payment_pending'))
+          )
+        order by coalesce(m.responded_at,m.offered_at) desc
+        limit 100`,
       [req.principal.actorId]
     );
     return { offers: r.rows };
