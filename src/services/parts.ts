@@ -3,6 +3,7 @@ import type { Principal } from '../types/principal.js';
 import { appendCaseEvent, createDeadline, transitionCase } from './orchestration.js';
 import { audit } from './audit.js';
 import { queueNotification, setCustomerSnapshot } from './operations.js';
+import { assertCaseAccess } from './case-access.js';
 
 type PartItemInput = { sku:string; partNumber?:string; description?:string; quantity:number; attributes?:Record<string,unknown> };
 
@@ -63,8 +64,7 @@ async function resumeLinkedFieldService(principal:Principal,order:any){
 }
 
 export async function createPartsOrder(principal: Principal, input:{ caseId:string; deliveryLocationId?:string; neededBy?:string; items:PartItemInput[]; attributes?:Record<string,unknown> }) {
-  const c = await pool.query('select * from service_cases where id=$1',[input.caseId]);
-  if (!c.rowCount) throw new Error('case_not_found');
+  const c = await assertCaseAccess(principal,input.caseId);
   const client = await pool.connect();
   try {
     await client.query('begin');
@@ -81,7 +81,7 @@ export async function createPartsOrder(principal: Principal, input:{ caseId:stri
       );
     }
     await client.query('commit');
-    if (c.rows[0].state === 'repair_in_progress') await transitionCase(principal,input.caseId,'parts_pending',{ orderId:order.rows[0].id });
+    if (c.state === 'repair_in_progress') await transitionCase(principal,input.caseId,'parts_pending',{ orderId:order.rows[0].id });
     await appendCaseEvent(input.caseId,'PARTS_ORDER_CREATED',principal,{ orderId:order.rows[0].id, itemCount:input.items.length });
     await setCustomerSnapshot(input.caseId,'parts_pending','Parts are being sourced for your vehicle.','Waiting for parts availability',input.neededBy);
     await audit(principal,'create_parts_order','parts_order',order.rows[0].id,'parts_requested',{ caseId:input.caseId });

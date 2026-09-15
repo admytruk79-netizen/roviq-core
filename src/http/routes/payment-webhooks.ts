@@ -17,7 +17,9 @@ const PAYMENT_CONFLICTS=new Set([
   'provider_event_conflict',
   'capture_amount_mismatch',
   'refund_not_allowed',
-  'invalid_refund_amount'
+  'invalid_refund_amount',
+  'refund_exceeds_available_balance',
+  'payout_exceeds_available_balance'
 ]);
 
 function rawBody(body:unknown){

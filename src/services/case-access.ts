@@ -8,10 +8,10 @@ type Queryable = Pick<PoolClient, 'query'>;
 export async function loadCaseForPrincipal(principal:Principal, caseId:string, queryable:Queryable = pool) {
   const result = await queryable.query<CaseAccessRecord & Record<string,unknown>>(
     `select c.*,
-       exists(select 1 from matches_offers mo where mo.case_id=c.id and mo.actor_id=$2) as has_provider_relation,
-       exists(select 1 from transport_dispatches td where td.case_id=c.id and td.provider_actor_id=$2) as has_transport_relation,
-       exists(select 1 from parts_orders po where po.case_id=c.id and po.supplier_actor_id=$2) as has_parts_relation,
-       exists(select 1 from mobility_allocations ma where ma.case_id=c.id and ma.provider_actor_id=$2) as has_mobility_relation
+       exists(select 1 from matches_offers mo where mo.case_id=c.id and mo.actor_id=$2 and mo.outcome='accepted') as has_provider_relation,
+       exists(select 1 from transport_dispatches td where td.case_id=c.id and td.provider_actor_id=$2 and td.status not in ('declined','cancelled')) as has_transport_relation,
+       exists(select 1 from parts_orders po where po.case_id=c.id and po.supplier_actor_id=$2 and po.status not in ('cancelled','failed')) as has_parts_relation,
+       exists(select 1 from mobility_allocations ma where ma.case_id=c.id and ma.provider_actor_id=$2 and ma.state not in ('cancelled','declined','failed')) as has_mobility_relation
      from service_cases c where c.id=$1`,
     [caseId, principal.actorId ?? null]
   );

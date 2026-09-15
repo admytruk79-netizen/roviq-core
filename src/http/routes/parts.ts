@@ -20,6 +20,7 @@ export async function partsRoutes(app: FastifyInstance) {
     } catch (e) {
       const message = e instanceof Error ? e.message : 'parts_order_failed';
       if (message === 'case_not_found') return reply.code(404).send({ error:message });
+      if (message === 'forbidden') return reply.code(403).send({ error:message });
       throw e;
     }
   });

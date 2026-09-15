@@ -15,7 +15,7 @@ export async function buildApp() {
   await app.register(rateLimit, {
     max: 120,
     timeWindow: '1 minute',
-    keyGenerator: (req) => (req.headers.authorization as string | undefined) ?? req.ip
+    keyGenerator: (req) => req.ip
   });
 
   await registerPublicRoutes(app);

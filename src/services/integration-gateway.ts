@@ -79,10 +79,12 @@ export async function deliverWebhookBatch(limit=50) {
     const r = await client.query(
       `select d.*,s.endpoint_url,s.secret,e.event_type,e.aggregate_type,e.aggregate_id,e.actor_id,e.payload,e.occurred_at
        from webhook_deliveries d join webhook_subscriptions s on s.id=d.subscription_id join integration_events e on e.id=d.integration_event_id
-       where d.state in ('pending','retry') and d.available_at<=now() order by d.created_at asc for update skip locked limit $1`,[limit]
+       where (d.state in ('pending','retry') and d.available_at<=now())
+          or (d.state='processing' and (d.locked_at is null or d.locked_at<now()-interval '5 minutes'))
+       order by d.created_at asc for update skip locked limit $1`,[limit]
     );
     const ids = r.rows.map((x:any)=>x.id);
-    if (ids.length) await client.query(`update webhook_deliveries set state='processing' where id=any($1::uuid[])`,[ids]);
+    if (ids.length) await client.query(`update webhook_deliveries set state='processing',locked_at=now() where id=any($1::uuid[])`,[ids]);
     await client.query('commit');
     const results:any[]=[];
     for (const d of r.rows) {
@@ -90,16 +92,16 @@ export async function deliverWebhookBatch(limit=50) {
       const ts = Math.floor(Date.now()/1000).toString();
       const sig = createHmac('sha256',d.secret).update(`${ts}.${body}`).digest('hex');
       try {
-        const resp = await fetch(d.endpoint_url,{method:'POST',headers:{'content-type':'application/json','x-roviq-event-id':d.integration_event_id,'x-roviq-timestamp':ts,'x-roviq-signature':`v1=${sig}`},body});
+        const resp = await fetch(d.endpoint_url,{method:'POST',headers:{'content-type':'application/json','x-roviq-event-id':d.integration_event_id,'x-roviq-timestamp':ts,'x-roviq-signature':`v1=${sig}`},body,signal:AbortSignal.timeout(15000)});
         if (resp.ok) {
-          await pool.query(`update webhook_deliveries set state='delivered',attempt_count=attempt_count+1,response_code=$1,delivered_at=now() where id=$2`,[resp.status,d.id]);
+          await pool.query(`update webhook_deliveries set state='delivered',attempt_count=attempt_count+1,response_code=$1,delivered_at=now(),locked_at=null where id=$2`,[resp.status,d.id]);
           results.push({id:d.id,state:'delivered'});
         } else throw new Error(`http_${resp.status}`);
       } catch (e) {
         const attempt = d.attempt_count + 1;
         const dead = attempt >= 8;
         const delaySec = Math.min(3600,Math.pow(2,attempt)*15);
-        await pool.query(`update webhook_deliveries set state=$1,attempt_count=$2,last_error=$3,available_at=now()+($4||' seconds')::interval where id=$5`,[dead?'dead':'retry',attempt,String(e instanceof Error?e.message:e),delaySec,d.id]);
+        await pool.query(`update webhook_deliveries set state=$1,attempt_count=$2,last_error=$3,available_at=now()+($4||' seconds')::interval,locked_at=null where id=$5`,[dead?'dead':'retry',attempt,String(e instanceof Error?e.message:e),delaySec,d.id]);
         results.push({id:d.id,state:dead?'dead':'retry'});
       }
     }

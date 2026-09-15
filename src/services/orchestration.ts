@@ -6,6 +6,7 @@ import { assertCaseAccess } from './case-access.js';
 import { publishIntegrationEvent } from './integration-gateway.js';
 import { consumeCaseCapacity, releaseCaseCapacity } from './capacity-reservation.js';
 import { rebuildShopOsCapacity } from './shop-os.js';
+import { syncOperationalConstraints } from './case-constraint-projection.js';
 
 export { appendCaseEvent, getCaseTimeline } from './case-events.js';
 export { createDeadline, raiseException } from './workflow-support.js';
@@ -135,6 +136,7 @@ export async function transitionCase(
       return c;
     }
     if (toState === 'cancelled') {
+      if (c.state === 'completed') throw new Error('invalid_case_transition');
       if (!['admin','customer'].includes(principal.role)) throw new Error('transition_forbidden');
     } else {
       const rule = await client.query(
@@ -152,6 +154,7 @@ export async function transitionCase(
     if(toState==='cancelled'){
       await releaseCaseCapacity(caseId,client);
       await cancelLinkedShopOsAppointments(caseId,principal,client);
+      await syncOperationalConstraints(caseId,client);
     }
     if(toState==='completed') await consumeCaseCapacity(caseId,client);
     await client.query(

@@ -197,5 +197,9 @@ export async function updateShopWaitlistEntry(principal:Principal,entryId:string
       where id=$1 returning *`,[entryId,nextState,canonicalOfferExpiry,input.appointmentId??null]);
     await client.query('commit');
     return updated.rows[0];
-  }catch(error){await client.query('rollback');throw error;}finally{client.release();}
+  }catch(error){
+    await client.query('rollback');
+    if((error as {code?:string})?.code==='23505') throw httpError('waitlist_appointment_already_booked',409);
+    throw error;
+  }finally{client.release();}
 }

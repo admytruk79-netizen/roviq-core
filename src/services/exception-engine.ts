@@ -2,6 +2,7 @@ import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
 import { appendCaseEvent } from './orchestration.js';
 import { assertAdminCaseScope, assertExceptionOwnerScope, getAdminActorScope } from './admin-case-scope.js';
+import { audit } from './audit.js';
 
 export type ExceptionState = 'open' | 'acknowledged' | 'remediating' | 'resolved' | 'dismissed';
 
@@ -56,6 +57,7 @@ export async function updateExceptionState(principal: Principal, exceptionId: st
       exceptionId,exceptionCode:row.exception_code,from:row.state,to:input.state,resolutionCode:input.resolutionCode ?? null
     },client);
     await client.query('commit');
+    await audit(principal,'update_exception_state','case_exception',exceptionId,`${row.state}->${input.state}`,{caseId:row.case_id,resolutionCode:input.resolutionCode ?? null});
     return updated.rows[0];
   } catch (error) {
     await client.query('rollback');
@@ -84,6 +86,7 @@ export async function assignException(principal: Principal, exceptionId: string,
       dueAt:input.dueAt ?? null
     },client);
     await client.query('commit');
+    await audit(principal,'assign_exception','case_exception',exceptionId,'ownership_assigned',{caseId:row.case_id,ownerActorId:input.ownerActorId ?? null});
     return updated.rows[0];
   } catch(error) {
     await client.query('rollback');

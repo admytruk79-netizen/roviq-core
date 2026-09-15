@@ -95,7 +95,7 @@ export async function paymentRoutes(app: FastifyInstance) {
       if (m==='forbidden') return reply.code(403).send({ error:m });
       if (m==='payment_not_found') return reply.code(404).send({ error:m });
       if (m==='invalid_financial_amount') return reply.code(422).send({ error:m });
-      if (['refund_not_allowed','invalid_refund_amount','provider_event_conflict'].includes(m)) return reply.code(409).send({ error:m });
+      if (['refund_not_allowed','invalid_refund_amount','refund_exceeds_available_balance','provider_event_conflict'].includes(m)) return reply.code(409).send({ error:m });
       throw e;
     }
   });
@@ -108,7 +108,7 @@ export async function paymentRoutes(app: FastifyInstance) {
       if(m==='forbidden')return reply.code(403).send({error:m});
       if(['case_not_found','payment_not_found'].includes(m))return reply.code(404).send({error:m});
       if(['currency_precision_unsupported','invalid_financial_amount'].includes(m))return reply.code(422).send({error:m});
-      if(['payout_counterparty_invalid','payout_payment_case_mismatch','payout_currency_mismatch','provider_payout_conflict'].includes(m))return reply.code(409).send({error:m});
+      if(['payout_counterparty_invalid','payout_payment_case_mismatch','payout_currency_mismatch','payout_exceeds_available_balance','provider_payout_conflict'].includes(m))return reply.code(409).send({error:m});
       throw e;
     }
   });

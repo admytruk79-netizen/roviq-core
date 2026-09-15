@@ -32,9 +32,9 @@ type SelectionTrace = {
   serviceTargetAt:string;
 };
 
-function canSelect(principal: Principal, mode: SelectionMode, relationshipOwnerActorId?: string | null) {
+function canSelect(principal: Principal, mode: SelectionMode, relationshipOwnerActorId?: string | null, customerActorId?: string | null) {
   if (principal.role === 'admin') return true;
-  if (mode === 'customer_choice') return principal.role === 'customer';
+  if (mode === 'customer_choice') return principal.role === 'customer' && !!principal.actorId && principal.actorId === customerActorId;
   if (mode === 'dealer_controlled') return principal.role === 'partner' && !!principal.actorId && principal.actorId === relationshipOwnerActorId;
   return false;
 }
@@ -256,7 +256,7 @@ export async function authorizeExistingOfferSelection(
   const row=await loadSelectionCase(caseId,client);
   assertSelectableCase(row,allowedFromStates);
   const mode=row.selection_mode;
-  if(!canSelect(principal,mode,row.relationship_owner_actor_id)) throw new Error('selection_forbidden');
+  if(!canSelect(principal,mode,row.relationship_owner_actor_id,row.customer_actor_id)) throw new Error('selection_forbidden');
   if(!row.demand_id) throw new Error('case_demand_missing');
   const {capability}=await resolveRequestedCapabilityForDemand(row.demand_id,client);
   const serviceability=await evaluateAndReserveSelection(caseId,actorId,capability,client);
@@ -274,7 +274,7 @@ export async function selectCaseActor(principal: Principal, caseId: string, acto
     const row=await loadSelectionCase(caseId,client);
     assertSelectableCase(row);
     const mode=row.selection_mode;
-    if(!canSelect(principal,mode,row.relationship_owner_actor_id)) throw new Error('selection_forbidden');
+    if(!canSelect(principal,mode,row.relationship_owner_actor_id,row.customer_actor_id)) throw new Error('selection_forbidden');
 
     let demandId=row.demand_id;
     let overrideCapability:string|null=null;

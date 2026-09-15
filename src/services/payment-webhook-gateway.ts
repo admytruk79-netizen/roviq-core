@@ -44,7 +44,9 @@ export async function applyPaymentWebhook(provider:string,event:PaymentWebhookEv
   switch(event.type){
     case 'payment.requires_action': return updatePaymentState(principal,event.paymentIntentId,'requires_action',{amount:event.amount,providerEventId:event.id,payload});
     case 'payment.authorized': return updatePaymentState(principal,event.paymentIntentId,'authorized',{amount:event.amount,providerEventId:event.id,payload});
-    case 'payment.captured': return updatePaymentState(principal,event.paymentIntentId,'captured',{amount:event.amount,providerEventId:event.id,payload});
+    case 'payment.captured':
+      if(event.amount===undefined) throw new Error('payment_webhook_amount_required');
+      return updatePaymentState(principal,event.paymentIntentId,'captured',{amount:event.amount,providerEventId:event.id,payload});
     case 'payment.cancelled': return updatePaymentState(principal,event.paymentIntentId,'cancelled',{amount:event.amount,providerEventId:event.id,payload});
     case 'payment.failed': return updatePaymentState(principal,event.paymentIntentId,'failed',{amount:event.amount,providerEventId:event.id,payload});
     case 'payment.refunded':
