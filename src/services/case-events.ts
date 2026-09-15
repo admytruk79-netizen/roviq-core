@@ -2,6 +2,8 @@ import type { PoolClient } from 'pg';
 import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
 
+import { validIdentityId } from './audit.js';
+
 type Queryable = Pick<PoolClient, 'query'>;
 
 export async function appendCaseEvent(
@@ -12,9 +14,9 @@ export async function appendCaseEvent(
   queryable: Queryable = pool
 ) {
   await queryable.query(
-    `insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload)
-     values('service_case',$1,$2,$3,$4)`,
-    [caseId,eventType,principal.actorId ?? null,JSON.stringify(payload)]
+    `insert into events(aggregate_type,aggregate_id,event_type,actor_id,principal_identity_id,payload)
+     values('service_case',$1,$2,$3,$4,$5)`,
+    [caseId,eventType,principal.actorId ?? null,validIdentityId(principal.identityId),JSON.stringify(payload)]
   );
 }
 

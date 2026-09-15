@@ -50,9 +50,12 @@ export async function updateShopOsAppointment(principal:Principal,appointmentId:
     assertAppointmentInterval(nextStarts,nextEnds);
     if(input.action==='reschedule'&&(!input.startsAt&&!input.endsAt&&!input.resourceId)) throw httpError('reschedule_change_required',400);
 
-    if(['reschedule','confirm','start'].includes(input.action)){
-      await lockSchedulingResources([existing.resource_id,nextResourceId],client);
-    }
+    // Every action ends up rebuilding capacity for the resource below, so the resource lock is
+    // always taken here (case -> appointment -> resource -> capacity), not just for
+    // reschedule/confirm/start -- skipping it for cancel/release/no_show/complete let concurrent
+    // operations on the same resource take these locks in different orders and deadlock instead
+    // of serializing cleanly.
+    await lockSchedulingResources([existing.resource_id,nextResourceId],client);
 
     let matchedCapacity:CapacityMatch|null=null;
     if(input.action==='reschedule'||input.action==='confirm'){

@@ -1,6 +1,8 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { pool } from '../src/db/pool.js';
-import { createShopOsAppointment, updateShopOsAppointment } from '../src/services/shop-os.js';
+import { createShopOsAppointment } from '../src/services/shop-os-appointment-create.js';
+import { updateShopOsAppointment } from '../src/services/shop-os-appointment-update.js';
+import { syncPartsOperationalConstraint } from '../src/services/case-constraint-projection.js';
 import { createRepairOrder, addRepairOrderLine, updateRepairOrderLine, updateRepairOrder } from '../src/services/shop-os-repair-orders.js';
 import { createShopResource } from '../src/services/shop-os-resources.js';
 import { createWorkItem, clockTechnicianIn } from '../src/services/shop-os-floor.js';
@@ -51,21 +53,42 @@ describe('Shop OS Devin review hardening',()=>{
   it('keeps held appointments available but fails closed when case constraints block confirmation',async()=>{
     const shop=await setupShop();
     const caseId=await createCase(shop.shopActorId);
-    await pool.query(`insert into case_parts_requirements(service_case_id,description,quantity,readiness_status)
-      values($1,'Brake pads',1,'ordered')`,[caseId]);
     const start=new Date(Date.now()+30*60_000).toISOString();
     const end=new Date(Date.now()+90*60_000).toISOString();
 
-    await expect(createShopOsAppointment(admin,{
-      serviceCaseId:caseId,resourceId:shop.resourceId,startsAt:start,endsAt:end,serviceCategory:'repair',status:'confirmed'
-    })).rejects.toMatchObject({message:'service_case_not_confirmable',statusCode:409});
-
+    // Parts readiness is a fail-closed dependency for holds too, not just confirmation (see
+    // docs/PRODUCTION_READINESS_EXECUTION_PLAN.md section 2: "Add fail-closed coverage for
+    // parts, mobility, transport, approval..."). customer_time is the one constraint deliberately
+    // exempted from hold-blocking, to avoid it circularly blocking the very first hold that would
+    // go on to satisfy it -- so the case must be hold-able (no parts issue yet) before the hold,
+    // with the parts issue introduced afterward to demonstrate the hold/confirm distinction.
     const held=await createShopOsAppointment(admin,{
       serviceCaseId:caseId,resourceId:shop.resourceId,startsAt:start,endsAt:end,serviceCategory:'repair',status:'held'
     });
     expect(held.appointment_status).toBe('held');
+
+    await pool.query(`insert into case_parts_requirements(service_case_id,description,quantity,readiness_status)
+      values($1,'Brake pads',1,'ordered')`,[caseId]);
+    // The real parts-order flow (src/services/parts.ts) owns and refreshes this projection itself
+    // on every mutation -- scheduling checks deliberately read case_constraints as-is rather than
+    // broadly resyncing it (see shop-os-modularization.test.ts), so a direct test insert must
+    // project it explicitly too.
+    await syncPartsOperationalConstraint(caseId,pool);
+
+    // The existing hold is untouched by the case becoming unconfirmable...
+    const stillHeld=await pool.query(`select appointment_status from roviq_appointments where id=$1`,[held.id]);
+    expect(stillHeld.rows[0].appointment_status).toBe('held');
+    // ...but confirming it now fails closed on the unready parts requirement.
     await expect(updateShopOsAppointment(admin,held.id,{action:'confirm'}))
       .rejects.toMatchObject({message:'service_case_not_confirmable',statusCode:409});
+    // And a brand new appointment on this case (a different window, so capacity isn't the
+    // blocker) can no longer be held either, now that parts readiness (unlike customer_time)
+    // fails closed for holds too.
+    const laterStart=new Date(Date.now()+150*60_000).toISOString();
+    const laterEnd=new Date(Date.now()+210*60_000).toISOString();
+    await expect(createShopOsAppointment(admin,{
+      serviceCaseId:caseId,resourceId:shop.resourceId,startsAt:laterStart,endsAt:laterEnd,serviceCategory:'repair',status:'held'
+    })).rejects.toMatchObject({message:'service_case_not_bookable',statusCode:409});
   });
 
   it('does not write appointments through blocked resources or paused Shop OS connections',async()=>{

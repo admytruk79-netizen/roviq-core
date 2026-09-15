@@ -5,6 +5,7 @@ import { requireRole, requireRoleOrCapability } from '../middleware/principal.js
 import { assignTransportDispatch, createTransportDispatch, getTransportDispatch, updateTransportStatus } from '../../services/transport.js';
 import { resolveTransportLocations } from '../../services/transport-spatial.js';
 import { assertAdminCaseScope, getAdminActorScope } from '../../services/admin-case-scope.js';
+import { withIdempotency } from '../../services/orchestration.js';
 
 const location = z.record(z.unknown()).optional();
 const status = z.enum(['accepted','en_route','arrived','vehicle_loaded','in_transit','delivered','declined','cancelled','failed']);
@@ -69,22 +70,27 @@ export async function transportRoutes(app: FastifyInstance) {
 
   app.post('/api/admin/transport', { preHandler: requireRole('admin') }, async (req, reply) => {
     const body = z.object({ caseId:z.string().uuid(), transportType:z.enum(['tow','valet']), pickupLocation:location, dropoffLocation:location, vehicleContext:z.record(z.unknown()).optional(), etaAt:z.string().datetime().optional(), metadata:z.record(z.unknown()).optional() }).parse(req.body);
+    const idempotencyKey = typeof req.headers['idempotency-key']==='string'?req.headers['idempotency-key']:undefined;
     try {
       await assertAdminCaseScope(req.principal,body.caseId,pool);
       const resolved = await resolveTransportLocations(body.caseId, body);
-      return reply.code(201).send({
-        dispatch:await createTransportDispatch(req.principal,{
-          ...body,
-          pickupLocation:resolved.pickupLocation,
-          dropoffLocation:resolved.dropoffLocation,
-          metadata:{
-            ...(body.metadata ?? {}),
-            locationStatus:resolved.locationStatus,
-            pickupSource:resolved.pickupSource,
-            dropoffSource:resolved.dropoffSource
-          }
-        })
-      });
+      const result = await withIdempotency(req.principal,idempotencyKey,'create_transport_dispatch',body,async()=>({
+        status:201,
+        body:{
+          dispatch:await createTransportDispatch(req.principal,{
+            ...body,
+            pickupLocation:resolved.pickupLocation,
+            dropoffLocation:resolved.dropoffLocation,
+            metadata:{
+              ...(body.metadata ?? {}),
+              locationStatus:resolved.locationStatus,
+              pickupSource:resolved.pickupSource,
+              dropoffSource:resolved.dropoffSource
+            }
+          })
+        }
+      }));
+      return reply.code(result.status).send(result.body);
     }
     catch (e) { const message=e instanceof Error?e.message:'transport_create_failed'; if (message==='case_not_found') return reply.code(404).send({ error:message }); if (message==='invalid_case_transition') return reply.code(409).send({ error:message }); throw e; }
   });

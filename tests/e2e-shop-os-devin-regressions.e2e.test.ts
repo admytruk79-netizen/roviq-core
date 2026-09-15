@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { pool } from '../src/db/pool.js';
-import { createShopOsAppointment, updateShopOsAppointment } from '../src/services/shop-os.js';
+import { createShopOsAppointment } from '../src/services/shop-os-appointment-create.js';
+import { updateShopOsAppointment } from '../src/services/shop-os-appointment-update.js';
 import { createShopWaitlistEntry, updateShopWaitlistEntry } from '../src/services/shop-os-waitlist.js';
 
 const admin={role:'admin'} as const;

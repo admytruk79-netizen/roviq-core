@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { pool } from '../src/db/pool.js';
-import { rebuildShopOsCapacity } from '../src/services/shop-os.js';
+import { rebuildShopOsCapacity } from '../src/services/shop-os-capacity.js';
 import { addRepairOrderLine, createRepairOrder, updateRepairOrder, updateRepairOrderLine } from '../src/services/shop-os-repair-orders.js';
 import { reconcileRepairOrder } from '../src/services/shop-os-completion.js';
 import { assignException, getExceptionQueue, updateExceptionState } from '../src/services/exception-engine.js';

@@ -4,6 +4,7 @@ import { pool } from '../../db/pool.js';
 import { requireRole } from '../middleware/principal.js';
 import { assignSupplier, createPartsOrder, getPartsOrder, markPartsOrderStatus, reserveOrderInventory, upsertInventory } from '../../services/parts.js';
 import { loadCaseForPrincipal } from '../../services/case-access.js';
+import { withIdempotency } from '../../services/orchestration.js';
 
 export async function partsRoutes(app: FastifyInstance) {
   app.post('/api/maintenance/cases/:caseId/parts-orders', { preHandler: requireRole('partner','diagnostic','admin') }, async (req, reply) => {
@@ -14,9 +15,13 @@ export async function partsRoutes(app: FastifyInstance) {
       items:z.array(z.object({ sku:z.string().min(1), partNumber:z.string().optional(), description:z.string().optional(), quantity:z.number().int().positive(), attributes:z.record(z.unknown()).optional() })).min(1),
       attributes:z.record(z.unknown()).optional()
     }).parse(req.body);
+    const idempotencyKey = typeof req.headers['idempotency-key']==='string'?req.headers['idempotency-key']:undefined;
     try {
-      const order = await createPartsOrder(req.principal,{ caseId,...body });
-      return reply.code(201).send(order);
+      const result = await withIdempotency(req.principal,idempotencyKey,'create_parts_order',{caseId,...body},async()=>({
+        status:201,
+        body:await createPartsOrder(req.principal,{ caseId,...body })
+      }));
+      return reply.code(result.status).send(result.body);
     } catch (e) {
       const message = e instanceof Error ? e.message : 'parts_order_failed';
       if (message === 'case_not_found') return reply.code(404).send({ error:message });

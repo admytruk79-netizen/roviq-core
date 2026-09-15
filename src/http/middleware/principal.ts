@@ -1,8 +1,16 @@
+import { timingSafeEqual } from 'node:crypto';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { env } from '../../config/env.js';
 import { pool } from '../../db/pool.js';
 import { verifyAccessToken } from '../../services/auth.js';
 import type { Principal, RoviqRole } from '../../types/principal.js';
+
+function adminKeyMatches(supplied: unknown, expected: string) {
+  if (typeof supplied !== 'string') return false;
+  const suppliedBuf = Buffer.from(supplied);
+  const expectedBuf = Buffer.from(expected);
+  return suppliedBuf.length === expectedBuf.length && timingSafeEqual(suppliedBuf, expectedBuf);
+}
 
 const roles = new Set<RoviqRole>(['admin','customer','partner','diagnostic','tow','parts','fleet']);
 
@@ -16,7 +24,7 @@ export async function principalMiddleware(req: FastifyRequest, reply: FastifyRep
     try {
       const verified = await verifyAccessToken(authorization.slice(7));
       if (!roles.has(verified.role)) return reply.code(401).send({ error:'invalid_token_role' });
-      req.principal = { role:verified.role, actorId:verified.actorId };
+      req.principal = { role:verified.role, actorId:verified.actorId, identityId:verified.identityId };
       return;
     } catch {
       return reply.code(401).send({ error:'invalid_or_expired_token' });
@@ -30,7 +38,7 @@ export async function principalMiddleware(req: FastifyRequest, reply: FastifyRep
     return reply.code(401).send({ error: 'missing_or_invalid_principal' });
   }
   if (role === 'admin') {
-    if (req.headers['x-admin-api-key'] !== env.ADMIN_API_KEY) return reply.code(401).send({ error:'invalid_admin_key' });
+    if (!adminKeyMatches(req.headers['x-admin-api-key'], env.ADMIN_API_KEY)) return reply.code(401).send({ error:'invalid_admin_key' });
     req.principal = { role:'admin' };
     return;
   }

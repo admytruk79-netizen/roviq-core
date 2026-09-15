@@ -1,7 +1,7 @@
 import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
 import { appendCaseEvent, createDeadline, finalizeExternalCaseTransition, transitionCase } from './orchestration.js';
-import { audit } from './audit.js';
+import { audit, validIdentityId } from './audit.js';
 import { queueNotification, setCustomerSnapshot } from './operations.js';
 import { syncTransportOperationalConstraint } from './case-constraint-projection.js';
 
@@ -183,7 +183,7 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
       await client.query(`update workflow_deadlines set state='resolved',resolved_at=now() where case_id=$1 and deadline_type like 'transport_%' and state='open'`,[caseId]);
     }
     await syncTransportOperationalConstraint(caseId,client);
-    await client.query(`insert into audit_log(principal_role,principal_actor_id,action,object_type,object_id,rule_basis,metadata) values($1,$2,'update_transport_status','transport_dispatch',$3,$4,$5)`,[principal.role,principal.actorId??null,dispatchId,status==='declined'?`${current.status}->declined`:`${current.status}->${status}`,JSON.stringify(metadata)]);
+    await client.query(`insert into audit_log(principal_role,principal_actor_id,principal_identity_id,action,object_type,object_id,rule_basis,metadata) values($1,$2,$3,'update_transport_status','transport_dispatch',$4,$5,$6)`,[principal.role,principal.actorId??null,validIdentityId(principal.identityId),dispatchId,status==='declined'?`${current.status}->declined`:`${current.status}->${status}`,JSON.stringify(metadata)]);
     await client.query('commit');
     committed = true;
   } catch (e) {

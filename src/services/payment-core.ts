@@ -2,7 +2,7 @@ import type { PoolClient } from 'pg';
 import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
 import { appendCaseEvent } from './orchestration.js';
-import { audit } from './audit.js';
+import { audit, validIdentityId } from './audit.js';
 
 const ZERO_DECIMAL_CURRENCIES=new Set(['BIF','CLP','DJF','GNF','JPY','KMF','KRW','MGA','PYG','RWF','UGX','VND','VUV','XAF','XOF','XPF']);
 const THREE_DECIMAL_CURRENCIES=new Set(['BHD','JOD','KWD','OMR','TND']);
@@ -18,7 +18,7 @@ async function assertFinancialCaseAccess(principal:Principal,caseId:string,clien
   const scoped=await client.query(`select exists(select 1 from service_cases sc left join actors owner on owner.id=sc.current_owner_actor_id left join actors selected on selected.id=sc.selected_actor_id where sc.id=$1 and (owner.organization_id=$2 or selected.organization_id=$2 or exists(select 1 from matches_offers mo join actors a on a.id=mo.actor_id where mo.case_id=sc.id and mo.outcome='accepted' and a.organization_id=$2) or exists(select 1 from transport_dispatches td join actors a on a.id=td.provider_actor_id where td.case_id=sc.id and a.organization_id=$2) or exists(select 1 from parts_orders po join actors a on a.id=po.supplier_actor_id where po.case_id=sc.id and a.organization_id=$2) or exists(select 1 from mobility_allocations ma join actors a on a.id=ma.provider_actor_id where ma.case_id=sc.id and a.organization_id=$2))) as allowed`,[caseId,organizationId]);
   if(!scoped.rows[0]?.allowed) throw new Error('forbidden');
 }
-async function insertFinancialAudit(client:Pick<PoolClient,'query'>,principal:Principal,action:string,objectType:string,objectId:string,ruleBasis:string,metadata:unknown={}){await client.query(`insert into audit_log(principal_role,principal_actor_id,action,object_type,object_id,rule_basis,metadata) values($1,$2,$3,$4,$5,$6,$7)`,[principal.role,principal.actorId??null,action,objectType,objectId,ruleBasis,JSON.stringify(metadata)]);}
+async function insertFinancialAudit(client:Pick<PoolClient,'query'>,principal:Principal,action:string,objectType:string,objectId:string,ruleBasis:string,metadata:unknown={}){await client.query(`insert into audit_log(principal_role,principal_actor_id,principal_identity_id,action,object_type,object_id,rule_basis,metadata) values($1,$2,$3,$4,$5,$6,$7,$8)`,[principal.role,principal.actorId??null,validIdentityId(principal.identityId),action,objectType,objectId,ruleBasis,JSON.stringify(metadata)]);}
 
 export async function createPaymentIntent(principal:Principal,input:{caseId:string;amount:number;currency?:string;description?:string;provider?:string;providerIntentId?:string;metadata?:Record<string,unknown>}){
   const normalizedCurrency=normalizeFinancialCurrency(input.currency),normalizedProvider=normalizeProvider(input.provider);assertFinancialAmount(input.amount,normalizedCurrency);const client=await pool.connect();

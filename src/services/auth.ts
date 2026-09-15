@@ -17,6 +17,16 @@ export function verifyPassword(password: string, salt: string, expectedHash: str
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
+// A fixed salt/hash pair to run verifyPassword's real cost against when no identity was found,
+// so a request for a non-existent email takes the same time as one for a real email with a wrong
+// password -- otherwise the missing-scrypt-call path is a user-enumeration timing side-channel.
+const DUMMY_SALT = 'e3b0c44298fc1c149afbf4c8996fb924';
+const DUMMY_HASH = scryptSync('dummy-password-for-constant-time-login',DUMMY_SALT,64).toString('hex');
+export function verifyPasswordConstantTime(password: string, salt?: string | null, expectedHash?: string | null) {
+  if (!salt || !expectedHash) { verifyPassword(password, DUMMY_SALT, DUMMY_HASH); return false; }
+  return verifyPassword(password, salt, expectedHash);
+}
+
 export async function issueAccessToken(identityId: string, principal: Principal) {
   return new SignJWT({ role: principal.role, actorId: principal.actorId })
     .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })

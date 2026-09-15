@@ -6,6 +6,7 @@ export function rethrowSchedulingError(error:unknown):never{
   const message=error instanceof Error?error.message:'';
 
   if(code==='23P01') throw httpError('resource_schedule_conflict',409);
+  if(code==='40P01'||code==='55P03') throw httpError('scheduling_conflict',409);
 
   if(code==='23503'&&message.includes('recovery_source_appointment_not_found')){
     throw httpError('recovery_source_appointment_not_found',404);

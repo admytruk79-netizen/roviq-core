@@ -29,6 +29,14 @@ export function registerErrorHandler(app: FastifyInstance) {
       return reply.code(statusCode).send({ error:err instanceof Error ? err.message : 'request_error' });
     }
 
+    // A retryable Postgres deadlock/lock-timeout that reached the global handler unmapped (i.e.
+    // outside a call site that already translates it, like Shop OS scheduling) is still a clean,
+    // retryable conflict for the client -- not an opaque 500.
+    const pgCode = (err as { code?: string }).code;
+    if (pgCode === '40P01' || pgCode === '55P03') {
+      return reply.code(409).send({ error:'scheduling_conflict' });
+    }
+
     console.error('roviq_core_error', err);
     return reply.code(500).send({ error:'internal_error' });
   });

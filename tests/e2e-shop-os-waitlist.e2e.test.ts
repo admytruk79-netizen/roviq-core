@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { pool } from '../src/db/pool.js';
-import { createShopOsAppointment } from '../src/services/shop-os.js';
+import { createShopOsAppointment } from '../src/services/shop-os-appointment-create.js';
 import { createShopWaitlistEntry, listShopWaitlist, updateShopWaitlistEntry } from '../src/services/shop-os-waitlist.js';
 
 async function setupShop(){

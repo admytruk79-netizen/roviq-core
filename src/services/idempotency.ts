@@ -9,8 +9,8 @@ export async function withIdempotency<T>(
   operation: string,
   body: unknown,
   fn: (transactionClient?:PoolClient) => Promise<{ status:number; body:T }>
-) {
-  if (!key) return fn();
+): Promise<{ status:number; body:T; fresh:boolean }> {
+  if (!key) { const result = await fn(); return { ...result, fresh:true }; }
   if (key.length > 200) throw new Error('idempotency_key_too_long');
 
   const actorScope = principal.actorId ?? 'anonymous';
@@ -55,7 +55,7 @@ export async function withIdempotency<T>(
       throw new Error('idempotency_key_reused');
     } else if (row.response_code !== null) {
       await client.query('commit');
-      return {status:row.response_code,body:row.response_body as T};
+      return {status:row.response_code,body:row.response_body as T,fresh:false};
     }
 
     const result = await fn(client);
@@ -64,7 +64,7 @@ export async function withIdempotency<T>(
       [result.status,JSON.stringify(result.body),scopedKey]
     );
     await client.query('commit');
-    return result;
+    return { ...result, fresh:true };
   } catch (error) {
     await client.query('rollback');
     throw error;

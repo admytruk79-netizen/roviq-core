@@ -4,8 +4,9 @@ export type CapacityMatch={id:string;nominal_capacity_units:number;service_categ
 
 export async function lockSchedulingCase(serviceCaseId:string|null|undefined,db:Queryable){
   if(!serviceCaseId)return;
-  const locked=await db.query(`select id from service_cases where id=$1 for update`,[serviceCaseId]);
+  const locked=await db.query(`select id,state from service_cases where id=$1 for update`,[serviceCaseId]);
   if(!locked.rowCount) throw httpError('service_case_not_found',404);
+  if(['cancelled','completed'].includes(locked.rows[0].state)) throw httpError('service_case_not_schedulable',409);
 }
 
 export async function lockSchedulingResources(resourceIds:string[],db:Queryable){

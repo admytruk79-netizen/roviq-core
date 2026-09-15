@@ -1,11 +1,10 @@
 import type { PoolClient } from 'pg';
 import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
-import { audit } from './audit.js';
+import { audit, validIdentityId } from './audit.js';
 import { assertCaseAccess } from './case-access.js';
 import { publishIntegrationEvent } from './integration-gateway.js';
 import { consumeCaseCapacity, releaseCaseCapacity } from './capacity-reservation.js';
-import { rebuildShopOsCapacity } from './shop-os.js';
 import { syncOperationalConstraints } from './case-constraint-projection.js';
 
 export { appendCaseEvent, getCaseTimeline } from './case-events.js';
@@ -60,9 +59,9 @@ export async function createServiceCase(principal: Principal, input: {
        JSON.stringify({servicePlanId:plan.rows[0].id,revision:1})]
     );
     await client.query(
-      `insert into audit_log(principal_role,principal_actor_id,action,object_type,object_id,rule_basis,metadata)
-       values($1,$2,'create_case','service_case',$3,'maintenance_case_created',$4)`,
-      [principal.role,principal.actorId ?? null,c.id,JSON.stringify({servicePlanId:plan.rows[0].id,selectionMode:c.selection_mode})]
+      `insert into audit_log(principal_role,principal_actor_id,principal_identity_id,action,object_type,object_id,rule_basis,metadata)
+       values($1,$2,$3,'create_case','service_case',$4,'maintenance_case_created',$5)`,
+      [principal.role,principal.actorId ?? null,validIdentityId(principal.identityId),c.id,JSON.stringify({servicePlanId:plan.rows[0].id,selectionMode:c.selection_mode})]
     );
     if (ownsTransaction) await client.query('commit');
     if (ownsTransaction) await publishCaseIntegrationEventSafely(c.id,'CASE_CREATED',principal,{ state:c.state, priority:c.priority });
@@ -73,43 +72,6 @@ export async function createServiceCase(principal: Principal, input: {
   } finally {
     if (ownsTransaction) client.release();
   }
-}
-
-async function cancelLinkedShopOsAppointments(caseId:string,principal:Principal,client:PoolClient){
-  const active=await client.query(`
-    select id,resource_id,source_connection_id,appointment_status
-    from roviq_appointments
-    where service_case_id=$1 and appointment_status in ('held','confirmed')
-    order by resource_id,id
-    for update`,[caseId]);
-  if(!active.rowCount)return;
-
-  const previousStatusById=new Map(active.rows.map((row:any)=>[row.id,row.appointment_status]));
-  const ids=active.rows.map((row:any)=>row.id);
-  const cancelled=await client.query(`
-    update roviq_appointments
-       set appointment_status='cancelled',
-           released_reason=coalesce(released_reason,'service_case_cancelled'),
-           lifecycle_version=lifecycle_version+1,
-           updated_at=now()
-     where id=any($1::uuid[])
-     returning *`,[ids]);
-
-  for(const row of cancelled.rows){
-    await client.query(`insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload)
-      values('service_case',$1,'SHOP_OS_APPOINTMENT_CANCELLED_BY_CASE',$2,$3)`,[
-      caseId,principal.actorId ?? null,JSON.stringify({appointmentId:row.id,resourceId:row.resource_id,previousStatus:previousStatusById.get(row.id)??null,status:'cancelled',reason:'service_case_cancelled'})
-    ]);
-    if(row.source_connection_id){
-      await client.query(`insert into integration_sync_events(connection_id,event_type,direction,status,roviq_entity_type,roviq_entity_id,payload)
-        values($1,'shop_os_appointment_cancelled_by_case','internal','accepted','appointment',$2,$3)`,[
-        row.source_connection_id,row.id,JSON.stringify({serviceCaseId:caseId,resourceId:row.resource_id,status:'cancelled',reason:'service_case_cancelled'})
-      ]);
-    }
-  }
-
-  const resourceIds=[...new Set(cancelled.rows.map((row:any)=>row.resource_id as string))].sort();
-  for(const resourceId of resourceIds) await rebuildShopOsCapacity(resourceId,client);
 }
 
 export async function transitionCase(
@@ -153,7 +115,9 @@ export async function transitionCase(
     );
     if(toState==='cancelled'){
       await releaseCaseCapacity(caseId,client);
-      await cancelLinkedShopOsAppointments(caseId,principal,client);
+      // Linked Shop OS appointments are cancelled and their resource capacity rebuilt by the
+      // trg_shop_os_cancel_case_appointments trigger (migrations/039), which fires synchronously
+      // on the state update just above -- it is the sole authority for this, not duplicated here.
       await syncOperationalConstraints(caseId,client);
     }
     if(toState==='completed') await consumeCaseCapacity(caseId,client);
@@ -194,7 +158,7 @@ export async function finalizeExternalCaseTransition(
   await publishCaseIntegrationEventSafely(caseId,`CASE_${toState.toUpperCase()}`,principal,{from:fromState,to:toState});
 }
 
-async function publishCaseIntegrationEventSafely(
+export async function publishCaseIntegrationEventSafely(
   caseId:string,
   eventType:string,
   principal:Principal,

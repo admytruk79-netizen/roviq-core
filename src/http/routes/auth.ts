@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { pool } from '../../db/pool.js';
-import { hashPassword, issueAccessToken, verifyPassword } from '../../services/auth.js';
+import { hashPassword, issueAccessToken, verifyPasswordConstantTime } from '../../services/auth.js';
 import { audit } from '../../services/audit.js';
 import { requireRole } from '../middleware/principal.js';
 
@@ -113,7 +113,8 @@ export async function authRoutes(app: FastifyInstance) {
     const b = loginBody.parse(req.body);
     const r = await pool.query('select id,actor_id,email,role,password_salt,password_hash,active from principal_identities where lower(email)=lower($1) limit 1',[b.email]);
     const identity = r.rows[0];
-    if (!identity || !identity.active || !verifyPassword(b.password, identity.password_salt, identity.password_hash)) return reply.code(401).send({ error:'invalid_credentials' });
+    const passwordOk = verifyPasswordConstantTime(b.password, identity?.password_salt, identity?.password_hash);
+    if (!identity || !identity.active || !passwordOk) return reply.code(401).send({ error:'invalid_credentials' });
     const principal = { role: identity.role, actorId: identity.actor_id ?? undefined };
     const accessToken = await issueAccessToken(identity.id, principal);
     return { accessToken, tokenType:'Bearer', expiresIn:28800, principal:{ role:identity.role, actorId:identity.actor_id } };
@@ -132,6 +133,7 @@ export async function authRoutes(app: FastifyInstance) {
     const { salt, hash } = hashPassword(b.password);
     try {
       const r = await pool.query(`insert into principal_identities(actor_id,email,role,password_salt,password_hash) values($1,lower($2),$3,$4,$5) returning id,actor_id,email,role,active,created_at`,[b.actorId ?? null,b.email,b.role,salt,hash]);
+      await audit(req.principal,'create_identity','principal_identity',r.rows[0].id,'admin_identity_created',{email:b.email,role:b.role,actorId:b.actorId??null});
       return reply.code(201).send({ identity:r.rows[0] });
     } catch (error:any) { if (error?.code === '23505') return reply.code(409).send({ error:'identity_email_exists' }); throw error; }
   });
