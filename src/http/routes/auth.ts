@@ -109,7 +109,12 @@ async function adminTestSession(req:any, reply:any, role:TestRole) {
 }
 
 export async function authRoutes(app: FastifyInstance) {
-  app.post('/api/auth/login', { config: { public: true } }, async (req, reply) => {
+  app.post('/api/auth/login', {
+    config: {
+      public: true,
+      rateLimit: { max: 12, timeWindow: '1 minute' }
+    }
+  }, async (req, reply) => {
     const b = loginBody.parse(req.body);
     const r = await pool.query('select id,actor_id,email,role,password_salt,password_hash,active from principal_identities where lower(email)=lower($1) limit 1',[b.email]);
     const identity = r.rows[0];
