@@ -67,9 +67,12 @@ describe('maintenance case end-to-end lifecycle', () => {
   });
 
   it('completes a full customer-to-outcome vertical slice with an auditable trail', async () => {
+    // This slice exercises shop matching/offer/accept/payment/completion directly, with no
+    // diagnostic actor in the fixture -- so mark the demand as already diagnosed (requiresDiagnostic:
+    // false) rather than relying on the diagnostic-first default every other maintenance demand gets.
     const demandRes = await app.inject({
       method: 'POST', url: '/api/demands', headers: actorHeaders('customer', customerActorId),
-      payload: { domain: 'maintenance', demandType: 'brake_repair', urgency: 'normal' }
+      payload: { domain: 'maintenance', demandType: 'brake_repair', urgency: 'normal', attributes: { requiresDiagnostic: false } }
     });
     expect(demandRes.statusCode).toBe(201);
     const { demand, case: openedCase } = JSON.parse(demandRes.body);

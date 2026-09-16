@@ -43,7 +43,16 @@ export async function routingRoutes(app:FastifyInstance){
    let offer=null; let selection:null|{caseId:string;selectedActorId:string;selectionMode:'auto_dispatch'}=null;
    const recommended=result.recommendedActorId??null;
 
-   if(serviceCase&&['triage','diagnostic_in_progress'].includes(serviceCase.state))serviceCase=await transitionCase(req.principal,serviceCase.id,'provider_selection',{source:'routing_engine'});
+   // Diagnostic-first: a demand whose resolved capability is 'diagnostics' (the default for any
+   // not-yet-diagnosed request -- see case-intelligence.ts) goes to the diagnostic queue, not
+   // straight to shop selection. Once a technician actually diagnoses it and decides to route to
+   // a shop, the findings handler pins requiredCapability='repair' so this same engine, called
+   // again, correctly reaches provider_selection instead of looping back here.
+   if(serviceCase&&serviceCase.state==='triage'){
+    serviceCase=await transitionCase(req.principal,serviceCase.id,result.requestedCapability==='diagnostics'?'diagnostic_pending':'provider_selection',{source:'routing_engine'});
+   }else if(serviceCase&&serviceCase.state==='diagnostic_in_progress'){
+    serviceCase=await transitionCase(req.principal,serviceCase.id,'provider_selection',{source:'routing_engine'});
+   }
 
    if(serviceCase&&recommended&&serviceCase.selection_mode==='auto_dispatch'){
     try{

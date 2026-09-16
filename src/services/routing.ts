@@ -117,7 +117,8 @@ export async function routeMaintenanceDemand(demandId: string) {
       policyRequired:true,
       engineVersion:COORDINATION_ENGINE_VERSION,
       intelligence,
-      selectionMode
+      selectionMode,
+      requestedCapability
     };
   }
 
@@ -151,7 +152,8 @@ export async function routeMaintenanceDemand(demandId: string) {
     policyRequired:false,
     engineVersion:COORDINATION_ENGINE_VERSION,
     intelligence,
-    selectionMode
+    selectionMode,
+    requestedCapability
   };
 }
 

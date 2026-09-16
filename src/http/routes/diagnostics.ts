@@ -73,6 +73,19 @@ export async function diagnosticRoutes(app: FastifyInstance) {
       await pool.query('update service_cases set drivability=$1,updated_at=now() where id=$2',[b.drivability,caseId]);
       target = b.disposition === 'diagnose_and_fix' ? 'repair_in_progress' : b.disposition === 'route_to_tow' || b.drivability === 'non_drivable' ? 'tow_pending' : 'provider_selection';
       serviceCase = await transitionCase(req.principal,caseId,target,{ findingId:r.rows[0].id, disposition:b.disposition, drivability:b.drivability });
+      // The technician has now made the actual on-site routing decision; pin the demand's
+      // required capability to 'repair' so every later shop-selection step -- whether reached
+      // directly (provider_selection) or after a tow delivers the vehicle (tow_in_progress ->
+      // repair handoff in admin.ts) -- routes to a repair shop instead of falling back to the
+      // diagnostics-first default that only applies before any diagnosis has happened.
+      // diagnose_and_fix is the one disposition the technician handles directly with no further
+      // routing at all, so it's the only one left alone here.
+      if (target !== 'repair_in_progress') {
+        await pool.query(
+          `update demand_requests set attributes = attributes || $2::jsonb, updated_at = now() where id = $1`,
+          [id, JSON.stringify({ requiredCapability: 'repair' })]
+        );
+      }
     }
 
     // Field Response continuity: when the diagnostic who is already on scene also has an active

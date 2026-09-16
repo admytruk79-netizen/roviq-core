@@ -135,10 +135,16 @@ export async function resolveRequestedCapabilityForDemand(demandId: string, quer
   };
 }
 
+// Diagnostic-first is the platform's core entry point (Business Plan Section 4/8A: every vehicle
+// issue gets on-site diagnosis before any shop routing decision, including "simple" jobs the
+// technician ends up handling directly) -- so the default here is 'diagnostics', not 'repair'.
+// A demand only skips straight to a repair shop when it's explicitly marked as already diagnosed
+// (requiresDiagnostic===false, or an explicit requiredCapability set upstream, e.g. by the
+// diagnostic-findings handler once a technician has actually decided the case needs a shop).
 function capabilityForDemand(demandType:string,attributes:any):string {
   if(attributes?.drivability==='non_drivable') return 'tow';
-  if(demandType.includes('diagnostic')||attributes?.requiresDiagnostic===true) return 'diagnostics';
   if(demandType.includes('tow')) return 'tow';
   if(demandType.includes('part')) return 'parts_supply';
-  return 'repair';
+  if(attributes?.requiresDiagnostic===false) return 'repair';
+  return 'diagnostics';
 }
