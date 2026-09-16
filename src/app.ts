@@ -15,11 +15,13 @@ export async function buildApp() {
 
   // Authenticate before the limiter runs so traffic forwarded through the same
   // trusted edge/proxy address is not collapsed into one global IP bucket.
-  // Public routes (including login) are still limited by source IP because the
-  // authorization hook deliberately leaves them without a principal.
+  // Authenticated workflow traffic legitimately combines portal refreshes with
+  // state polling, so it gets a higher per-principal ceiling. Public/auth-entry
+  // routes remain IP-keyed and sensitive routes can override this globally
+  // configured ceiling with a stricter route-level policy.
   registerAuthorizationHook(app);
   await app.register(rateLimit, {
-    max: 120,
+    max: 600,
     timeWindow: '1 minute',
     hook: 'preHandler',
     keyGenerator: (req) => {
