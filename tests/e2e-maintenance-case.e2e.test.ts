@@ -63,6 +63,10 @@ describe('maintenance case end-to-end lifecycle', () => {
   });
 
   afterAll(async () => {
+    // e2e tests share one database (fileParallelism:false) -- deactivate the policy this file
+    // activated so it doesn't leak into later test files, which never opted into real routing
+    // behavior (ranking, auto-transition-on-routing, etc.) and assume none is configured.
+    await pool.query(`update routing_policies set active=false where policy_key='maintenance_default'`);
     await pool.end();
   });
 
@@ -164,6 +168,18 @@ describe('maintenance case end-to-end lifecycle', () => {
     const finalCaseRes = await app.inject({ method: 'GET', url: `/api/maintenance/cases/${caseId}`, headers: actorHeaders('customer', customerActorId) });
     expect(finalCaseRes.statusCode).toBe(200);
     expect(JSON.parse(finalCaseRes.body).case.state).toBe('completed');
+
+    // Business Plan Section 4/6A: completion posts the platform's actual revenue -- a referral
+    // fee scaled to job complexity, split from what was captured -- automatically.
+    const financialsRes = await app.inject({ method: 'GET', url: `/api/admin/cases/${caseId}/financials`, headers: adminHeaders() });
+    expect(financialsRes.statusCode).toBe(200);
+    const allocations = JSON.parse(financialsRes.body).revenueAllocations as { allocation_type: string; amount_minor: string }[];
+    const platformRevenue = allocations.find((a) => a.allocation_type === 'platform_revenue');
+    const partnerPayable = allocations.find((a) => a.allocation_type === 'partner_payable');
+    expect(platformRevenue).toBeTruthy();
+    expect(partnerPayable).toBeTruthy();
+    expect(Number(platformRevenue!.amount_minor) + Number(partnerPayable!.amount_minor)).toBe(24999);
+    expect(Number(platformRevenue!.amount_minor)).toBeGreaterThan(0);
 
     const timelineRes = await app.inject({ method: 'GET', url: `/api/maintenance/cases/${caseId}/timeline`, headers: adminHeaders() });
     const timelineEvents = JSON.parse(timelineRes.body).timeline.map((e: { event_type: string }) => e.event_type);

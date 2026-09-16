@@ -134,12 +134,13 @@ export async function paymentRoutes(app: FastifyInstance) {
   app.get('/api/admin/cases/:id/financials', { preHandler: requireRole('admin') }, async (req, reply) => {
     const { id } = req.params as { id:string };
     if(!await requireAdminFinancialCaseAccess(req.principal,id,reply)) return;
-    const [payments,payouts,ledger] = await Promise.all([
+    const [payments,payouts,ledger,revenueAllocations] = await Promise.all([
       pool.query('select * from payment_intents where case_id=$1 order by created_at asc',[id]),
       pool.query('select * from settlement_payouts where case_id=$1 order by created_at asc',[id]),
-      pool.query('select * from ledger_entries where case_id=$1 order by occurred_at asc',[id])
+      pool.query('select * from ledger_entries where case_id=$1 order by occurred_at asc',[id]),
+      pool.query('select * from revenue_allocations where case_id=$1 order by occurred_at asc',[id])
     ]);
-    return { payments:payments.rows,payouts:payouts.rows,ledger:ledger.rows };
+    return { payments:payments.rows,payouts:payouts.rows,ledger:ledger.rows,revenueAllocations:revenueAllocations.rows };
   });
 
   app.get('/api/admin/financial-reconciliation', { preHandler: requireRole('admin') }, async (req, reply) => {

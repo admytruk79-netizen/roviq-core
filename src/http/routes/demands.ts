@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import { pool } from '../../db/pool.js';
 import { audit } from '../../services/audit.js';
+import { env } from '../../config/env.js';
 import { createServiceCase, transitionCase } from '../../services/orchestration.js';
+import { autoRouteNewDemand } from '../../services/routing.js';
 import { requireRole } from '../middleware/principal.js';
 import { createDemandSchema } from './demand-schema.js';
 
@@ -52,7 +54,14 @@ export async function demandRoutes(app: FastifyInstance) {
       }
 
       const triageCase = await transitionCase(req.principal,serviceCase.id,'triage',{ source:'customer_intake' });
-      return reply.code(201).send({ demand, case:triageCase });
+
+      // ROVIQ owns the routing intelligence -- a customer request shouldn't sit at 'triage'
+      // waiting on an admin to manually trigger dispatch. Gated by AUTO_ROUTE_NEW_DEMANDS (see
+      // config/env.ts): off by default so this doesn't retroactively change behavior for a
+      // deployment (or test fixture) that hasn't deliberately turned it on. Best-effort even when
+      // enabled: a routing failure (no policy configured, no eligible provider) never blocks intake.
+      const routed = env.AUTO_ROUTE_NEW_DEMANDS ? await autoRouteNewDemand(req.principal,demand.id) : null;
+      return reply.code(201).send({ demand, case:routed?.case ?? triageCase });
     }
 
     return reply.code(201).send({ demand });

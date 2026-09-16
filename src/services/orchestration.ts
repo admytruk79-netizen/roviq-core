@@ -6,6 +6,7 @@ import { assertCaseAccess } from './case-access.js';
 import { publishIntegrationEvent } from './integration-gateway.js';
 import { consumeCaseCapacity, releaseCaseCapacity } from './capacity-reservation.js';
 import { syncOperationalConstraints } from './case-constraint-projection.js';
+import { postCaseRevenueAllocation } from './referral-fee.js';
 
 export { appendCaseEvent, getCaseTimeline } from './case-events.js';
 export { createDeadline, raiseException } from './workflow-support.js';
@@ -120,7 +121,13 @@ export async function transitionCase(
       // on the state update just above -- it is the sole authority for this, not duplicated here.
       await syncOperationalConstraints(caseId,client);
     }
-    if(toState==='completed') await consumeCaseCapacity(caseId,client);
+    if(toState==='completed'){
+      await consumeCaseCapacity(caseId,client);
+      // Business Plan Section 4/6A: the platform's actual revenue is a referral fee scaled to
+      // job complexity, taken from what the shop was paid. Post that split automatically at
+      // completion rather than requiring an admin to remember to compute it per case.
+      await postCaseRevenueAllocation(caseId,client);
+    }
     await client.query(
       `insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload)
        values('service_case',$1,$2,$3,$4)`,

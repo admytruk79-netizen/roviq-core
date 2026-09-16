@@ -10,6 +10,7 @@ import { fieldServiceRoutes } from './routes/field-service.js';
 import { meRoutes } from './routes/me.js';
 import { servicePlanRoutes } from './routes/service-plans.js';
 import { quoteRoutes } from './routes/quotes.js';
+import { caseAddonItemRoutes } from './routes/case-addon-items.js';
 import { analyticsRoutes } from './routes/analytics.js';
 import { commerceRoutes } from './routes/commerce.js';
 import { partnerRoutes } from './routes/partners.js';
@@ -39,7 +40,7 @@ type RouteModule = {
 
 const routeModules: RouteModule[] = [
   { name: 'platform', plugins: [authRoutes, coreRoutes, meRoutes] },
-  { name: 'case-lifecycle', plugins: [demandRoutes, caseRoutes, exceptionRoutes, servicePlanRoutes, quoteRoutes] },
+  { name: 'case-lifecycle', plugins: [demandRoutes, caseRoutes, exceptionRoutes, servicePlanRoutes, quoteRoutes, caseAddonItemRoutes] },
   { name: 'coordination', plugins: [routingRoutes, triageRoutes, triageEvaluationRoutes, coherenceRoutes] },
   { name: 'service-operations', plugins: [diagnosticRoutes, fieldServiceRoutes, transportRoutes, mobilityRoutes, partsRoutes] },
   { name: 'shop-os', plugins: [shopOsRoutes, shopOsDeferredAppointmentChoiceRoutes, shopOsFloorRoutes] },
