@@ -7,6 +7,10 @@ export type CoordinationSignals = {
   distanceMiles?: number | null;
   etaMinutes?: number | null;
   continuity?: number | null;
+  // Raw, un-inverted cost (e.g. a parts order's total price). Like every other signal here it is
+  // just multiplied by its policy weight, so a domain that wants "cheaper is better" configures a
+  // negative weight for it rather than the engine special-casing direction for one signal.
+  price?: number | null;
 };
 
 export type CoordinationCandidate = {

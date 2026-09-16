@@ -1,9 +1,12 @@
 import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
-import { appendCaseEvent, createDeadline, transitionCase } from './orchestration.js';
+import { env } from '../config/env.js';
+import { appendCaseEvent, createDeadline, raiseException, transitionCase } from './orchestration.js';
 import { audit } from './audit.js';
 import { queueNotification, setCustomerSnapshot } from './operations.js';
 import { assertCaseAccess } from './case-access.js';
+import { rankCoordinationCandidates, type CoordinationCandidate } from './coordination-engine.js';
+import { loadActiveRoutingPolicy } from './routing-repository.js';
 
 type PartItemInput = { sku:string; partNumber?:string; description?:string; quantity:number; attributes?:Record<string,unknown> };
 
@@ -85,6 +88,19 @@ export async function createPartsOrder(principal: Principal, input:{ caseId:stri
     await appendCaseEvent(input.caseId,'PARTS_ORDER_CREATED',principal,{ orderId:order.rows[0].id, itemCount:input.items.length });
     await setCustomerSnapshot(input.caseId,'parts_pending','Parts are being sourced for your vehicle.','Waiting for parts availability',input.neededBy);
     await audit(principal,'create_parts_order','parts_order',order.rows[0].id,'parts_requested',{ caseId:input.caseId });
+
+    // Best-effort, same fail-closed/non-blocking convention as autoRouteNewDemand: a supplier
+    // ranking problem (no policy configured, no supplier can fulfill every SKU) never blocks the
+    // order itself -- it just stays 'requested' for an admin to assign by hand, exactly as before
+    // this existed.
+    if (env.AUTO_ASSIGN_PARTS_SUPPLIER) {
+      try {
+        const autoAssigned = await autoAssignPartsSupplier(principal,order.rows[0].id);
+        if (autoAssigned.result) return autoAssigned.result;
+      } catch (error) {
+        console.error('auto_assign_parts_supplier_failed',{ orderId:order.rows[0].id, message:error instanceof Error?error.message:String(error) });
+      }
+    }
     return getPartsOrder(order.rows[0].id);
   } catch (e) {
     await client.query('rollback').catch(()=>{});
@@ -105,6 +121,85 @@ export async function assignSupplier(principal: Principal, orderId:string, suppl
   await queueNotification({ caseId:r.rows[0].case_id, channel:'push', recipientType:'actor', recipientId:supplierActorId, templateKey:'parts_order_assigned', payload:{ orderId } });
   await audit(principal,'assign_parts_supplier','parts_order',orderId,'supplier_assigned',{ supplierActorId });
   return getPartsOrder(orderId);
+}
+
+// Candidates that can fulfill every requested SKU/quantity combination in full -- an order is
+// sourced from one supplier, not split across several, matching how reserveOrderInventory already
+// commits the whole order to a single supplier_actor_id.
+async function loadPartsSupplierCandidates(items:{sku:string;quantity:number}[]) {
+  const wanted = JSON.stringify(items.map(item=>({ sku:item.sku, quantity:item.quantity })));
+  const result = await pool.query(
+    `with wanted as (
+       select sku, sum(quantity)::int as quantity
+       from jsonb_to_recordset($1::jsonb) as x(sku text, quantity int)
+       group by sku
+     ),
+     fulfillable as (
+       select pi.supplier_actor_id, w.sku, w.quantity as requested_quantity,
+              (pi.quantity_on_hand - pi.quantity_reserved) as available_quantity, pi.unit_price
+       from wanted w
+       join parts_inventory pi
+         on pi.sku = w.sku and pi.active = true
+        and (pi.quantity_on_hand - pi.quantity_reserved) >= w.quantity
+     )
+     select a.id as actor_id,
+            min(f.available_quantity::numeric / nullif(f.requested_quantity,0)) as fulfillment_ratio,
+            sum(f.unit_price * f.requested_quantity) as total_price,
+            (select avg(pm.value) from performance_metrics pm where pm.actor_id=a.id and pm.metric_code='rating')::float as avg_rating,
+            (select avg(pm.value) from performance_metrics pm where pm.actor_id=a.id and pm.metric_code='on_time_rate')::float as on_time_rate
+     from fulfillable f
+     join actors a on a.id = f.supplier_actor_id and a.status='active' and a.actor_type in ('parts','partner','dealership')
+     group by a.id
+     having count(distinct f.sku) = (select count(*) from wanted)`,
+    [wanted]
+  );
+  return result.rows as { actor_id:string; fulfillment_ratio:number|null; total_price:string|number|null; avg_rating:number|null; on_time_rate:number|null }[];
+}
+
+/**
+ * Automatic parts-supplier assignment, mirroring autoRouteNewDemand's shape for repair: reuses the
+ * same coordination engine and the same fail-closed convention (an active 'parts_supplier_default'
+ * routing_policies row is required, same as every other automatic routing decision in this
+ * codebase). Also callable directly by an admin (POST /api/admin/parts-orders/:id/auto-assign-
+ * supplier) regardless of the AUTO_ASSIGN_PARTS_SUPPLIER flag, the same way manual demand routing
+ * works independent of AUTO_ROUTE_NEW_DEMANDS.
+ */
+export async function autoAssignPartsSupplier(principal: Principal, orderId:string) {
+  const orderResult = await pool.query(
+    `select po.*, sc.domain_id from parts_orders po join service_cases sc on sc.id=po.case_id where po.id=$1`,
+    [orderId]
+  );
+  const order = orderResult.rows[0];
+  if (!order) throw new Error('order_not_found');
+  if (!['requested','supplier_assigned'].includes(order.status)) throw new Error('order_not_assignable');
+
+  const policy = await loadActiveRoutingPolicy(order.domain_id,'parts_supplier_default');
+  if (!policy) return { result:null, policyRequired:true, ranked:[] as unknown[] };
+
+  const items = await pool.query('select sku,quantity from parts_order_items where order_id=$1',[orderId]);
+  const candidates = await loadPartsSupplierCandidates(items.rows);
+
+  const eligible:CoordinationCandidate[] = candidates.map(candidate=>({
+    actorId:candidate.actor_id,
+    signals:{
+      capacity:candidate.fulfillment_ratio,
+      rating:candidate.avg_rating,
+      onTime:candidate.on_time_rate,
+      price:candidate.total_price==null?null:Number(candidate.total_price)
+    }
+  }));
+  const ranked = rankCoordinationCandidates(eligible,policy.configuration,orderId);
+  const recommended = ranked[0]?.actorId ?? null;
+  if (!recommended) {
+    await raiseException(order.case_id,'NO_ELIGIBLE_PARTS_SUPPLIER','No supplier could fulfill every item in this parts order.','warning',{ orderId });
+    return { result:null, policyRequired:false, ranked };
+  }
+
+  const result = await assignSupplier(principal,orderId,recommended);
+  await audit(principal,'auto_assign_parts_supplier','parts_order',orderId,'coordination_recommendation_v2',{
+    caseId:order.case_id, recommendedActorId:recommended, candidateCount:candidates.length
+  });
+  return { result, policyRequired:false, ranked };
 }
 
 export async function reserveOrderInventory(principal: Principal, orderId:string) {
