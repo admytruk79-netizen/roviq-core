@@ -13,7 +13,12 @@ const schema = z.object({
   // closed the same way auto-dispatch already does), but flipping this on is a deliberate
   // operational decision, not something a fresh deploy or the existing test fixtures should
   // suddenly start doing. Turn on once a real routing policy has been configured and reviewed.
-  AUTO_ROUTE_NEW_DEMANDS: z.enum(['true','false']).default('false').transform(v => v === 'true')
+  AUTO_ROUTE_NEW_DEMANDS: z.enum(['true','false']).default('false').transform(v => v === 'true'),
+  // Same fail-closed convention as AUTO_ROUTE_NEW_DEMANDS: an active 'parts_supplier_default'
+  // routing_policies row is still required, this flag only controls whether parts order creation
+  // triggers ranking automatically. An admin can always trigger it on demand regardless of this
+  // flag via POST /api/admin/parts-orders/:id/auto-assign-supplier.
+  AUTO_ASSIGN_PARTS_SUPPLIER: z.enum(['true','false']).default('false').transform(v => v === 'true')
 });
 
 export const env = schema.parse(process.env);

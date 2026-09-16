@@ -5,6 +5,7 @@ import { audit } from '../../services/audit.js';
 import { transitionCase } from '../../services/orchestration.js';
 import { publishIntegrationEvent } from '../../services/integration-gateway.js';
 import { confirmCaseCapacity, releaseCaseCapacity } from '../../services/capacity-reservation.js';
+import { createShopWaitlistEntry } from '../../services/shop-os-waitlist.js';
 import { requireRole } from '../middleware/principal.js';
 
 const capacityBody = z.object({
@@ -271,6 +272,18 @@ export async function partnerRoutes(app: FastifyInstance) {
         await client.query('rollback');
         throw error;
       }finally{client.release();}
+
+      // Accepting the offer only links the case to the shop's tenant (Shop OS's own manageability
+      // check keys off this). Without an explicit hop into Shop OS, the case would sit in
+      // repair_in_progress invisible to the shop's own scheduling system -- nothing on the
+      // waitlist, nothing on the board -- until a human happened to know to add it by hand. Put it
+      // on the shop's waitlist automatically so the handoff into the scheduled system is real;
+      // best-effort since bay/technician assignment is still a genuine human scheduling decision.
+      try{
+        await createShopWaitlistEntry(req.principal,{serviceCaseId:committedCaseId!});
+      }catch(error){
+        console.error('shop_os_waitlist_autocreate_failed',{caseId:committedCaseId,message:error instanceof Error?error.message:String(error)});
+      }
 
       await audit(req.principal,'respond_offer','match_offer',id,'actor_scoped_offer',{outcome:'accepted',caseId:committedCaseId});
       return {offer:acceptedOffer,case:acceptedCase};

@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { pool } from '../../db/pool.js';
 import { requireRole } from '../middleware/principal.js';
-import { assignSupplier, createPartsOrder, getPartsOrder, markPartsOrderStatus, reserveOrderInventory, upsertInventory } from '../../services/parts.js';
+import { assignSupplier, autoAssignPartsSupplier, createPartsOrder, getPartsOrder, markPartsOrderStatus, reserveOrderInventory, upsertInventory } from '../../services/parts.js';
 import { loadCaseForPrincipal } from '../../services/case-access.js';
 import { withIdempotency } from '../../services/orchestration.js';
 
@@ -65,6 +65,25 @@ export async function partsRoutes(app: FastifyInstance) {
     catch (e) {
       const message = e instanceof Error ? e.message : 'assignment_failed';
       if (message === 'supplier_not_available' || message === 'invalid_supplier_type') return reply.code(400).send({ error:message });
+      if (message === 'order_not_assignable') return reply.code(409).send({ error:message });
+      throw e;
+    }
+  });
+
+  // Manual trigger, independent of AUTO_ASSIGN_PARTS_SUPPLIER -- same relationship the demand
+  // routing engine has to AUTO_ROUTE_NEW_DEMANDS: an admin can always ask for a ranked supplier
+  // recommendation on demand, e.g. to (re)assign an order created before the flag was enabled or
+  // after inventory changed.
+  app.post('/api/admin/parts-orders/:id/auto-assign-supplier', { preHandler: requireRole('admin') }, async (req, reply) => {
+    const { id } = req.params as { id:string };
+    try {
+      const outcome = await autoAssignPartsSupplier(req.principal,id);
+      if (outcome.policyRequired) return reply.code(409).send({ error:'policy_required', ranked:outcome.ranked });
+      if (!outcome.result) return reply.code(409).send({ error:'no_eligible_supplier', ranked:outcome.ranked });
+      return { ...outcome.result, ranked:outcome.ranked };
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'auto_assign_failed';
+      if (message === 'order_not_found') return reply.code(404).send({ error:message });
       if (message === 'order_not_assignable') return reply.code(409).send({ error:message });
       throw e;
     }

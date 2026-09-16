@@ -108,6 +108,13 @@ describe('maintenance case end-to-end lifecycle', () => {
     expect(acceptRes.statusCode).toBe(200);
     expect(JSON.parse(acceptRes.body).case.state).toBe('repair_in_progress');
 
+    // Accepting the offer must hand the case into the shop's own scheduling system, not just flip
+    // the case's state -- otherwise the shop has no way to discover it needs to be scheduled.
+    const waitlistRes = await app.inject({ method: 'GET', url: '/api/shop-os/waitlist', headers: actorHeaders('partner', partnerActorId) });
+    expect(waitlistRes.statusCode).toBe(200);
+    const waitlistEntries = JSON.parse(waitlistRes.body).entries as Array<{ service_case_id: string }>;
+    expect(waitlistEntries.some((entry) => entry.service_case_id === caseId)).toBe(true);
+
     const partnerTransitionsRes = await app.inject({ method: 'GET', url: `/api/maintenance/cases/${caseId}/transitions`, headers: actorHeaders('partner', partnerActorId) });
     expect(partnerTransitionsRes.statusCode).toBe(200);
     expect(JSON.parse(partnerTransitionsRes.body).transitions.map((t: { toState: string }) => t.toState).sort()).toEqual(['parts_pending', 'payment_pending']);
