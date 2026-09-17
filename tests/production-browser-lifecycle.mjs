@@ -341,59 +341,95 @@ async function productionLifecycle(browser) {
   await waitForCaseState(caseId, adminToken, 'repair_in_progress');
   await screenshot(partner, 'lifecycle-07-partner-accepted');
 
-  log('7/10 Partner + Parts: create/approve repair work and hand off a parts request through the real portals.');
-  const repairOrder = await requestJson(`/api/shop-os/cases/${caseId}/repair-order`, { token: partnerSession.accessToken }).catch(() => null);
-  let orderId = repairOrder?.order?.id;
-  if (!orderId) {
-    const created = await requestJson('/api/shop-os/repair-orders', {
-      method: 'POST', token: partnerSession.accessToken,
-      body: { caseId, description: 'Browser acceptance repair order' }
-    });
-    orderId = created.order.id;
-  }
+  log('7/10 Partner + Parts: create/approve repair work and fulfil a parts order through the real Parts portal.');
+  const created = await requestJson('/api/shop-os/repair-orders', {
+    method: 'POST', token: partnerSession.accessToken,
+    body: { serviceCaseId: caseId, customerConcern: 'Browser acceptance repair order' }
+  });
+  const orderId = created?.repairOrder?.id;
+  assert.match(orderId ?? '', /^[0-9a-f-]{36}$/i, 'Shop OS did not return a repair order id');
+
   await requestJson(`/api/shop-os/repair-orders/${orderId}/lines`, {
     method: 'POST', token: partnerSession.accessToken,
-    body: { description: 'Browser acceptance replacement part', quantity: 1, unitPrice: 75, unitCost: 40 }
+    body: { lineType: 'part', description: 'Browser acceptance replacement part', quantity: 1, unitPrice: 75, unitCost: 40 }
   });
-  await requestJson(`/api/shop-os/repair-orders/${orderId}/submit`, { method: 'POST', token: partnerSession.accessToken, body: {} }).catch(() => null);
+  await requestJson(`/api/shop-os/repair-orders/${orderId}`, {
+    method: 'PATCH', token: partnerSession.accessToken, body: { action: 'submit_estimate' }
+  });
   const partnerOrder = await requestJson(`/api/shop-os/repair-orders/${orderId}`, { token: partnerSession.accessToken });
+  assert.equal(partnerOrder.repairOrder.status, 'awaiting_approval', 'Repair order did not reach awaiting_approval');
   for (const line of partnerOrder.lines ?? []) {
     if (line.approval_status !== 'approved') {
-      await requestJson(`/api/shop-os/repair-order-lines/${line.id}`, {
+      await requestJson(`/api/shop-os/repair-orders/${orderId}/lines/${line.id}`, {
         method: 'PATCH', token: partnerSession.accessToken, body: { approvalStatus: 'approved' }
       });
     }
   }
-  await requestJson(`/api/shop-os/repair-orders/${orderId}/approve`, { method: 'POST', token: partnerSession.accessToken, body: {} }).catch(() => null);
-
-  const partsRequest = await requestJson('/api/parts/requests', {
-    method: 'POST', token: partnerSession.accessToken,
-    body: { caseId, repairOrderId: orderId, description: 'Browser acceptance part', quantity: 1 }
+  const approvedOrder = await requestJson(`/api/shop-os/repair-orders/${orderId}`, {
+    method: 'PATCH', token: partnerSession.accessToken, body: { action: 'approve' }
   });
-  const partsRequestId = partsRequest.request.id;
+  assert.equal(approvedOrder.repairOrder.status, 'approved', 'Repair order did not reach approved');
+
+  const partsSku = `browser-${Date.now()}`;
+  const partsOrder = await requestJson(`/api/maintenance/cases/${caseId}/parts-orders`, {
+    method: 'POST', token: partnerSession.accessToken,
+    body: {
+      items: [{ sku: partsSku, quantity: 1, description: 'Browser acceptance part' }],
+      attributes: { source: 'production_browser_acceptance', repairOrderId: orderId }
+    }
+  });
+  const partsOrderId = partsOrder?.order?.id;
+  assert.match(partsOrderId ?? '', /^[0-9a-f-]{36}$/i, 'Parts request did not return an order id');
+  await waitForCaseState(caseId, adminToken, 'parts_pending');
+  await requestJson(`/api/admin/parts-orders/${partsOrderId}/assign-supplier`, {
+    method: 'POST', token: adminToken, body: { supplierActorId: partsSession.principal.actorId }
+  });
+
   const partsContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const parts = await partsContext.newPage();
   await setPortalSession(parts, PORTALS.parts, 'roviq_parts_token', 'roviq_parts_principal', partsSession);
-  await gotoStable(parts, `${PORTALS.parts}/requests/${partsRequestId}`);
-  for (const [label, expected] of [['Accept request', 'accepted'], ['Mark ordered', 'ordered'], ['Mark received', 'received']]) {
-    const button = await waitForButton(parts, label);
-    await button.click();
-    await waitForCollectionItem('/api/parts/me/requests', partsSession.accessToken, 'requests', item => item.id === partsRequestId && item.status === expected);
-  }
-  await screenshot(parts, 'lifecycle-08-parts-received');
+  const partsOrderCard = parts.locator('article.order-card').filter({ hasText: `Order ${partsOrderId.slice(0, 8)}` }).first();
+  await partsOrderCard.waitFor({ state: 'visible', timeout: 30_000 });
+  await partsOrderCard.locator('button.order-select').click();
+  const stockInput = parts.getByLabel('Stock on hand');
+  await stockInput.waitFor({ state: 'visible', timeout: 30_000 });
+  await stockInput.fill('1');
+  await parts.getByLabel('Unit price (USD)').fill('75');
+  await parts.getByRole('button', { name: 'Save inventory', exact: true }).click();
+  await parts.getByText(new RegExp(`Inventory saved for ${partsSku.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)).waitFor({ timeout: 20_000 });
 
-  log('8/10 Partner: finish the repair and confirm completion.');
+  for (const [label, expected] of [
+    ['Reserve stock', 'reserved'],
+    ['Mark ordered', 'ordered'],
+    ['Mark shipped', 'shipped'],
+    ['Mark delivered', 'delivered']
+  ]) {
+    const button = await waitForButton(partsOrderCard, label);
+    await button.click();
+    await waitForCollectionItem('/api/parts/me/orders', partsSession.accessToken, 'orders', item => item.id === partsOrderId && item.status === expected);
+  }
+  await waitForCaseState(caseId, adminToken, 'repair_in_progress');
+  await screenshot(parts, 'lifecycle-08-parts-delivered');
+
+  log('8/10 Partner: finish the repair order through start, quality control, and completion.');
   const currentOrder = await requestJson(`/api/shop-os/repair-orders/${orderId}`, { token: partnerSession.accessToken });
-  if (currentOrder.order.status === 'approved') {
-    await requestJson(`/api/shop-os/repair-orders/${orderId}/start`, { method: 'POST', token: partnerSession.accessToken, body: {} });
-  }
+  assert.equal(currentOrder.repairOrder.status, 'approved', `Repair order was not ready to start; status=${currentOrder.repairOrder.status}`);
+  await requestJson(`/api/shop-os/repair-orders/${orderId}`, {
+    method: 'PATCH', token: partnerSession.accessToken, body: { action: 'start' }
+  });
   const startedOrder = await requestJson(`/api/shop-os/repair-orders/${orderId}`, { token: partnerSession.accessToken });
-  assert.ok(['in_progress', 'completed'].includes(startedOrder.order.status), `Repair order did not start; status=${startedOrder.order.status}`);
-  if (startedOrder.order.status === 'in_progress') {
-    await requestJson(`/api/shop-os/repair-orders/${orderId}/complete`, { method: 'POST', token: partnerSession.accessToken, body: {} });
-  }
+  assert.equal(startedOrder.repairOrder.status, 'in_progress', `Repair order did not start; status=${startedOrder.repairOrder.status}`);
+  await requestJson(`/api/shop-os/repair-orders/${orderId}`, {
+    method: 'PATCH', token: partnerSession.accessToken, body: { action: 'qc' }
+  });
+  const qualityOrder = await requestJson(`/api/shop-os/repair-orders/${orderId}`, { token: partnerSession.accessToken });
+  assert.equal(qualityOrder.repairOrder.status, 'quality_control', `Repair order did not enter quality_control; status=${qualityOrder.repairOrder.status}`);
+  await requestJson(`/api/shop-os/repair-orders/${orderId}`, {
+    method: 'PATCH', token: partnerSession.accessToken, body: { action: 'complete' }
+  });
   const completedOrder = await requestJson(`/api/shop-os/repair-orders/${orderId}`, { token: partnerSession.accessToken });
-  assert.equal(completedOrder.order.status, 'completed', 'Repair order did not complete');
+  assert.equal(completedOrder.repairOrder.status, 'completed', 'Repair order did not complete');
+  await gotoStable(partner, PORTALS.partner);
   await screenshot(partner, 'lifecycle-09-repair-complete');
 
   log('9/10 Payment: advance the case to payment when Core exposes that transition, then exercise the payment handoff.');
