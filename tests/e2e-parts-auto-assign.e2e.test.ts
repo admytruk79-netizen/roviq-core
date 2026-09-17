@@ -20,6 +20,10 @@ describe('automatic parts-supplier assignment', () => {
   let midPriceSupplierId: string;
   let expensiveSupplierId: string;
 
+  async function setPartsPolicyActive(active: boolean) {
+    await pool.query(`update routing_policies set active=$1 where policy_key='parts_supplier_default'`, [active]);
+  }
+
   async function createOrder(overrides:{ requiresBoth?:boolean } = {}) {
     const demandRes = await app.inject({
       method: 'POST', url: '/api/demands', headers: actorHeaders('customer', customerActorId),
@@ -62,6 +66,7 @@ describe('automatic parts-supplier assignment', () => {
   afterAll(async () => { await pool.end(); });
 
   it('leaves the order unassigned when no parts_supplier_default policy is active', async () => {
+    await setPartsPolicyActive(false);
     const { orderId } = await createOrder();
     const outcome = await autoAssignPartsSupplier({ role: 'admin' }, orderId);
     expect(outcome.policyRequired).toBe(true);
@@ -76,7 +81,7 @@ describe('automatic parts-supplier assignment', () => {
       `insert into routing_policies(domain_id, policy_key, version, active, configuration)
        select id, 'parts_supplier_default', 1, true, '{"weights":{"price":-1},"defaults":{"price":0}}'::jsonb
        from domains where code='maintenance'
-       on conflict (domain_id, policy_key, version) do update set active=true`
+       on conflict (domain_id, policy_key, version) do update set active=true,configuration=excluded.configuration,updated_at=now()`
     );
     try {
       const { orderId, caseId } = await createOrder();
@@ -96,7 +101,7 @@ describe('automatic parts-supplier assignment', () => {
       const events = JSON.parse(timelineRes.body).timeline.map((e: { event_type: string }) => e.event_type);
       expect(events).toContain('PARTS_SUPPLIER_ASSIGNED');
     } finally {
-      await pool.query(`update routing_policies set active=false where policy_key='parts_supplier_default'`);
+      await setPartsPolicyActive(false);
     }
   });
 
@@ -105,7 +110,7 @@ describe('automatic parts-supplier assignment', () => {
       `insert into routing_policies(domain_id, policy_key, version, active, configuration)
        select id, 'parts_supplier_default', 1, true, '{"weights":{"price":-1},"defaults":{"price":0}}'::jsonb
        from domains where code='maintenance'
-       on conflict (domain_id, policy_key, version) do update set active=true`
+       on conflict (domain_id, policy_key, version) do update set active=true,configuration=excluded.configuration,updated_at=now()`
     );
     try {
       const { orderId, caseId } = await createOrder({ requiresBoth: true });
@@ -119,11 +124,12 @@ describe('automatic parts-supplier assignment', () => {
       const exceptions = await pool.query(`select exception_code from case_exceptions where case_id=$1`, [caseId]);
       expect(exceptions.rows.some((r: { exception_code: string }) => r.exception_code === 'NO_ELIGIBLE_PARTS_SUPPLIER')).toBe(true);
     } finally {
-      await pool.query(`update routing_policies set active=false where policy_key='parts_supplier_default'`);
+      await setPartsPolicyActive(false);
     }
   });
 
   it('admin manual-trigger endpoint fails closed with policy_required when no policy is active', async () => {
+    await setPartsPolicyActive(false);
     const { orderId } = await createOrder();
     const res = await app.inject({ method: 'POST', url: `/api/admin/parts-orders/${orderId}/auto-assign-supplier`, headers: adminHeaders() });
     expect(res.statusCode).toBe(409);
