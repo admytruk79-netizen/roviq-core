@@ -103,6 +103,26 @@ export async function evaluateActorServiceability(
   const a = actor.rows[0];
   if(caseId) await syncOperationalConstraints(caseId,db);
   const constraints = caseId ? await loadConstraints(caseId,db) : [];
+
+  // Selecting a repair provider is what creates the tow destination. Before that selection,
+  // an in-flight tow legitimately has no dropoff_location yet, so treating the projected
+  // transport "destinationReady=false" requirement as a routing blocker creates a circular
+  // dependency: no repair provider can be selected until a destination exists, while the
+  // destination cannot exist until a repair provider is selected. Ignore only that narrow,
+  // unresolved-destination transport requirement for repair routing/confirmation. Failed,
+  // declined, unknown, or otherwise blocked transport constraints remain fail-closed.
+  if(serviceCategory==='repair'){
+    for(const constraint of constraints){
+      if(
+        constraint.type==='transport' &&
+        constraint.status==='required' &&
+        constraint.details?.destinationReady===false
+      ){
+        constraint.required=false;
+      }
+    }
+  }
+
   if(a.status!=='active') constraints.push({type:'provider',status:'blocked',details:{actorId,actorStatus:a.status??'unknown'}});
   if(serviceCategory && a.has_active_capability!==true) constraints.push({type:'capability',status:'blocked',details:{actorId,serviceCategory}});
   const requirementsProjected=Boolean(caseId && serviceCategory);
