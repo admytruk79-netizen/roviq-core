@@ -131,3 +131,5 @@ jobs:
           path: artifacts/production-browser
           if-no-files-found: warn
           retention-days: 14
+
+# Validation trigger: rerun exact-head production acceptance after routing policy seeding.
