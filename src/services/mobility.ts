@@ -4,6 +4,7 @@ import { appendCaseEvent, createDeadline } from './orchestration.js';
 import { audit } from './audit.js';
 import { queueNotification, setCustomerSnapshot } from './operations.js';
 import { syncMobilityOperationalConstraint } from './case-constraint-projection.js';
+import { loanerTierPermitted, maxLoanerTierFor, type LoanerTier } from './consumer-membership.js';
 
 async function lockServiceCase(caseId:string,client:{query:(text:string,params?:unknown[])=>Promise<any>}){
   const result=await client.query('select id from service_cases where id=$1 for update',[caseId]);
@@ -65,6 +66,14 @@ export async function assignMobility(principal: Principal, allocationId:string, 
       if (!resource.rowCount) throw new Error('resource_not_found');
       if (resource.rows[0].actor_id !== input.providerActorId) throw new Error('resource_provider_mismatch');
       if (resource.rows[0].status !== 'available') throw new Error('resource_unavailable');
+      // Loaners are matched to the customer's tier (Business Plan Section 4), gated by their
+      // membership rather than left to whoever happens to assign the resource -- an untagged
+      // resource defaults to economy so missing metadata fails toward the safest tier, not open access.
+      const requestedTier = (resource.rows[0].attributes?.tier as LoanerTier | undefined) ?? 'economy';
+      if (resource.rows[0].resource_type === 'loaner' && a.rows[0].customer_actor_id) {
+        const maxTier = await maxLoanerTierFor(a.rows[0].customer_actor_id);
+        if (!loanerTierPermitted(requestedTier,maxTier)) throw new Error('loaner_tier_not_permitted');
+      }
       await client.query("update mobility_resources set status='assigned',updated_at=now() where id=$1",[input.resourceId]);
     }
     const updated = await client.query(

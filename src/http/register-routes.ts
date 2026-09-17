@@ -8,6 +8,7 @@ import { exceptionRoutes } from './routes/exceptions.js';
 import { coherenceRoutes } from './routes/coherence.js';
 import { fieldServiceRoutes } from './routes/field-service.js';
 import { meRoutes } from './routes/me.js';
+import { membershipRoutes } from './routes/membership.js';
 import { servicePlanRoutes } from './routes/service-plans.js';
 import { quoteRoutes } from './routes/quotes.js';
 import { caseAddonItemRoutes } from './routes/case-addon-items.js';
@@ -44,7 +45,7 @@ const routeModules: RouteModule[] = [
   { name: 'coordination', plugins: [routingRoutes, triageRoutes, triageEvaluationRoutes, coherenceRoutes] },
   { name: 'service-operations', plugins: [diagnosticRoutes, fieldServiceRoutes, transportRoutes, mobilityRoutes, partsRoutes] },
   { name: 'shop-os', plugins: [shopOsRoutes, shopOsDeferredAppointmentChoiceRoutes, shopOsFloorRoutes] },
-  { name: 'financial-and-communications', plugins: [paymentWebhookRoutes, paymentRoutes, commerceRoutes, notificationRoutes] },
+  { name: 'financial-and-communications', plugins: [paymentWebhookRoutes, paymentRoutes, commerceRoutes, notificationRoutes, membershipRoutes] },
   { name: 'integration-and-observability', plugins: [integrationRoutes, analyticsRoutes, localRoutes] },
   { name: 'actor-surfaces', plugins: [partnerRoutes, adminRoutes] }
 ];

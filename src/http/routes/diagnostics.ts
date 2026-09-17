@@ -6,6 +6,7 @@ import { transitionCase, type CaseState } from '../../services/orchestration.js'
 import { assignTransportDispatch, createTransportDispatch } from '../../services/transport.js';
 import { requireRole, requireRoleOrCapability } from '../middleware/principal.js';
 import { loadCaseForPrincipal } from '../../services/case-access.js';
+import { chargeDiagnosticFee } from '../../services/diagnostic-fee.js';
 
 const findingBody = z.object({
   findingCode: z.string().optional(),
@@ -85,6 +86,23 @@ export async function diagnosticRoutes(app: FastifyInstance) {
           `update demand_requests set attributes = attributes || $2::jsonb, updated_at = now() where id = $1`,
           [id, JSON.stringify({ requiredCapability: 'repair' })]
         );
+      }
+    }
+
+    // Charging happens once the visit is actually confirmed complete (a finding was recorded),
+    // regardless of disposition -- including diagnose_and_fix, which otherwise generates no
+    // revenue anywhere in the system today. Best-effort: a billing problem never blocks a valid
+    // diagnostic finding from being recorded.
+    if (caseId) {
+      try {
+        const caseRow = await pool.query('select customer_actor_id,domain_id from service_cases where id=$1',[caseId]);
+        if (caseRow.rowCount) {
+          await chargeDiagnosticFee(req.principal,{
+            caseId, customerActorId: caseRow.rows[0].customer_actor_id, domainId: caseRow.rows[0].domain_id, findingId: r.rows[0].id
+          });
+        }
+      } catch (error) {
+        console.error('diagnostic_fee_charge_failed',{ caseId, findingId:r.rows[0].id, message:error instanceof Error?error.message:String(error) });
       }
     }
 
