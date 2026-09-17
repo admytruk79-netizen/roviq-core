@@ -18,27 +18,58 @@ async function ensurePartnerTestReadiness(actorId:string, domainId:string) {
   const client=await pool.connect();
   try {
     await client.query('begin');
-    const actor=await client.query('select location_id from actors where id=$1 for update',[actorId]);
+    const actor=await client.query('select organization_id,location_id from actors where id=$1 for update',[actorId]);
     if(!actor.rowCount) throw new Error('test_partner_missing');
+
+    let organizationId=actor.rows[0].organization_id as string|null;
+    if(!organizationId){
+      const existingOrganization=await client.query(
+        `select id from organizations where contact_metadata->>'testContext'='admin_partner_portal' order by created_at asc limit 1`
+      );
+      if(existingOrganization.rowCount){
+        organizationId=existingOrganization.rows[0].id;
+      }else{
+        const organization=await client.query(
+          `insert into organizations(organization_type,legal_name,display_name,status,contact_metadata)
+           values('repair_partner','ROVIQ Admin Test Repair Partner','ROVIQ Admin Test Repair Partner','active',$1)
+           returning id`,
+          [JSON.stringify({testContext:'admin_partner_portal',purpose:'production_acceptance'})]
+        );
+        organizationId=organization.rows[0].id;
+      }
+    }
 
     let locationId=actor.rows[0].location_id as string|null;
     if(!locationId){
       const existingLocation=await client.query(
-        `select id from locations where metadata->>'testContext'='admin_partner_portal' order by created_at asc limit 1`
+        `select id from locations
+          where metadata->>'testContext'='admin_partner_portal'
+            and organization_id=$1
+          order by created_at asc limit 1`,
+        [organizationId]
       );
       if(existingLocation.rowCount){
         locationId=existingLocation.rows[0].id;
       }else{
         const location=await client.query(
-          `insert into locations(name,address,latitude,longitude,country_code,region,city,metadata)
-           values('ROVIQ Admin Test Repair Partner','ROVIQ production acceptance repair destination',45.5231,-122.6819,'US','OR','Portland',$1)
+          `insert into locations(organization_id,name,address,latitude,longitude,country_code,region,city,metadata)
+           values($1,'ROVIQ Admin Test Repair Partner','ROVIQ production acceptance repair destination',45.5231,-122.6819,'US','OR','Portland',$2)
            returning id`,
-          [JSON.stringify({testContext:'admin_partner_portal',purpose:'production_acceptance'})]
+          [organizationId,JSON.stringify({testContext:'admin_partner_portal',purpose:'production_acceptance'})]
         );
         locationId=location.rows[0].id;
       }
-      await client.query('update actors set location_id=$2 where id=$1',[actorId,locationId]);
+    }else{
+      await client.query(
+        `update locations set organization_id=coalesce(organization_id,$2),updated_at=now() where id=$1`,
+        [locationId,organizationId]
+      );
     }
+
+    await client.query(
+      `update actors set organization_id=$2,location_id=$3 where id=$1`,
+      [actorId,organizationId,locationId]
+    );
 
     await client.query(
       `insert into actor_capabilities(actor_id,capability_id,active)
