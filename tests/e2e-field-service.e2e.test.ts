@@ -412,6 +412,67 @@ describe('field service on-site assessment', () => {
     expect(secondStartRetryRes.statusCode).toBe(200);
   });
 
+  it('raises a critical case exception when field service completes as failed or escalated, so recovery is not just a customer-facing message', async () => {
+    const caseId = await createCaseWithTowRelation();
+    await app.inject({
+      method: 'PUT', url: `/api/admin/field-service/actors/${towActorId}/capabilities`, headers: adminHeaders(),
+      payload: { active: true, repairClasses: ['electrical_minor'] }
+    });
+    const assessRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/assess`, headers: actorHeaders('tow', towActorId),
+      payload: {
+        operatorActorId: towActorId, summary: 'Intermittent electrical fault, attempting on-site repair',
+        repairClass: 'electrical_minor', drivability: 'drivable', confidence: 0.9, safety: {},
+        customerAuthorizationRequired: false
+      }
+    });
+    expect(assessRes.statusCode).toBe(201);
+    const decision = JSON.parse(assessRes.body).decision;
+    expect(decision.action).toBe('field_repair');
+
+    const startRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/${decision.id}/start`, headers: actorHeaders('tow', towActorId)
+    });
+    expect(startRes.statusCode).toBe(200);
+
+    const completeRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/${decision.id}/complete`, headers: actorHeaders('tow', towActorId),
+      payload: { outcome: 'escalated' }
+    });
+    expect(completeRes.statusCode).toBe(200);
+    expect(JSON.parse(completeRes.body).decision.status).toBe('escalated');
+
+    const exceptionsRes = await app.inject({ method: 'GET', url: '/api/admin/exceptions', headers: adminHeaders() });
+    expect(exceptionsRes.statusCode).toBe(200);
+    const exceptions = JSON.parse(exceptionsRes.body).exceptions as any[];
+    const raised = exceptions.find((e) => e.case_id === caseId && e.exception_code === 'FIELD_SERVICE_ESCALATED');
+    expect(raised).toBeTruthy();
+    expect(raised.severity).toBe('critical');
+    expect(raised.state).toBe('open');
+    expect(raised.metadata.decisionId).toBe(decision.id);
+    expect(raised.metadata.outcome).toBe('escalated');
+
+    // A "fixed" completion on a separate case must not raise a recovery exception.
+    const fixedCase = await createCaseWithTowRelation();
+    const fixedAssessRes = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${fixedCase}/field-service/assess`, headers: actorHeaders('tow', towActorId),
+      payload: {
+        operatorActorId: towActorId, summary: 'Intermittent electrical fault, on-site repair',
+        repairClass: 'electrical_minor', drivability: 'drivable', confidence: 0.9, safety: {},
+        customerAuthorizationRequired: false
+      }
+    });
+    const fixedDecision = JSON.parse(fixedAssessRes.body).decision;
+    await app.inject({ method: 'POST', url: `/api/maintenance/cases/${fixedCase}/field-service/${fixedDecision.id}/start`, headers: actorHeaders('tow', towActorId) });
+    await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${fixedCase}/field-service/${fixedDecision.id}/complete`, headers: actorHeaders('tow', towActorId),
+      payload: { outcome: 'fixed' }
+    });
+    const exceptionsAfterFixedRes = await app.inject({ method: 'GET', url: '/api/admin/exceptions', headers: adminHeaders() });
+    const exceptionsAfterFixed = JSON.parse(exceptionsAfterFixedRes.body).exceptions as any[];
+    expect(exceptionsAfterFixed.find((e) => e.case_id === fixedCase)).toBeUndefined();
+  });
+
   it('routes "limited" drivability to temporary_stabilization, not a full field_repair, and carries it through start/complete', async () => {
     const caseId = await createCaseWithTowRelation();
     await app.inject({

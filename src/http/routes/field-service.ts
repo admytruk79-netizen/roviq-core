@@ -7,6 +7,7 @@ import { audit } from '../../services/audit.js';
 import { appendCaseEvent } from '../../services/orchestration.js';
 import { setCustomerSnapshot } from '../../services/operations.js';
 import { createPartsOrder } from '../../services/parts.js';
+import { raiseException } from '../../services/workflow-support.js';
 
 const executableRepairClass = z.enum(['battery','tire','ignition','electrical_minor','fluid_service','minor_mechanical']);
 const repairClass = z.enum(['battery','tire','ignition','electrical_minor','fluid_service','minor_mechanical','unknown']);
@@ -310,7 +311,8 @@ export async function fieldServiceRoutes(app:FastifyInstance){
     }
     const sideEffects=await Promise.allSettled([
       appendCaseEvent(id,'FIELD_SERVICE_COMPLETED',req.principal,{decisionId,outcome:b.outcome}),
-      setCustomerSnapshot(id,b.outcome==='fixed'?'field_service_fixed':b.outcome==='stabilized'?'field_service_stabilized':'field_service_escalated',b.outcome==='fixed'?'Vehicle repaired on site.':b.outcome==='stabilized'?'Vehicle stabilized on site.':'On-site work could not be completed safely.',b.outcome==='fixed'?'Confirm resolution':b.outcome==='stabilized'?'Continue with approved next step':'ROVIQ will arrange towing or specialist service')
+      setCustomerSnapshot(id,b.outcome==='fixed'?'field_service_fixed':b.outcome==='stabilized'?'field_service_stabilized':'field_service_escalated',b.outcome==='fixed'?'Vehicle repaired on site.':b.outcome==='stabilized'?'Vehicle stabilized on site.':'On-site work could not be completed safely.',b.outcome==='fixed'?'Confirm resolution':b.outcome==='stabilized'?'Continue with approved next step':'ROVIQ will arrange towing or specialist service'),
+      ...(decisionRow.status==='escalated'?[raiseException(id,'FIELD_SERVICE_ESCALATED',`On-site work ${b.outcome} and requires recovery (tow or specialist service).`,'critical',{decisionId,outcome:b.outcome,repairClass:decisionRow.repair_class})]:[])
     ]);
     const failed=sideEffects.filter(s=>s.status==='rejected');
     if(failed.length>0)console.warn('field_service_complete_side_effect_failed',{decisionId,caseId:id,outcome:b.outcome,failedCount:failed.length});
