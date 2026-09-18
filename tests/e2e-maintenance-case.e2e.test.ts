@@ -188,6 +188,24 @@ describe('maintenance case end-to-end lifecycle', () => {
     expect(Number(platformRevenue!.amount_minor) + Number(partnerPayable!.amount_minor)).toBe(24999);
     expect(Number(platformRevenue!.amount_minor)).toBeGreaterThan(0);
 
+    // The partner_payable split above is only a bookkeeping entry -- completion must also propose
+    // an actual payout for the selected shop, or "what the shop is owed" is just a number nobody
+    // acts on. It should land pending (awaiting the admin approve/process/paid flow), attached to
+    // the one payment intent this case captured, for exactly the partner_payable amount.
+    const payouts = JSON.parse(financialsRes.body).payouts as { counterparty_actor_id: string; state: string; amount: string; currency: string; payment_intent_id: string | null }[];
+    const autoPayout = payouts.find((p) => p.counterparty_actor_id === partnerActorId);
+    expect(autoPayout).toBeTruthy();
+    expect(autoPayout!.state).toBe('pending');
+    expect(autoPayout!.currency).toBe('USD');
+    expect(Math.round(Number(autoPayout!.amount) * 100)).toBe(Number(partnerPayable!.amount_minor));
+    expect(autoPayout!.payment_intent_id).toBe(paymentId);
+
+    // And it must actually be visible to the partner, not just to admin financials.
+    const partnerPayoutsRes = await app.inject({ method: 'GET', url: '/api/partners/me/payouts', headers: actorHeaders('partner', partnerActorId) });
+    expect(partnerPayoutsRes.statusCode).toBe(200);
+    const partnerPayouts = JSON.parse(partnerPayoutsRes.body).payouts as { id: string; state: string }[];
+    expect(partnerPayouts.some((p) => p.state === 'pending')).toBe(true);
+
     const timelineRes = await app.inject({ method: 'GET', url: `/api/maintenance/cases/${caseId}/timeline`, headers: adminHeaders() });
     const timelineEvents = JSON.parse(timelineRes.body).timeline.map((e: { event_type: string }) => e.event_type);
     expect(timelineEvents).toEqual(expect.arrayContaining([
