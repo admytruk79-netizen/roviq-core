@@ -95,6 +95,33 @@ Reader enrollment must be explicit and account-bound. Required controls:
 - no secrets embedded in public mobile bundles beyond public configuration;
 - fail closed when vehicle ownership/authorization or consent cannot be established.
 
+## Device enrollment (how to add a Reader)
+
+This is the concrete procedure behind the "device enrollment/revocation" line in Phase D. It is the only path by which a Reader is allowed to submit diagnostic events — a device with no completed enrollment record must be rejected by the ingestion gateway, not merely unauthenticated.
+
+1. **Account and vehicle prerequisite.** The customer must have an authenticated ROVIQ account and a vehicle profile (VIN or vehicle record) already on file. A Reader is added *to a vehicle*, not to an account in the abstract — one device maps to exactly one vehicle at a time.
+2. **Physical pairing.** The customer plugs the Reader into the vehicle's OBD-II port and pairs it to the ROVIQ mobile app over Bluetooth Low Energy. The app reads the device's factory-provisioned unique device ID and public key (or equivalent identity credential) directly from the device — never typed in by the user, to avoid transcription/spoofing errors.
+3. **Consent capture.** Before enrollment is submitted, the app presents the versioned disclosure (see Consent and disclosure below) naming exactly which data classes the device will collect and why. The customer accepts a specific `consent_version`/`consent_scope`, which is stored and referenced by every event the device later submits.
+4. **Enrollment call.** The app calls Core with the device ID, the device's public key/attestation, the target vehicle ID, and the accepted consent scope. Core:
+   - verifies the calling principal owns (or is authorized on) the target vehicle;
+   - verifies the device ID is not already enrolled to a different vehicle/account (or explicitly re-parents it, revoking the prior binding, if the product allows re-pairing);
+   - mints a device-scoped credential (short-lived token issued against the device's long-lived key, not a shared secret shipped in the mobile bundle);
+   - writes an audit entry for the enrollment.
+5. **Activation.** Once enrolled, the Reader (via the phone) may call the diagnostic ingestion gateway. Every event must carry the device credential and a `source_event_id` so the gateway can apply replay protection; events for a device with no active enrollment are rejected before they reach normalization.
+6. **Visibility and control.** The customer can see enrolled Readers under "connected devices" on their vehicle, toggle continuous monitoring on/off, and revoke a device at any time. Revocation immediately invalidates the device's credential and is itself audited; a revoked device must be re-enrolled from step 2, not silently reactivated.
+
+Proposed API surface (introduced in Phase C alongside the ingestion tables, not before):
+
+| Endpoint | Caller | Purpose |
+|---|---|---|
+| `POST /api/customers/me/vehicles/:vehicleId/readers/enroll` | Customer (via mobile app) | Submit device ID + public key + consent scope; returns the device credential |
+| `GET /api/customers/me/vehicles/:vehicleId/readers` | Customer | List enrolled Readers and their status (active, revoked, monitoring on/off) |
+| `PATCH /api/customers/me/readers/:deviceId` | Customer | Toggle continuous monitoring, update sharing scope |
+| `POST /api/customers/me/readers/:deviceId/revoke` | Customer or admin | Immediately invalidate the device credential |
+| `POST /api/diagnostics/ingest` | Device (device credential, not a customer session) | Submit a canonical diagnostic event; rejected if the device has no active enrollment |
+
+Admin/support needs a parallel read/revoke path (`GET/POST /api/admin/readers/...`) scoped through the existing admin case/actor-scope conventions, for support-initiated revocation (lost phone, fraud, device recall) without requiring the customer's own session.
+
 ## Consent and disclosure
 
 The mobile enrollment flow must state what the device can collect and why. Consent must be versioned and stored. Users must be able to see whether continuous monitoring is enabled and revoke a Reader.
