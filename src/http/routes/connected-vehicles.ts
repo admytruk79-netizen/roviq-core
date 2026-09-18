@@ -181,6 +181,7 @@ export async function connectedVehicleRoutes(app:FastifyInstance) {
 
     if(body.serviceCaseId){
       const serviceCase=await loadCaseForPrincipal(req.principal,body.serviceCaseId);
+      if(!serviceCase) return reply.code(404).send({error:'case_not_found'});
       if(serviceCase.vehicle_id&&serviceCase.vehicle_id!==body.vehicleId) return reply.code(409).send({error:'case_vehicle_mismatch'});
       if(!serviceCase.vehicle_id){
         await pool.query(`update service_cases set vehicle_id=$2,updated_at=now() where id=$1 and vehicle_id is null`,[body.serviceCaseId,body.vehicleId]);
