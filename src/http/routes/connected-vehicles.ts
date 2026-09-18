@@ -109,7 +109,7 @@ export async function connectedVehicleRoutes(app:FastifyInstance) {
       const enrollment=await client.query(
         `insert into device_enrollments(vehicle_id,source_id,consent_id,external_device_id,metadata)
          values($1,$2,$3,$4,$5)
-         on conflict(source_id,external_device_id) where external_device_id is not null
+         on conflict(source_id,external_device_id)
          do update set vehicle_id=excluded.vehicle_id,consent_id=excluded.consent_id,enrollment_status='active',updated_at=now(),metadata=excluded.metadata
          returning *`,
         [body.vehicleId,body.sourceId,consent.rows[0].id,body.externalDeviceId??null,JSON.stringify(body.metadata??{})]
