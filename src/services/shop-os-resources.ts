@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
 import { resolveShopPrincipalScope } from './shop-os-scope.js';
+import { synchronizeShopOsResourceCapacityState } from './shop-os-capacity.js';
 
 type Queryable=Pick<PoolClient,'query'>;
 export type ShopResourceType='bay'|'technician'|'advisor'|'equipment'|'mobile_unit'|'tow_unit'|'valet_driver'|'loaner_vehicle';
@@ -125,7 +126,16 @@ export async function updateShopResource(principal:Principal,resourceId:string,i
       Object.prototype.hasOwnProperty.call(input,'hourlyCost'),input.hourlyCost??null,
       Object.prototype.hasOwnProperty.call(input,'laborRate'),input.laborRate??null
     ]);
+    const next=updated.rows[0];
+    await synchronizeShopOsResourceCapacityState(resourceId,client);
+    await client.query(`insert into events(aggregate_type,aggregate_id,event_type,actor_id,actor_role,payload)
+      values('service_resource',$1,'SHOP_OS_RESOURCE_UPDATED',$2,$3,$4)`,[
+      resourceId,principal.actorId??null,principal.role,JSON.stringify({
+        organizationId:next.organization_id,locationId:next.location_id,resourceType:next.resource_type,
+        active:next.active,operationalState:next.operational_state,assignedActorId:next.assigned_actor_id??null
+      })
+    ]);
     await client.query('commit');
-    return updated.rows[0];
+    return next;
   }catch(error){await client.query('rollback');throw error;}finally{client.release();}
 }
