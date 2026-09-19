@@ -36,9 +36,6 @@ export async function connectedVehicleRoutes(app:FastifyInstance) {
       capabilityProfile:z.record(z.unknown()).optional(),
       metadata:z.record(z.unknown()).optional()
     }).parse(req.body);
-    if (body.externalDeviceId === undefined) {
-      return reply.code(400).send({error:'external_device_id_required'});
-    }
     const result=await pool.query(
       `insert into connected_sources(source_type,provider_key,organization_id,capability_profile,metadata)
        values($1,$2,$3,$4,$5) returning *`,
@@ -65,13 +62,12 @@ export async function connectedVehicleRoutes(app:FastifyInstance) {
     const body=z.object({
       vehicleId:z.string().uuid(),
       sourceId:z.string().uuid(),
-      externalDeviceId:z.string().min(1).max(250).optional(),
+      externalDeviceId:z.string().min(1).max(250),
       consentVersion:z.string().min(1).max(80),
       scopes:z.array(z.string().min(1).max(120)).min(1).default(['vehicle_health']),
       retentionDays:z.number().int().positive().max(3650).optional(),
       metadata:z.record(z.unknown()).optional()
     }).parse(req.body);
-    if(body.externalDeviceId===undefined) return reply.code(400).send({error:'external_device_id_required'});
     const vehicle=await loadOwnedVehicle(req.principal,body.vehicleId);
     const source=await pool.query(
       `select id,status,source_type from connected_sources where id=$1`,
@@ -101,7 +97,7 @@ export async function connectedVehicleRoutes(app:FastifyInstance) {
          on conflict(source_id,external_device_id)
          do update set vehicle_id=excluded.vehicle_id,consent_id=excluded.consent_id,enrollment_status='active',updated_at=now(),metadata=excluded.metadata
          returning *`,
-        [body.vehicleId,body.sourceId,consent.rows[0].id,body.externalDeviceId??null,JSON.stringify(body.metadata??{})]
+        [body.vehicleId,body.sourceId,consent.rows[0].id,body.externalDeviceId,JSON.stringify(body.metadata??{})]
       );
       await client.query('commit');
       await audit(req.principal,'enroll_connected_vehicle','device_enrollment',enrollment.rows[0].id,'connected_vehicle_enrolled',{
