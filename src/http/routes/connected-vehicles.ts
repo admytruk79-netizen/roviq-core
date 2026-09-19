@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { pool } from '../../db/pool.js';
@@ -6,6 +5,7 @@ import { audit } from '../../services/audit.js';
 import { appendCaseEvent } from '../../services/case-events.js';
 import { loadCaseForPrincipal } from '../../services/case-access.js';
 import { requireRole } from '../middleware/principal.js';
+import { healthEventDedupKey } from '../../services/connected-vehicle-identity.js';
 
 async function loadOwnedVehicle(principal:any, vehicleId:string) {
   const result = await pool.query(
@@ -24,22 +24,6 @@ async function loadOwnedVehicle(principal:any, vehicleId:string) {
     throw error;
   }
   return vehicle;
-}
-
-function healthEventDedupKey(input:{
-  sourceId:string; vehicleId:string; sourceEventId?:string;
-  eventType:string; occurredAt:string; dtcCodes:string[];
-  normalizedSignals:Record<string,unknown>;
-}) {
-  if (input.sourceEventId) return `source:${input.sourceEventId}`;
-  return createHash('sha256').update(JSON.stringify({
-    sourceId:input.sourceId,
-    vehicleId:input.vehicleId,
-    eventType:input.eventType,
-    occurredAt:input.occurredAt,
-    dtcCodes:[...input.dtcCodes].sort(),
-    normalizedSignals:input.normalizedSignals
-  })).digest('hex');
 }
 
 export async function connectedVehicleRoutes(app:FastifyInstance) {
