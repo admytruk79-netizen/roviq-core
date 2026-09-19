@@ -36,6 +36,17 @@ describe('evaluateServiceability', () => {
     expect(result.reasons).toContain('constraint_parts_unknown');
   });
 
+  it('fails closed when warranty or repair authorization is unresolved', () => {
+    const result = evaluateServiceability({
+      capacity:{ capacityState:'available', confidence:'integrated', syncState:'current', capacityUnits:1 },
+      constraints:[{ type:'authorization', status:'required' }],
+      requirementsProjected:true
+    });
+    expect(result.eligible).toBe(false);
+    expect(result.confirmable).toBe(false);
+    expect(result.reasons).toContain('constraint_authorization_unsatisfied');
+  });
+
   it('allows an explicit hold but not confirmation for stale capacity', () => {
     const result = evaluateServiceability({
       capacity:{ capacityState:'available', confidence:'stale', syncState:'stale', capacityUnits:2 },
