@@ -4,6 +4,7 @@ import { routeMaintenanceDemand } from './routing.js';
 import { syncOperationalConstraints } from './case-constraint-projection.js';
 import { appendCaseEvent } from './case-events.js';
 import { audit } from './audit.js';
+import { listNetworkExecutionForPlan } from './network-execution.js';
 
 type Queryable = { query:(text:string,params?:unknown[])=>Promise<any> };
 
@@ -141,5 +142,6 @@ export async function getLatestFulfillmentPlan(caseId:string){
     `select * from fulfillment_candidates where fulfillment_plan_id=$1 order by rank asc`,
     [plan.id]
   );
-  return {plan,candidates:candidates.rows};
+  const execution=await listNetworkExecutionForPlan(plan.id);
+  return {plan,candidates:candidates.rows,...execution};
 }
