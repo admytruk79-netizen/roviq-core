@@ -159,6 +159,56 @@ export async function recordCompletionOutcome(input:{
   return result.rows[0];
 }
 
+
+export async function recordCancellationOutcome(input:{
+  caseId:string;
+  actorId?:string|null;
+  evidence?:Record<string,unknown>;
+},queryable?:Queryable){
+  const db=queryable??pool;
+  const plan=await latestPlanForCase(input.caseId,db);
+  const [constraintsResult,handoffsResult]=await Promise.all([
+    db.query(
+      `select constraint_type,status,projection_key,details
+         from case_constraints where service_case_id=$1
+         order by constraint_type,projection_key nulls last`,
+      [input.caseId]
+    ),
+    plan
+      ? db.query(
+          `select handoff_type,status,reference_type,reference_id,participant_actor_id,metadata
+             from network_handoffs where fulfillment_plan_id=$1
+             order by created_at asc,id asc`,
+          [plan.id]
+        )
+      : Promise.resolve({rows:[]})
+  ]);
+  const result=await db.query(
+    `insert into completion_outcomes(
+       service_case_id,fulfillment_plan_id,outcome,dependency_snapshot,evidence,completed_by_actor_id
+     ) values($1,$2,'cancelled',$3,$4,$5)
+     on conflict(service_case_id)
+     do update set fulfillment_plan_id=excluded.fulfillment_plan_id,outcome='cancelled',
+       dependency_snapshot=excluded.dependency_snapshot,evidence=excluded.evidence,
+       completed_by_actor_id=excluded.completed_by_actor_id,completed_at=now(),updated_at=now()
+     returning *`,
+    [
+      input.caseId,plan?.id??null,
+      JSON.stringify({constraints:constraintsResult.rows,handoffs:handoffsResult.rows}),
+      JSON.stringify(input.evidence??{}),input.actorId??null
+    ]
+  );
+  if(plan){
+    await db.query(
+      `update fulfillment_plans
+         set status='cancelled',updated_at=now()
+       where id=$1 and status<>'completed'`,
+      [plan.id]
+    );
+  }
+  return result.rows[0];
+}
+
 export async function markFulfillmentRecoveryRequired(input:{
   caseId:string;
   reason:string;
