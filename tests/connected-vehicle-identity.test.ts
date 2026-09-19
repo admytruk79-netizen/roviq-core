@@ -1,28 +1,5 @@
-import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-
-type HealthEventKeyInput = {
-  sourceId: string;
-  vehicleId: string;
-  sourceEventId?: string;
-  eventType: string;
-  occurredAt: string;
-  dtcCodes: string[];
-  normalizedSignals: Record<string, unknown>;
-};
-
-function healthEventDedupKey(input: HealthEventKeyInput) {
-  if (input.sourceEventId) return `source:${input.sourceEventId}`;
-  return createHash('sha256').update(JSON.stringify({
-    sourceId: input.sourceId,
-    vehicleId: input.vehicleId,
-    eventType: input.eventType,
-    occurredAt: input.occurredAt,
-    dtcCodes: [...input.dtcCodes].sort(),
-    normalizedSignals: input.normalizedSignals
-  })).digest('hex');
-}
-
+import { healthEventDedupKey, type HealthEventKeyInput } from '../src/services/connected-vehicle-identity.js';
 describe('connected vehicle health-event identity', () => {
   const base: HealthEventKeyInput = {
     sourceId: '11111111-1111-4111-8111-111111111111',
