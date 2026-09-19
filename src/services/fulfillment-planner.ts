@@ -7,7 +7,7 @@ import { audit } from './audit.js';
 
 type Queryable = { query:(text:string,params?:unknown[])=>Promise<any> };
 
-function constraintBlockers(rows:any[]){
+export function constraintBlockers(rows:any[]){
   return rows
     .filter((row)=>!['satisfied','waived'].includes(String(row.status)))
     .map((row)=>({
@@ -16,6 +16,10 @@ function constraintBlockers(rows:any[]){
       projectionKey:row.projection_key??null,
       details:row.details??{}
     }));
+}
+
+export function fulfillmentPlanStatus(candidateCount:number,blockers:unknown[]){
+  return candidateCount>0&&blockers.length===0?'feasible' as const:'blocked' as const;
 }
 
 async function loadDependencySnapshot(caseId:string,db:Queryable){
@@ -53,7 +57,7 @@ export async function generateFulfillmentPlan(principal:Principal,caseId:string)
   const blockers=constraintBlockers(snapshot.constraints);
   const routing=await routeMaintenanceDemand(serviceCase.demand_id);
   const ranked=Array.isArray(routing.ranked)?routing.ranked:[];
-  const status=ranked.length>0&&blockers.length===0?'feasible':'blocked';
+  const status=fulfillmentPlanStatus(ranked.length,blockers);
 
   const client=await pool.connect();
   let plan:any;
