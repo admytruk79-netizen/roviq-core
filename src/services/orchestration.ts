@@ -7,7 +7,7 @@ import { publishIntegrationEvent } from './integration-gateway.js';
 import { consumeCaseCapacity, releaseCaseCapacity } from './capacity-reservation.js';
 import { syncOperationalConstraints } from './case-constraint-projection.js';
 import { postCaseRevenueAllocation } from './referral-fee.js';
-import { markServiceProviderWorkCompleted, recordCompletionOutcome } from './network-execution.js';
+import { markServiceProviderWorkCompleted, recordCancellationOutcome, recordCompletionOutcome } from './network-execution.js';
 
 export { appendCaseEvent, getCaseTimeline } from './case-events.js';
 export { createDeadline, raiseException } from './workflow-support.js';
@@ -127,6 +127,7 @@ export async function transitionCase(
       [toState,caseId]
     );
     if(toState==='cancelled'){
+      await recordCancellationOutcome({caseId,actorId:principal.actorId??null,evidence:{source:'case_transition',from:c.state,...metadata}},client);
       await releaseCaseCapacity(caseId,client);
       // Linked Shop OS appointments are cancelled and their resource capacity rebuilt by the
       // trg_shop_os_cancel_case_appointments trigger (migrations/039), which fires synchronously
