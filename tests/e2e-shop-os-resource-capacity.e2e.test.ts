@@ -2,6 +2,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { pool } from '../src/db/pool.js';
 import { updateShopResource } from '../src/services/shop-os-resources.js';
 import { createShopOsAppointment } from '../src/services/shop-os-appointment-create.js';
+import { synchronizeShopOsResourceCapacityState } from '../src/services/shop-os-capacity.js';
 
 const admin={role:'admin'} as const;
 
@@ -72,6 +73,39 @@ describe('Shop OS resource operational state owns canonical capacity',()=>{
       resourceId,startsAt,endsAt,serviceCategory:'repair',status:'held'
     });
     expect(appointment.appointment_status).toBe('held');
+  });
+
+  it('revalidates resource readiness after the scheduling lock during a concurrent offline change',async()=>{
+    const {resourceId}=await setupNativeResource();
+    const blocker=await pool.connect();
+    try{
+      await blocker.query('begin');
+      await blocker.query(`select id from service_resources where id=$1 for update`,[resourceId]);
+      await blocker.query(`update service_resources set operational_state='offline',updated_at=now() where id=$1`,[resourceId]);
+      await synchronizeShopOsResourceCapacityState(resourceId,blocker);
+
+      const startsAt=new Date(Date.now()+90*60_000).toISOString();
+      const endsAt=new Date(Date.now()+135*60_000).toISOString();
+      const booking=createShopOsAppointment(admin,{
+        resourceId,startsAt,endsAt,serviceCategory:'repair',status:'held'
+      });
+
+      await new Promise((resolve)=>setTimeout(resolve,50));
+      await blocker.query('commit');
+
+      await expect(booking).rejects.toMatchObject({message:'shop_os_resource_unavailable',statusCode:409});
+      const active=await pool.query(
+        `select count(*)::int as n from roviq_appointments
+          where resource_id=$1 and appointment_status in ('held','confirmed','in_progress')`,
+        [resourceId]
+      );
+      expect(Number(active.rows[0].n)).toBe(0);
+    }catch(error){
+      await blocker.query('rollback').catch(()=>{});
+      throw error;
+    }finally{
+      blocker.release();
+    }
   });
 
   it('does not erase a pre-existing blocked capacity window when a resource returns online',async()=>{
