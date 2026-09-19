@@ -35,6 +35,9 @@ export async function connectedVehicleRoutes(app:FastifyInstance) {
       capabilityProfile:z.record(z.unknown()).optional(),
       metadata:z.record(z.unknown()).optional()
     }).parse(req.body);
+    if (body.externalDeviceId === undefined) {
+      return reply.code(400).send({error:'external_device_id_required'});
+    }
     const result=await pool.query(
       `insert into connected_sources(source_type,provider_key,organization_id,capability_profile,metadata)
        values($1,$2,$3,$4,$5) returning *`,
@@ -148,7 +151,7 @@ export async function connectedVehicleRoutes(app:FastifyInstance) {
 
     if(body.enrollmentId){
       const enrollment=await pool.query(
-        `select de.*,cvc.status as consent_status,cvc.retention_until
+        `select de.*,cvc.status as consent_status,cvc.retention_until,cvc.scopes
          from device_enrollments de
          join connected_vehicle_consents cvc on cvc.id=de.consent_id
          where de.id=$1 and de.vehicle_id=$2 and de.source_id=$3`,
@@ -159,6 +162,8 @@ export async function connectedVehicleRoutes(app:FastifyInstance) {
       if(row.enrollment_status!=='active') return reply.code(409).send({error:'enrollment_not_active'});
       if(row.consent_status!=='active') return reply.code(409).send({error:'connected_consent_not_active'});
       if(row.retention_until&&new Date(row.retention_until).getTime()<=Date.now()) return reply.code(409).send({error:'connected_consent_expired'});
+      const consentScopes=Array.isArray(row.scopes)?row.scopes:[];
+      if(!consentScopes.includes('vehicle_health')) return reply.code(403).send({error:'vehicle_health_scope_required'});
     }else if(['roviq_reader','oem_telematics','vehicle_api','integration'].includes(source.rows[0].source_type)){
       return reply.code(400).send({error:'enrollment_required'});
     }
