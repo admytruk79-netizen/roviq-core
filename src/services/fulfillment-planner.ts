@@ -36,28 +36,36 @@ async function loadDependencySnapshot(caseId:string,db:Queryable){
 }
 
 export async function generateFulfillmentPlan(principal:Principal,caseId:string){
+  const initial=await pool.query(
+    `select id,demand_id,vehicle_id,state from service_cases where id=$1`,
+    [caseId]
+  );
+  if(!initial.rowCount) throw Object.assign(new Error('case_not_found'),{statusCode:404});
+  const serviceCase=initial.rows[0];
+  if(!serviceCase.demand_id) throw Object.assign(new Error('case_demand_required'),{statusCode:409});
+
+  // Refresh canonical projections and run the existing routing/serviceability
+  // authority before opening the persistence transaction. routeMaintenanceDemand
+  // may itself persist a routing decision/recommendation, so holding the case row
+  // here would create a cross-connection lock cycle.
+  await syncOperationalConstraints(caseId,pool);
+  const snapshot=await loadDependencySnapshot(caseId,pool);
+  const blockers=constraintBlockers(snapshot.constraints);
+  const routing=await routeMaintenanceDemand(serviceCase.demand_id);
+  const ranked=Array.isArray(routing.ranked)?routing.ranked:[];
+  const status=ranked.length>0&&blockers.length===0?'feasible':'blocked';
+
   const client=await pool.connect();
   let plan:any;
-  let candidates:any[]=[];
+  const candidates:any[]=[];
   try{
     await client.query('begin');
-    const caseResult=await client.query(
-      `select id,demand_id,vehicle_id,state from service_cases where id=$1 for update`,
+    const current=await client.query(
+      `select id,demand_id from service_cases where id=$1 for update`,
       [caseId]
     );
-    if(!caseResult.rowCount) throw Object.assign(new Error('case_not_found'),{statusCode:404});
-    const serviceCase=caseResult.rows[0];
-    if(!serviceCase.demand_id) throw Object.assign(new Error('case_demand_required'),{statusCode:409});
-
-    await syncOperationalConstraints(caseId,client);
-    const snapshot=await loadDependencySnapshot(caseId,client);
-    const blockers=constraintBlockers(snapshot.constraints);
-
-    // Routing is already serviceability-gated. Reuse that authority rather than
-    // inventing a second fulfillment-specific ranking algorithm.
-    const routing=await routeMaintenanceDemand(serviceCase.demand_id);
-    const ranked=Array.isArray(routing.ranked)?routing.ranked:[];
-    const status=ranked.length>0&&blockers.length===0?'feasible':'blocked';
+    if(!current.rowCount) throw Object.assign(new Error('case_not_found'),{statusCode:404});
+    if(current.rows[0].demand_id!==serviceCase.demand_id) throw Object.assign(new Error('case_demand_changed'),{statusCode:409});
 
     const versionResult=await client.query(
       `select coalesce(max(version),0)+1 as next_version from fulfillment_plans where service_case_id=$1`,
@@ -98,24 +106,24 @@ export async function generateFulfillmentPlan(principal:Principal,caseId:string)
     }
 
     await client.query('commit');
-
-    await appendCaseEvent(caseId,'FULFILLMENT_PLAN_GENERATED',principal,{
-      fulfillmentPlanId:plan.id,
-      version:plan.version,
-      status:plan.status,
-      candidateCount:candidates.length,
-      blockerCount:blockers.length
-    });
-    await audit(principal,'generate_fulfillment_plan','fulfillment_plan',plan.id,'network_fulfillment_plan_generated',{
-      caseId,version:plan.version,status:plan.status,candidateCount:candidates.length,blockerCount:blockers.length
-    });
-    return {plan,candidates};
   }catch(error){
     await client.query('rollback').catch(()=>{});
     throw error;
   }finally{
     client.release();
   }
+
+  await appendCaseEvent(caseId,'FULFILLMENT_PLAN_GENERATED',principal,{
+    fulfillmentPlanId:plan.id,
+    version:plan.version,
+    status:plan.status,
+    candidateCount:candidates.length,
+    blockerCount:blockers.length
+  });
+  await audit(principal,'generate_fulfillment_plan','fulfillment_plan',plan.id,'network_fulfillment_plan_generated',{
+    caseId,version:plan.version,status:plan.status,candidateCount:candidates.length,blockerCount:blockers.length
+  });
+  return {plan,candidates};
 }
 
 export async function getLatestFulfillmentPlan(caseId:string){
