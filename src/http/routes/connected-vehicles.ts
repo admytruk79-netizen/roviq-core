@@ -70,6 +70,7 @@ export async function connectedVehicleRoutes(app:FastifyInstance) {
       retentionDays:z.number().int().positive().max(3650).optional(),
       metadata:z.record(z.unknown()).optional()
     }).parse(req.body);
+    if(body.externalDeviceId===undefined) return reply.code(400).send({error:'external_device_id_required'});
     const vehicle=await loadOwnedVehicle(req.principal,body.vehicleId);
     const source=await pool.query(
       `select id,status,source_type from connected_sources where id=$1`,
