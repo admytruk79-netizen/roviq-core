@@ -303,9 +303,10 @@ export async function upsertNetworkHandoff(input:{
 }
 
 export async function listNetworkExecutionForPlan(planId:string){
-  const [acceptances,handoffs]=await Promise.all([
+  const [acceptances,handoffs,outcome]=await Promise.all([
     pool.query(`select * from participant_acceptances where fulfillment_plan_id=$1 order by decided_at asc`,[planId]),
-    pool.query(`select * from network_handoffs where fulfillment_plan_id=$1 order by created_at asc,id asc`,[planId])
+    pool.query(`select * from network_handoffs where fulfillment_plan_id=$1 order by created_at asc,id asc`,[planId]),
+    pool.query(`select * from completion_outcomes where fulfillment_plan_id=$1 order by completed_at desc limit 1`,[planId])
   ]);
-  return {acceptances:acceptances.rows,handoffs:handoffs.rows};
+  return {acceptances:acceptances.rows,handoffs:handoffs.rows,completionOutcome:outcome.rows[0]??null};
 }
