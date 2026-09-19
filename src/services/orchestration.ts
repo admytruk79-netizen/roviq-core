@@ -7,6 +7,7 @@ import { publishIntegrationEvent } from './integration-gateway.js';
 import { consumeCaseCapacity, releaseCaseCapacity } from './capacity-reservation.js';
 import { syncOperationalConstraints } from './case-constraint-projection.js';
 import { postCaseRevenueAllocation } from './referral-fee.js';
+import { markServiceProviderWorkCompleted, recordCancellationOutcome, recordCompletionOutcome } from './network-execution.js';
 
 export { appendCaseEvent, getCaseTimeline } from './case-events.js';
 export { createDeadline, raiseException } from './workflow-support.js';
@@ -109,12 +110,24 @@ export async function transitionCase(
       const transportOwnedStart=authority==='transport_dispatch'&&c.state==='tow_pending'&&toState==='tow_in_progress';
       if (!transportOwnedStart&&!rule.rows[0].allowed_roles.includes(principal.role)) throw new Error('transition_forbidden');
     }
+    if(toState==='payment_pending'){
+      await markServiceProviderWorkCompleted(caseId,client);
+    }
+    if(toState==='completed'){
+      await syncOperationalConstraints(caseId,client);
+      await recordCompletionOutcome({
+        caseId,
+        actorId:principal.actorId??null,
+        evidence:{source:'case_transition',from:c.state,...metadata}
+      },client);
+    }
     const terminalSql = toState === 'completed' ? ', completed_at=now()' : toState === 'cancelled' ? ', cancelled_at=now()' : '';
     const updated = await client.query(
       `update service_cases set state=$1, version=version+1, updated_at=now() ${terminalSql} where id=$2 returning *`,
       [toState,caseId]
     );
     if(toState==='cancelled'){
+      await recordCancellationOutcome({caseId,actorId:principal.actorId??null,evidence:{source:'case_transition',from:c.state,...metadata}},client);
       await releaseCaseCapacity(caseId,client);
       // Linked Shop OS appointments are cancelled and their resource capacity rebuilt by the
       // trg_shop_os_cancel_case_appointments trigger (migrations/039), which fires synchronously

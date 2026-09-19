@@ -31,6 +31,7 @@ import { shopOsFloorRoutes } from './routes/shop-os-floor.js';
 import { localRoutes } from './routes/local.js';
 import { triageEvaluationRoutes } from './routes/triage-evaluation.js';
 import { connectedVehicleRoutes } from './routes/connected-vehicles.js';
+import { networkOrchestrationRoutes } from './routes/network-orchestration.js';
 
 type RoutePlugin = FastifyPluginAsync | ((app: FastifyInstance) => Promise<void>);
 
@@ -42,7 +43,7 @@ type RouteModule = {
 const routeModules: RouteModule[] = [
   { name: 'platform', plugins: [authRoutes, coreRoutes, meRoutes] },
   { name: 'case-lifecycle', plugins: [demandRoutes, caseRoutes, exceptionRoutes, servicePlanRoutes, quoteRoutes, caseAddonItemRoutes] },
-  { name: 'coordination', plugins: [routingRoutes, triageRoutes, triageEvaluationRoutes, coherenceRoutes, connectedVehicleRoutes] },
+  { name: 'coordination', plugins: [routingRoutes, triageRoutes, triageEvaluationRoutes, coherenceRoutes, connectedVehicleRoutes, networkOrchestrationRoutes] },
   { name: 'service-operations', plugins: [diagnosticRoutes, fieldServiceRoutes, transportRoutes, mobilityRoutes, partsRoutes] },
   { name: 'shop-os', plugins: [shopOsRoutes, shopOsDeferredAppointmentChoiceRoutes, shopOsFloorRoutes] },
   { name: 'financial-and-communications', plugins: [paymentWebhookRoutes, paymentRoutes, commerceRoutes, notificationRoutes] },

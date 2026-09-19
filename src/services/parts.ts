@@ -7,6 +7,7 @@ import { queueNotification, setCustomerSnapshot } from './operations.js';
 import { assertCaseAccess } from './case-access.js';
 import { rankCoordinationCandidates, type CoordinationCandidate } from './coordination-engine.js';
 import { loadActiveRoutingPolicy } from './routing-repository.js';
+import { handoffStatusForParts, upsertNetworkHandoff } from './network-execution.js';
 
 type PartItemInput = { sku:string; partNumber?:string; description?:string; quantity:number; attributes?:Record<string,unknown> };
 
@@ -227,6 +228,7 @@ export async function reserveOrderInventory(principal: Principal, orderId:string
       );
     }
     await client.query(`update parts_orders set status='reserved',updated_at=now() where id=$1`,[orderId]);
+    await upsertNetworkHandoff({caseId:order.case_id,handoffType:'parts',participantActorId:order.supplier_actor_id,referenceType:'parts_order',referenceId:orderId,status:'in_progress',metadata:{partsStatus:'reserved'}},client);
     await client.query('commit');
     await appendCaseEvent(order.case_id,'PARTS_RESERVED',principal,{ orderId });
     await audit(principal,'reserve_parts','parts_order',orderId,'inventory_reserved');
@@ -275,6 +277,7 @@ export async function markPartsOrderStatus(principal: Principal, orderId:string,
        where id=$4 returning *`,
       [status,metadata.trackingReference ?? null,metadata.externalOrderReference ?? null,orderId]
     );
+    await upsertNetworkHandoff({caseId:order.case_id,handoffType:'parts',participantActorId:order.supplier_actor_id,referenceType:'parts_order',referenceId:orderId,status:handoffStatusForParts(status),metadata},client);
     await client.query('commit');
     await appendCaseEvent(order.case_id,`PARTS_${status.toUpperCase()}`,principal,{ orderId,...metadata });
     if (status === 'delivered') {

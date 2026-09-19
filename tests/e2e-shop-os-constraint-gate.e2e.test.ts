@@ -4,7 +4,7 @@ import { createShopOsAppointment } from '../src/services/shop-os-appointment-cre
 
 const admin={role:'admin'} as const;
 
-type ConstraintType='customer_time'|'resource'|'capability'|'parts'|'mobility'|'approval'|'transport'|'other';
+type ConstraintType='customer_time'|'resource'|'capability'|'parts'|'mobility'|'approval'|'authorization'|'transport'|'other';
 type ConstraintStatus='required'|'satisfied'|'waived'|'blocked'|'unknown';
 
 async function setupNativeShop(){
@@ -60,6 +60,8 @@ describe('Shop OS fail-closed operational constraint gate',()=>{
     ['transport','blocked'],
     ['approval','required'],
     ['approval','blocked'],
+    ['authorization','required'],
+    ['authorization','blocked'],
     ['provider','required'],
     ['capability','required']
   ] as const)('rejects confirmed booking when %s is %s',async(type,status)=>{
