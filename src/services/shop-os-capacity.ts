@@ -166,3 +166,77 @@ export async function rebuildShopOsCapacity(resourceId:string,db:Queryable){
       from recalculated r
      where cw.id=r.id`,[resourceId]);
 }
+
+
+export async function synchronizeShopOsResourceCapacityState(resourceId:string,db:Queryable){
+  const resourceResult=await db.query(
+    `select id,active,operational_state
+       from service_resources
+      where id=$1
+      for update`,
+    [resourceId]
+  );
+  if(!resourceResult.rowCount) throw httpError('shop_os_resource_not_found',404);
+  const resource=resourceResult.rows[0];
+  const unavailable=resource.active!==true||['blocked','offline'].includes(String(resource.operational_state));
+
+  if(unavailable){
+    await db.query(
+      `update capacity_windows cw
+          set constraint_summary=
+                case
+                  when coalesce(cw.constraint_summary,'{}'::jsonb) ? 'resourceStateBlock'
+                    then jsonb_set(
+                      coalesce(cw.constraint_summary,'{}'::jsonb),
+                      '{resourceStateBlock,operationalState}',
+                      to_jsonb($2::text),
+                      true
+                    )
+                  else jsonb_set(
+                    coalesce(cw.constraint_summary,'{}'::jsonb),
+                    '{resourceStateBlock}',
+                    jsonb_build_object(
+                      'operationalState',$2::text,
+                      'active',$3::boolean,
+                      'previousCapacityState',cw.capacity_state,
+                      'previousCapacityUnits',cw.capacity_units
+                    ),
+                    true
+                  )
+                end,
+              capacity_state='blocked',
+              capacity_units=0,
+              updated_at=now()
+         from partner_system_connections c
+        where cw.resource_id=$1
+          and c.id=cw.source_connection_id
+          and c.mode='roviq_native'`,
+      [resourceId,String(resource.operational_state),Boolean(resource.active)]
+    );
+    return;
+  }
+
+  await db.query(
+    `update capacity_windows cw
+        set capacity_state=
+              case
+                when coalesce(cw.constraint_summary,'{}'::jsonb) ? 'resourceStateBlock'
+                  then coalesce(cw.constraint_summary#>>'{resourceStateBlock,previousCapacityState}',cw.capacity_state)
+                else cw.capacity_state
+              end,
+            capacity_units=
+              case
+                when coalesce(cw.constraint_summary,'{}'::jsonb) ? 'resourceStateBlock'
+                  then coalesce((cw.constraint_summary#>>'{resourceStateBlock,previousCapacityUnits}')::int,cw.capacity_units)
+                else cw.capacity_units
+              end,
+            constraint_summary=coalesce(cw.constraint_summary,'{}'::jsonb)-'resourceStateBlock',
+            updated_at=now()
+       from partner_system_connections c
+      where cw.resource_id=$1
+        and c.id=cw.source_connection_id
+        and c.mode='roviq_native'`,
+    [resourceId]
+  );
+  await rebuildShopOsCapacity(resourceId,db);
+}
