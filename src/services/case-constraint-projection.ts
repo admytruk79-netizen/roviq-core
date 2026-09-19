@@ -2,7 +2,7 @@ import type { PoolClient } from 'pg';
 
 type Queryable = Pick<PoolClient,'query'>;
 type ConstraintStatus = 'required'|'satisfied'|'waived'|'blocked'|'unknown';
-type ProjectionType = 'parts'|'mobility'|'customer_time'|'approval'|'transport';
+type ProjectionType = 'parts'|'mobility'|'customer_time'|'approval'|'authorization'|'transport';
 
 /**
  * Projects authoritative operating-layer state into case_constraints.
@@ -14,6 +14,7 @@ export async function syncOperationalConstraints(caseId:string,db:Queryable):Pro
   await syncMobilityConstraint(caseId,db);
   await syncCustomerTimeConstraint(caseId,db);
   await syncApprovalConstraint(caseId,db);
+  await syncRepairAuthorizationConstraint(caseId,db);
   await syncTransportConstraint(caseId,db);
 }
 
@@ -31,6 +32,10 @@ export async function syncCustomerTimeOperationalConstraint(caseId:string,db:Que
 
 export async function syncApprovalOperationalConstraint(caseId:string,db:Queryable):Promise<void>{
   await syncApprovalConstraint(caseId,db);
+}
+
+export async function syncRepairAuthorizationOperationalConstraint(caseId:string,db:Queryable):Promise<void>{
+  await syncRepairAuthorizationConstraint(caseId,db);
 }
 
 export async function syncTransportOperationalConstraint(caseId:string,db:Queryable):Promise<void>{
@@ -76,6 +81,16 @@ export function deriveApprovalConstraint(states:string[]):{status:ConstraintStat
   if(states.every((state)=>state==='approved')) return {status:'satisfied',states};
   if(states.some((state)=>state==='pending')) return {status:'required',states};
   return {status:'unknown',states};
+}
+
+export function deriveRepairAuthorizationConstraint(statuses:string[]):{status:ConstraintStatus;counts:Record<string,number>}{
+  const counts:Record<string,number>={};
+  for(const status of statuses) counts[status]=(counts[status]??0)+1;
+  if(!statuses.length) return {status:'satisfied',counts};
+  if(statuses.some((status)=>status==='blocked')) return {status:'blocked',counts};
+  if(statuses.some((status)=>status==='required')) return {status:'required',counts};
+  if(statuses.every((status)=>['satisfied','waived','not_applicable'].includes(status))) return {status:'satisfied',counts};
+  return {status:'unknown',counts};
 }
 
 export function deriveTransportConstraint(
@@ -176,6 +191,33 @@ async function syncApprovalConstraint(caseId:string,db:Queryable){
     states:derived.states,
     approvalIds:result.rows.map((row:any)=>row.id),
     currentRevision:result.rows.find((row:any)=>row.current_revision!=null)?.current_revision ?? null
+  },db);
+}
+
+async function syncRepairAuthorizationConstraint(caseId:string,db:Queryable){
+  const result=await db.query(
+    `select id,warranty_coverage_id,constraint_type,status,details,source
+       from repair_authorization_constraints
+      where service_case_id=$1
+      order by created_at asc,id asc`,
+    [caseId]
+  );
+  if(!result.rowCount){
+    await deleteProjection(caseId,'repair-authorization',db);
+    return;
+  }
+  const statuses=result.rows.map((row:any)=>String(row.status));
+  const derived=deriveRepairAuthorizationConstraint(statuses);
+  await upsertProjection(caseId,'authorization','repair-authorization',derived.status,{
+    counts:derived.counts,
+    constraints:result.rows.map((row:any)=>({
+      id:row.id,
+      warrantyCoverageId:row.warranty_coverage_id??null,
+      type:row.constraint_type,
+      status:row.status,
+      source:row.source,
+      details:row.details??{}
+    }))
   },db);
 }
 
