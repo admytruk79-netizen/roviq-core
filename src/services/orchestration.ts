@@ -7,6 +7,7 @@ import { publishIntegrationEvent } from './integration-gateway.js';
 import { consumeCaseCapacity, releaseCaseCapacity } from './capacity-reservation.js';
 import { syncOperationalConstraints } from './case-constraint-projection.js';
 import { postCaseRevenueAllocation } from './referral-fee.js';
+import { markServiceProviderWorkCompleted, recordCompletionOutcome } from './network-execution.js';
 
 export { appendCaseEvent, getCaseTimeline } from './case-events.js';
 export { createDeadline, raiseException } from './workflow-support.js';
@@ -108,6 +109,17 @@ export async function transitionCase(
       if (!rule.rowCount) throw new Error('invalid_case_transition');
       const transportOwnedStart=authority==='transport_dispatch'&&c.state==='tow_pending'&&toState==='tow_in_progress';
       if (!transportOwnedStart&&!rule.rows[0].allowed_roles.includes(principal.role)) throw new Error('transition_forbidden');
+    }
+    if(toState==='payment_pending'){
+      await markServiceProviderWorkCompleted(caseId,client);
+    }
+    if(toState==='completed'){
+      await syncOperationalConstraints(caseId,client);
+      await recordCompletionOutcome({
+        caseId,
+        actorId:principal.actorId??null,
+        evidence:{source:'case_transition',from:c.state,...metadata}
+      },client);
     }
     const terminalSql = toState === 'completed' ? ', completed_at=now()' : toState === 'cancelled' ? ', cancelled_at=now()' : '';
     const updated = await client.query(
