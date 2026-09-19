@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  completionBlockers,
   handoffStatusForMobility,
   handoffStatusForParts,
   handoffStatusForTransport
@@ -31,5 +32,37 @@ describe('network execution handoff status mapping',()=>{
     expect(handoffStatusForParts('shipped')).toBe('in_progress');
     expect(handoffStatusForParts('delivered')).toBe('completed');
     expect(handoffStatusForParts('cancelled')).toBe('cancelled');
+  });
+  it('blocks completion on unresolved constraints and non-terminal handoffs',()=>{
+    const blockers=completionBlockers({
+      constraints:[
+        {constraint_type:'parts',status:'satisfied',projection_key:'parts-readiness'},
+        {constraint_type:'authorization',status:'required',projection_key:'repair-authorization'}
+      ],
+      handoffs:[
+        {handoff_type:'service_provider',status:'completed',reference_type:'match_offer',reference_id:'offer-1'},
+        {handoff_type:'transport',status:'in_progress',reference_type:'transport_dispatch',reference_id:'dispatch-1'},
+        {handoff_type:'mobility',status:'cancelled',reference_type:'mobility_allocation',reference_id:'mobility-1'}
+      ]
+    });
+    expect(blockers).toHaveLength(2);
+    expect(blockers.map((blocker)=>[blocker.kind,blocker.type,blocker.status])).toEqual([
+      ['constraint','authorization','required'],
+      ['handoff','transport','in_progress']
+    ]);
+  });
+
+  it('treats completed or explicitly cancelled handoffs as terminal when canonical constraints are clear',()=>{
+    const blockers=completionBlockers({
+      constraints:[
+        {constraint_type:'parts',status:'satisfied'},
+        {constraint_type:'mobility',status:'waived'}
+      ],
+      handoffs:[
+        {handoff_type:'parts',status:'completed'},
+        {handoff_type:'mobility',status:'cancelled'}
+      ]
+    });
+    expect(blockers).toEqual([]);
   });
 });
