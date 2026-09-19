@@ -7,6 +7,7 @@ import { publishIntegrationEvent } from '../../services/integration-gateway.js';
 import { confirmCaseCapacity, releaseCaseCapacity } from '../../services/capacity-reservation.js';
 import { createShopWaitlistEntry } from '../../services/shop-os-waitlist.js';
 import { requireRole } from '../middleware/principal.js';
+import { syncFulfillmentParticipantDecision, upsertNetworkHandoff } from '../../services/network-execution.js';
 
 const capacityBody = z.object({
   capacityType: z.string().min(1), quantity: z.number().nonnegative(), startAt: z.string().datetime(), endAt: z.string().datetime(), source: z.string().default('partner_declared')
@@ -165,6 +166,8 @@ export async function partnerRoutes(app: FastifyInstance) {
               JSON.stringify({offerId:id,actorId:req.principal.actorId,from:'provider_pending'}),
               JSON.stringify({from:'provider_pending',to:'provider_selection',declinedOfferId:id,declinedActorId:req.principal.actorId})
             ]);
+            await syncFulfillmentParticipantDecision({caseId,actorId:req.principal.actorId!,decision:'declined',sourceType:'match_offer',sourceReferenceId:id},client);
+            await upsertNetworkHandoff({caseId,handoffType:'service_provider',participantActorId:req.principal.actorId,referenceType:'match_offer',referenceId:id,status:'declined'},client);
           }else{
             await client.query(`insert into case_exceptions(case_id,exception_code,severity,summary,metadata)
               values($1,'OFFER_DECLINED','warning',$2,$3)`,[
@@ -266,6 +269,8 @@ export async function partnerRoutes(app: FastifyInstance) {
           actorId:req.principal.actorId ?? undefined,
           payload:integrationPayload
         },client);
+        await syncFulfillmentParticipantDecision({caseId,actorId:req.principal.actorId!,decision:'accepted',sourceType:'match_offer',sourceReferenceId:id},client);
+        await upsertNetworkHandoff({caseId,handoffType:'service_provider',participantActorId:req.principal.actorId,referenceType:'match_offer',referenceId:id,status:'accepted'},client);
         await client.query('commit');
         committedCaseId=caseId;
       }catch(error){
