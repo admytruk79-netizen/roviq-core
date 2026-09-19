@@ -4,6 +4,7 @@ import { appendCaseEvent, createDeadline } from './orchestration.js';
 import { audit } from './audit.js';
 import { queueNotification, setCustomerSnapshot } from './operations.js';
 import { syncMobilityOperationalConstraint } from './case-constraint-projection.js';
+import { handoffStatusForMobility, upsertNetworkHandoff } from './network-execution.js';
 
 async function lockServiceCase(caseId:string,client:{query:(text:string,params?:unknown[])=>Promise<any>}){
   const result=await client.query('select id from service_cases where id=$1 for update',[caseId]);
@@ -72,6 +73,7 @@ export async function assignMobility(principal: Principal, allocationId:string, 
       [input.providerActorId,input.resourceId ?? null,input.returnDueAt ?? null,allocationId]
     );
     await syncMobilityOperationalConstraint(caseId,client);
+    await upsertNetworkHandoff({caseId,handoffType:'mobility',participantActorId:input.providerActorId,referenceType:'mobility_allocation',referenceId:allocationId,status:'assigned',metadata:{resourceId:input.resourceId??null}},client);
     await client.query('commit');
     const row = updated.rows[0];
     await appendCaseEvent(row.case_id,'MOBILITY_ASSIGNED',principal,{ allocationId, providerActorId:input.providerActorId, resourceId:input.resourceId ?? null });
@@ -112,6 +114,7 @@ export async function updateMobilityState(principal: Principal, allocationId:str
       await client.query("update mobility_resources set status='available',updated_at=now() where id=$1",[current.resource_id]);
     }
     await syncMobilityOperationalConstraint(caseId,client);
+    await upsertNetworkHandoff({caseId,handoffType:'mobility',participantActorId:current.provider_actor_id,referenceType:'mobility_allocation',referenceId:allocationId,status:handoffStatusForMobility(state)},client);
     await client.query('commit');
     const row = updated.rows[0];
     await appendCaseEvent(row.case_id,`MOBILITY_${state.toUpperCase()}`,principal,{ allocationId });
