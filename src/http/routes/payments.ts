@@ -6,6 +6,7 @@ import { requireRole } from '../middleware/principal.js';
 import { createPaymentIntent, createPayout, refundPayment, updatePaymentState, updatePayoutState } from '../../services/payments.js';
 import { getFinancialReconciliation } from '../../services/financial-reconciliation.js';
 import { loadCaseForPrincipal } from '../../services/case-access.js';
+import { processStripeWebhook } from '../../services/stripe-webhooks.js';
 
 function errorMessage(error:unknown,fallback:string){
   return error instanceof Error?error.message:fallback;
@@ -42,6 +43,24 @@ async function requireAdminFinancialCaseAccess(principal:Principal,caseId:string
 }
 
 export async function paymentRoutes(app: FastifyInstance) {
+  await app.register(async function stripeWebhookRoutes(webhookApp){
+    webhookApp.removeContentTypeParser('application/json');
+    webhookApp.addContentTypeParser('application/json',{parseAs:'buffer'},(_req,body,done)=>done(null,body));
+    webhookApp.post('/api/webhooks/stripe',async(req,reply)=>{
+      const signature=typeof req.headers['stripe-signature']==='string'?req.headers['stripe-signature']:undefined;
+      try{
+        const result=await processStripeWebhook(req.body as Buffer,signature);
+        return reply.code(200).send({received:true,...result});
+      }catch(error){
+        const message=errorMessage(error,'stripe_webhook_error');
+        if(['stripe_signature_required','stripe_signature_invalid','stripe_signature_expired','stripe_payload_invalid'].includes(message)){
+          return reply.code(400).send({error:message});
+        }
+        if(message==='stripe_webhook_not_configured') return reply.code(503).send({error:message});
+        throw error;
+      }
+    });
+  });
   app.post('/api/admin/payments', { preHandler: requireRole('admin') }, async (req, reply) => {
     const body = z.object({ caseId:z.string().uuid(), amount:z.number().nonnegative(), currency:z.string().length(3).default('USD'), description:z.string().optional(), provider:z.string().default('manual'), providerIntentId:z.string().optional(), metadata:z.record(z.unknown()).optional() }).parse(req.body);
     try { return reply.code(201).send({ payment:await createPaymentIntent(req.principal,body) }); }
