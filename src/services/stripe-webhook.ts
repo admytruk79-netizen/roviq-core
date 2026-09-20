@@ -11,6 +11,9 @@ type StripeObject={
   payment_intent?:string|null;
   currency?:string;
   metadata?:Record<string,string>;
+  status?:string;
+  reason?:string;
+  evidence_details?:{due_by?:number|null};
 };
 type StripeEvent={id:string;type:string;data:{object:StripeObject}};
 
@@ -56,12 +59,12 @@ export function verifyStripeWebhook(rawBody:string,signatureHeader:string,now=Da
   return event;
 }
 
-type LocalPayment={id:string;currency:string};
+type LocalPayment={id:string;currency:string;caseId:string};
 
 async function localPayment(stripePaymentIntentId:string):Promise<LocalPayment>{
-  const result=await pool.query(`select id,currency from payment_intents where provider='stripe' and provider_intent_id=$1`,[stripePaymentIntentId]);
+  const result=await pool.query(`select id,currency,case_id from payment_intents where provider='stripe' and provider_intent_id=$1`,[stripePaymentIntentId]);
   if(!result.rowCount) throw new Error('payment_not_found');
-  return {id:String(result.rows[0].id),currency:String(result.rows[0].currency).toUpperCase()};
+  return {id:String(result.rows[0].id),currency:String(result.rows[0].currency).toUpperCase(),caseId:String(result.rows[0].case_id)};
 }
 
 function currencyExponent(currency:string){
@@ -84,22 +87,105 @@ function requireMatchingCurrency(localCurrency:string,stripeCurrency:string|unde
   return normalized;
 }
 
+
+async function beginProviderEvent(event:StripeEvent){
+  const inserted=await pool.query(
+    `insert into payment_provider_events(provider,provider_event_id,event_type,payload)
+     values('stripe',$1,$2,$3)
+     on conflict(provider,provider_event_id) do nothing
+     returning id`,
+    [event.id,event.type,JSON.stringify(event)]
+  );
+  return Boolean(inserted.rowCount);
+}
+
+async function finishProviderEvent(eventId:string,state:'processed'|'ignored'|'failed',paymentIntentId:string|null,errorMessage:string|null=null){
+  await pool.query(
+    `update payment_provider_events
+        set processing_state=$2,
+            related_payment_intent_id=coalesce($3,related_payment_intent_id),
+            error_message=$4,
+            processed_at=now()
+      where provider='stripe' and provider_event_id=$1`,
+    [eventId,state,paymentIntentId,errorMessage]
+  );
+}
+
+function disputeState(status:string|undefined){
+  if(status==='won'||status==='lost'||status==='under_review'||status==='warning_closed') return status;
+  if(status==='warning_under_review') return 'under_review';
+  if(status==='warning_needs_response'||status==='needs_response') return 'needs_response';
+  if(status==='warning_won') return 'won';
+  if(status==='warning_lost') return 'lost';
+  return 'needs_response';
+}
+
+async function applyStripeDispute(event:StripeEvent,object:StripeObject){
+  if(!object.id||typeof object.payment_intent!=='string'||object.amount===undefined) throw new Error('stripe_webhook_payload_invalid');
+  const payment=await localPayment(object.payment_intent);
+  const currency=requireMatchingCurrency(payment.currency,object.currency);
+  const amount=stripeMinorToMajor(currency,object.amount)!;
+  const state=disputeState(object.status);
+  const dueAt=object.evidence_details?.due_by
+    ? new Date(object.evidence_details.due_by*1000).toISOString()
+    : null;
+  const dispute=await pool.query(
+    `insert into payment_disputes(
+       payment_intent_id,provider,provider_dispute_id,amount,currency,reason,state,evidence_due_at,metadata,closed_at
+     ) values($1,'stripe',$2,$3,$4,$5,$6,$7,$8,case when $6 in ('won','lost','warning_closed') then now() else null end)
+     on conflict(provider,provider_dispute_id)
+     do update set state=excluded.state,reason=excluded.reason,evidence_due_at=excluded.evidence_due_at,
+       metadata=payment_disputes.metadata||excluded.metadata,
+       closed_at=case when excluded.state in ('won','lost','warning_closed') then coalesce(payment_disputes.closed_at,now()) else null end,
+       updated_at=now()
+     returning *`,
+    [payment.id,object.id,amount,currency,object.reason??null,state,dueAt,JSON.stringify({stripeEventId:event.id,stripeEventType:event.type})]
+  );
+
+  if(state==='lost'){
+    await pool.query(
+      `insert into ledger_entries(case_id,payment_intent_id,entry_type,account_code,amount,currency,state,external_reference,metadata)
+       select $1,$2,'payment_dispute_loss','chargeback_loss',$3,$4,'posted',$5,$6
+       where not exists(
+         select 1 from ledger_entries
+          where payment_intent_id=$2 and entry_type='payment_dispute_loss' and external_reference=$5
+       )`,
+      [payment.caseId,payment.id,-Math.abs(amount),currency,object.id,JSON.stringify({provider:'stripe',reason:object.reason??null})]
+    );
+  }
+
+  await pool.query(
+    `insert into events(aggregate_type,aggregate_id,event_type,actor_role,payload)
+     values('service_case',$1,$2,'admin',$3)`,
+    [
+      payment.caseId,
+      state==='lost'?'PAYMENT_DISPUTE_LOST':state==='won'||state==='warning_closed'?'PAYMENT_DISPUTE_CLOSED':'PAYMENT_DISPUTE_UPDATED',
+      JSON.stringify({paymentIntentId:payment.id,providerDisputeId:object.id,amount,currency,state,reason:object.reason??null,evidenceDueAt:dueAt})
+    ]
+  );
+  return dispute.rows[0];
+}
+
 export async function applyStripeWebhook(event:StripeEvent){
   const principal:Principal={role:'admin'};
   const object=event.data.object;
+  if(!await beginProviderEvent(event)) return null;
+  let relatedPaymentId:string|null=null;
 
+  try{
   if(event.type.startsWith('payment_intent.')){
-    if(!SUPPORTED_PAYMENT_INTENT_EVENTS.has(event.type)) return null;
+    if(!SUPPORTED_PAYMENT_INTENT_EVENTS.has(event.type)){await finishProviderEvent(event.id,'ignored',null,'event_type_not_actionable');return null;}
     if(!object.id) throw new Error('stripe_webhook_payload_invalid');
     const payment=await localPayment(object.id);
+    relatedPaymentId=payment.id;
     const currency=requireMatchingCurrency(payment.currency,object.currency);
     const payload={provider:'stripe',stripeEventType:event.type,stripeObjectId:object.id};
     switch(event.type){
-      case 'payment_intent.requires_action': return updatePaymentState(principal,payment.id,'requires_action',{amount:stripeMinorToMajor(currency,object.amount),providerEventId:event.id,payload});
-      case 'payment_intent.amount_capturable_updated': return updatePaymentState(principal,payment.id,'authorized',{amount:stripeMinorToMajor(currency,object.amount),providerEventId:event.id,payload});
-      case 'payment_intent.succeeded': return updatePaymentState(principal,payment.id,'captured',{amount:stripeMinorToMajor(currency,object.amount_received??object.amount),providerEventId:event.id,payload});
-      case 'payment_intent.canceled': return updatePaymentState(principal,payment.id,'cancelled',{amount:stripeMinorToMajor(currency,object.amount),providerEventId:event.id,payload});
-      case 'payment_intent.payment_failed': return updatePaymentState(principal,payment.id,'failed',{amount:stripeMinorToMajor(currency,object.amount),providerEventId:event.id,payload});
+      case 'payment_intent.requires_action': {const result=await updatePaymentState(principal,payment.id,'requires_action',{amount:stripeMinorToMajor(currency,object.amount),providerEventId:event.id,payload});await finishProviderEvent(event.id,'processed',payment.id);return result;}
+      case 'payment_intent.amount_capturable_updated': {const result=await updatePaymentState(principal,payment.id,'authorized',{amount:stripeMinorToMajor(currency,object.amount),providerEventId:event.id,payload});await finishProviderEvent(event.id,'processed',payment.id);return result;}
+      case 'payment_intent.succeeded': {const result=await updatePaymentState(principal,payment.id,'captured',{amount:stripeMinorToMajor(currency,object.amount_received??object.amount),providerEventId:event.id,payload});await finishProviderEvent(event.id,'processed',payment.id);return result;}
+      case 'payment_intent.canceled': {const result=await updatePaymentState(principal,payment.id,'cancelled',{amount:stripeMinorToMajor(currency,object.amount),providerEventId:event.id,payload});await finishProviderEvent(event.id,'processed',payment.id);return result;}
+      case 'payment_intent.payment_failed': {const result=await updatePaymentState(principal,payment.id,'failed',{amount:stripeMinorToMajor(currency,object.amount),providerEventId:event.id,payload});await finishProviderEvent(event.id,'processed',payment.id);return result;}
       default:return null;
     }
   }
@@ -108,8 +194,22 @@ export async function applyStripeWebhook(event:StripeEvent){
     const stripeIntent=object.payment_intent;
     if(typeof stripeIntent!=='string'||object.amount===undefined) throw new Error('stripe_webhook_payload_invalid');
     const payment=await localPayment(stripeIntent);
+    relatedPaymentId=payment.id;
     const currency=requireMatchingCurrency(payment.currency,object.currency);
-    return refundPayment(principal,payment.id,stripeMinorToMajor(currency,object.amount)!,event.id,{provider:'stripe',stripeEventType:event.type,stripeObjectId:object.id});
+    const result=await refundPayment(principal,payment.id,stripeMinorToMajor(currency,object.amount)!,event.id,{provider:'stripe',stripeEventType:event.type,stripeObjectId:object.id});
+    await finishProviderEvent(event.id,'processed',payment.id);
+    return result;
   }
+  if(['charge.dispute.created','charge.dispute.updated','charge.dispute.closed'].includes(event.type)){
+    const dispute=await applyStripeDispute(event,object);
+    relatedPaymentId=dispute.payment_intent_id;
+    await finishProviderEvent(event.id,'processed',relatedPaymentId);
+    return dispute;
+  }
+  await finishProviderEvent(event.id,'ignored',relatedPaymentId,'event_type_not_actionable');
   return null;
+  }catch(error){
+    await finishProviderEvent(event.id,'failed',relatedPaymentId,error instanceof Error?error.message:String(error));
+    throw error;
+  }
 }
