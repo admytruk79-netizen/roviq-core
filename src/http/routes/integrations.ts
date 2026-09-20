@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { pool } from '../../db/pool.js';
 import { createIntegrationClient, createWebhookSubscription, deliverWebhookBatch } from '../../services/integration-gateway.js';
-import { listConnectConnections, reportConnectionHealth, setConnectionControl } from '../../services/connect-operations.js';
+import { getConnectOperationsSummary, listConnectConnections, reportConnectionHealth, setConnectionControl } from '../../services/connect-operations.js';
 import { requireRole } from '../middleware/principal.js';
 import type { Principal } from '../../types/principal.js';
 
@@ -70,6 +70,10 @@ export async function integrationRoutes(app:FastifyInstance) {
 
   app.get('/api/admin/integrations/connections',{preHandler:requireRole('admin')},async(req,reply)=>{
     try{return {connections:await listConnectConnections(req.principal)};}catch(error){return connectError(reply,error);}
+  });
+
+  app.get('/api/admin/integrations/health-summary',{preHandler:requireRole('admin')},async(req,reply)=>{
+    try{return await getConnectOperationsSummary(req.principal);}catch(error){return connectError(reply,error);}
   });
 
   app.patch('/api/admin/integrations/connections/:id/control',{preHandler:requireRole('admin')},async(req,reply)=>{
