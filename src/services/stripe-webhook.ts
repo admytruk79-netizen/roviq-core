@@ -169,12 +169,16 @@ async function applyStripeDispute(event:StripeEvent,object:StripeObject){
 export async function applyStripeWebhook(event:StripeEvent){
   const principal:Principal={role:'admin'};
   const object=event.data.object;
+  const actionable=
+    (event.type.startsWith('payment_intent.')&&SUPPORTED_PAYMENT_INTENT_EVENTS.has(event.type))
+    || event.type==='refund.created'
+    || ['charge.dispute.created','charge.dispute.updated','charge.dispute.closed'].includes(event.type);
+  if(!actionable) return null;
   if(!await beginProviderEvent(event)) return null;
   let relatedPaymentId:string|null=null;
 
   try{
   if(event.type.startsWith('payment_intent.')){
-    if(!SUPPORTED_PAYMENT_INTENT_EVENTS.has(event.type)){await finishProviderEvent(event.id,'ignored',null,'event_type_not_actionable');return null;}
     if(!object.id) throw new Error('stripe_webhook_payload_invalid');
     const payment=await localPayment(object.id);
     relatedPaymentId=payment.id;
