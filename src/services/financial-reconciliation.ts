@@ -42,8 +42,20 @@ async function reconcileSnapshot(bounded:number){
       left join payment_intents p on p.id=s.payment_intent_id
       order by s.updated_at desc,s.id desc
       limit $1`,[bounded]);
+    const disputes=await client.query(`
+      select d.id,d.payment_intent_id,d.provider,d.provider_dispute_id,d.amount,d.currency,d.state,d.reason,d.evidence_due_at,
+        p.case_id,
+        coalesce((select sum(le.amount) from ledger_entries le
+          where le.payment_intent_id=d.payment_intent_id
+            and le.entry_type='payment_dispute_loss'
+            and le.external_reference=d.provider_dispute_id),0)::numeric as dispute_ledger_amount
+      from payment_disputes d
+      join payment_intents p on p.id=d.payment_intent_id
+      order by d.updated_at desc,d.id desc
+      limit $1`,[bounded]);
     const paymentCount=await client.query(`select count(*)::int as total from payment_intents`);
     const payoutCount=await client.query(`select count(*)::int as total from settlement_payouts`);
+    const disputeCount=await client.query(`select count(*)::int as total from payment_disputes`);
 
     const discrepancies:FinancialDiscrepancy[]=[];
     for(const row of payments.rows){
@@ -52,7 +64,7 @@ async function reconcileSnapshot(bounded:number){
       const capturedLedger=Number(row.capture_ledger_amount);
       const refundLedger=Number(row.refund_ledger_amount);
       const capturedStates=['captured','partially_refunded','refunded'];
-      if(row.provider!=='manual'&&!row.provider_intent_id){
+      if(row.provider!=='manual'&&!row.provider_intent_id&&!['failed','cancelled'].includes(row.state)){
         discrepancies.push({kind:'payment_provider_reference_missing',severity:'critical',caseId:row.case_id,paymentIntentId:row.id,payoutId:null,provider:row.provider,providerReference:null,message:'Provider-backed payment has no provider intent reference.',observed:{state:row.state,amount,currency:row.currency}});
       }
       if(capturedStates.includes(row.state)&&Number(row.capture_events)===0){
@@ -92,18 +104,65 @@ async function reconcileSnapshot(bounded:number){
       }
     }
 
+
+    for(const row of disputes.rows){
+      const amount=Number(row.amount);
+      const ledger=Number(row.dispute_ledger_amount);
+      if(['needs_response','under_review'].includes(row.state)){
+        discrepancies.push({
+          kind:'payment_dispute_open',
+          severity:'warning',
+          caseId:row.case_id,
+          paymentIntentId:row.payment_intent_id,
+          payoutId:null,
+          provider:row.provider,
+          providerReference:row.provider_dispute_id,
+          message:'Payment dispute is open and requires operational attention.',
+          observed:{state:row.state,amount,currency:row.currency,reason:row.reason,evidenceDueAt:row.evidence_due_at}
+        });
+      }
+      if(row.state==='lost'&&ledger!==-Math.abs(amount)){
+        discrepancies.push({
+          kind:'payment_dispute_loss_ledger_mismatch',
+          severity:'critical',
+          caseId:row.case_id,
+          paymentIntentId:row.payment_intent_id,
+          payoutId:null,
+          provider:row.provider,
+          providerReference:row.provider_dispute_id,
+          message:'Lost payment dispute does not match its chargeback-loss ledger posting.',
+          observed:{disputeAmount:amount,disputeLedgerAmount:ledger,currency:row.currency}
+        });
+      }
+      if(row.state!=='lost'&&ledger!==0){
+        discrepancies.push({
+          kind:'premature_payment_dispute_loss_ledger',
+          severity:'critical',
+          caseId:row.case_id,
+          paymentIntentId:row.payment_intent_id,
+          payoutId:null,
+          provider:row.provider,
+          providerReference:row.provider_dispute_id,
+          message:'A chargeback-loss ledger posting exists before the dispute is lost.',
+          observed:{state:row.state,disputeLedgerAmount:ledger,currency:row.currency}
+        });
+      }
+    }
+
     const totalPayments=Number(paymentCount.rows[0]?.total??0);
     const totalPayouts=Number(payoutCount.rows[0]?.total??0);
+    const totalDisputes=Number(disputeCount.rows[0]?.total??0);
     const scannedPayments=payments.rowCount??0;
     const scannedPayouts=payouts.rowCount??0;
-    const complete=scannedPayments>=totalPayments&&scannedPayouts>=totalPayouts;
+    const scannedDisputes=disputes.rowCount??0;
+    const complete=scannedPayments>=totalPayments&&scannedPayouts>=totalPayouts&&scannedDisputes>=totalDisputes;
     const result={
       generatedAt:new Date().toISOString(),
       complete,
       truncated:!complete,
       limit:bounded,
-      scanned:{payments:scannedPayments,payouts:scannedPayouts},
-      totals:{payments:totalPayments,payouts:totalPayouts},
+      scanned:{payments:scannedPayments,payouts:scannedPayouts,disputes:scannedDisputes},
+      totals:{payments:totalPayments,payouts:totalPayouts,disputes:totalDisputes},
       summary:{total:discrepancies.length,critical:discrepancies.filter(item=>item.severity==='critical').length,warning:discrepancies.filter(item=>item.severity==='warning').length},
       discrepancies
     };
