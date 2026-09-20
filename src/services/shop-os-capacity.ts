@@ -154,7 +154,10 @@ export async function rebuildShopOsCapacity(resourceId:string,db:Queryable){
       where cw.resource_id=$1
     )
     update capacity_windows cw
-       set capacity_units=r.available_units,
+       set capacity_units=case
+             when cw.capacity_state in ('blocked','unknown') then 0
+             else r.available_units
+           end,
            capacity_state=case
              when cw.capacity_state in ('blocked','unknown') then cw.capacity_state
              when cw.sync_state<>'current' then cw.capacity_state
