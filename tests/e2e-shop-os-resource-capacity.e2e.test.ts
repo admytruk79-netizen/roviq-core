@@ -108,6 +108,41 @@ describe('Shop OS resource operational state owns canonical capacity',()=>{
     }
   });
 
+
+  it('serializes simultaneous bookings so capacity one cannot be double-booked',async()=>{
+    const {resourceId,windowId}=await setupNativeResource();
+    await pool.query(
+      `update capacity_windows
+          set nominal_capacity_units=1,capacity_units=1,capacity_state='available'
+        where id=$1`,
+      [windowId]
+    );
+    const startsAt=new Date(Date.now()+150*60_000).toISOString();
+    const endsAt=new Date(Date.now()+195*60_000).toISOString();
+
+    const results=await Promise.allSettled([
+      createShopOsAppointment(admin,{resourceId,startsAt,endsAt,serviceCategory:'repair',status:'held'}),
+      createShopOsAppointment(admin,{resourceId,startsAt,endsAt,serviceCategory:'repair',status:'held'})
+    ]);
+
+    const fulfilled=results.filter((result)=>result.status==='fulfilled');
+    const rejected=results.filter((result)=>result.status==='rejected') as PromiseRejectedResult[];
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0].reason).toMatchObject({message:'shop_os_capacity_unavailable',statusCode:409});
+
+    const active=await pool.query(
+      `select count(*)::int as n
+         from roviq_appointments
+        where resource_id=$1
+          and appointment_status in ('held','confirmed','in_progress')
+          and starts_at<$3::timestamptz
+          and ends_at>$2::timestamptz`,
+      [resourceId,startsAt,endsAt]
+    );
+    expect(Number(active.rows[0].n)).toBe(1);
+  });
+
   it('does not erase a pre-existing blocked capacity window when a resource returns online',async()=>{
     const {resourceId,windowId}=await setupNativeResource('blocked');
 
