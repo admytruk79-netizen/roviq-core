@@ -233,3 +233,118 @@ export async function setChannelConfig(principal:Principal,input:{ channel:strin
   await audit(principal,'set_notification_channel','notification_channel',input.channel,'admin_channel_config',{ provider:input.provider,enabled:input.enabled });
   return r.rows[0];
 }
+
+
+export async function getNotificationDeliverySummary(input:{
+  organizationId?:string|null;
+  locationId?:string|null;
+}={}){
+  const organizationId=input.organizationId??null;
+  const locationId=input.locationId??null;
+  const scopeSql=`
+    (
+      $1::uuid is null
+      or exists(
+        select 1
+        from service_cases sc
+        left join actors owner on owner.id=sc.current_owner_actor_id
+        left join actors selected on selected.id=sc.selected_actor_id
+        left join actors recommended on recommended.id=sc.recommended_actor_id
+        where sc.id=n.case_id and (
+          owner.organization_id=$1::uuid
+          or selected.organization_id=$1::uuid
+          or recommended.organization_id=$1::uuid
+        ) and (
+          $2::uuid is null
+          or owner.location_id=$2::uuid
+          or selected.location_id=$2::uuid
+          or recommended.location_id=$2::uuid
+        )
+      )
+      or exists(
+        select 1 from actors recipient
+        where recipient.id::text=n.recipient_id
+          and recipient.organization_id=$1::uuid
+          and ($2::uuid is null or recipient.location_id=$2::uuid)
+      )
+    )`;
+  const counts=await pool.query(`
+    select
+      count(*) filter(where n.state='pending' and coalesce(n.attempt_count,0)=0)::int as queued,
+      count(*) filter(where n.state='pending' and coalesce(n.attempt_count,0)>0)::int as retrying,
+      count(*) filter(where n.state='sent')::int as delivered,
+      count(*) filter(where n.state='dead')::int as failed,
+      count(*) filter(where n.state='pending' and n.locked_at is not null and n.locked_at>=now()-interval '5 minutes')::int as processing
+    from notification_outbox n
+    where ${scopeSql}`,[organizationId,locationId]);
+
+  const failures=await pool.query(`
+    select n.id,n.case_id,n.channel,n.recipient_type,n.recipient_id,n.template_key,n.attempt_count,n.max_attempts,
+           n.last_error,n.available_at,n.created_at,n.updated_at
+      from notification_outbox n
+     where ${scopeSql}
+       and n.state='dead'
+     order by n.updated_at desc,n.created_at desc
+     limit 100`,[organizationId,locationId]);
+
+  const row=counts.rows[0]??{};
+  return {
+    scope:{organizationId,locationId},
+    states:{
+      queued:Number(row.queued??0),
+      retrying:Number(row.retrying??0),
+      processing:Number(row.processing??0),
+      delivered:Number(row.delivered??0),
+      failed:Number(row.failed??0)
+    },
+    failures:failures.rows
+  };
+}
+
+export async function requeueFailedNotification(principal:Principal,notificationId:string){
+  const client=await pool.connect();
+  try{
+    await client.query('begin');
+    const current=await client.query(
+      `select * from notification_outbox where id=$1 for update`,
+      [notificationId]
+    );
+    if(!current.rowCount) {
+      const error=new Error('notification_not_found') as Error&{statusCode:number};
+      error.statusCode=404;
+      throw error;
+    }
+    const row=current.rows[0];
+    if(row.state!=='dead'){
+      const error=new Error('notification_not_failed') as Error&{statusCode:number};
+      error.statusCode=409;
+      throw error;
+    }
+    const updated=await client.query(
+      `update notification_outbox
+          set state='pending',
+              max_attempts=greatest(max_attempts,coalesce(attempt_count,0)+3),
+              available_at=now(),
+              locked_at=null,
+              locked_by=null,
+              last_error=null,
+              updated_at=now()
+        where id=$1
+        returning *`,
+      [notificationId]
+    );
+    await client.query('commit');
+    await audit(principal,'notification_requeued','notification',notificationId,'manual_delivery_recovery',{
+      previousAttemptCount:Number(row.attempt_count??0),
+      maxAttempts:Number(updated.rows[0].max_attempts??0),
+      channel:row.channel,
+      caseId:row.case_id??null
+    });
+    return updated.rows[0];
+  }catch(error){
+    await client.query('rollback').catch(()=>{});
+    throw error;
+  }finally{
+    client.release();
+  }
+}
