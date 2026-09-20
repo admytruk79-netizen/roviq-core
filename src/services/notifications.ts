@@ -280,11 +280,11 @@ export async function getNotificationDeliverySummary(input:{
 
   const failures=await pool.query(`
     select n.id,n.case_id,n.channel,n.recipient_type,n.recipient_id,n.template_key,n.attempt_count,n.max_attempts,
-           n.last_error,n.available_at,n.created_at,n.updated_at
+           n.last_error,n.available_at,n.created_at
       from notification_outbox n
      where ${scopeSql}
        and n.state='dead'
-     order by n.updated_at desc,n.created_at desc
+     order by n.created_at desc
      limit 100`,[organizationId,locationId]);
 
   const row=counts.rows[0]??{};
@@ -327,8 +327,7 @@ export async function requeueFailedNotification(principal:Principal,notification
               available_at=now(),
               locked_at=null,
               locked_by=null,
-              last_error=null,
-              updated_at=now()
+              last_error=null
         where id=$1
         returning *`,
       [notificationId]
