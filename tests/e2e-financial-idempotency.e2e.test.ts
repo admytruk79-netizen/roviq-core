@@ -186,6 +186,34 @@ describe('financial provider replay and concurrency invariants',()=>{
     expect(Number(providerEvents.rows[0].n)).toBe(1);
   });
 
+
+  it('reuses the same settlement payout for a matching provider request key',async()=>{
+    const payment=await createPaymentIntent(admin,{caseId,amount:140,currency:'USD'});
+    await updatePaymentState(admin,payment.id,'captured',{providerEventId:`evt-settlement-request-${Date.now()}-${Math.random()}`});
+    const clientRequestId=`settlement-request-${Date.now()}-${Math.random()}`;
+
+    const first=await createPayout(admin,{
+      caseId,counterpartyActorId:partnerActorId,paymentIntentId:payment.id,
+      amount:60,currency:'USD',provider:'stripe',clientRequestId
+    });
+    const replay=await createPayout(admin,{
+      caseId,counterpartyActorId:partnerActorId,paymentIntentId:payment.id,
+      amount:60,currency:'USD',provider:'stripe',clientRequestId
+    });
+    expect(replay.id).toBe(first.id);
+
+    await expect(createPayout(admin,{
+      caseId,counterpartyActorId:partnerActorId,paymentIntentId:payment.id,
+      amount:61,currency:'USD',provider:'stripe',clientRequestId
+    })).rejects.toThrow('payout_request_conflict');
+
+    const count=await pool.query(
+      `select count(*)::int as n from settlement_payouts where provider='stripe' and client_request_id=$1`,
+      [clientRequestId]
+    );
+    expect(Number(count.rows[0].n)).toBe(1);
+  });
+
   it('requires provider proof before a non-manual payout can become paid',async()=>{
     const payout=await createPayout(admin,{
       caseId,counterpartyActorId:partnerActorId,amount:25,currency:'USD',provider:'test'
