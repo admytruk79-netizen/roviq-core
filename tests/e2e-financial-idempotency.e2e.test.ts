@@ -136,6 +136,59 @@ describe('financial provider replay and concurrency invariants',()=>{
   });
 
 
+
+  it('replays a previously failed Stripe event after the local payment becomes linkable',async()=>{
+    const providerIntentId=`pi-late-link-${Date.now()}-${Math.random()}`;
+    const providerEventId=`evt-late-link-${Date.now()}-${Math.random()}`;
+    const event={
+      id:providerEventId,
+      type:'payment_intent.succeeded',
+      data:{object:{
+        id:providerIntentId,
+        amount:5000,
+        amount_received:5000,
+        currency:'usd'
+      }}
+    } as any;
+
+    await expect(applyStripeWebhook(event)).rejects.toThrow('payment_not_found');
+    const failed=await pool.query(
+      `select processing_state,error_message from payment_provider_events
+        where provider='stripe' and provider_event_id=$1`,
+      [providerEventId]
+    );
+    expect(failed.rows[0].processing_state).toBe('failed');
+
+    const payment=await createPaymentIntent(admin,{
+      caseId,
+      amount:50,
+      currency:'USD',
+      provider:'stripe',
+      providerIntentId
+    });
+    const replayed=await applyStripeWebhook(event);
+    expect(replayed.id).toBe(payment.id);
+    expect(replayed.state).toBe('captured');
+
+    const providerEvent=await pool.query(
+      `select processing_state,error_message,related_payment_intent_id
+         from payment_provider_events
+        where provider='stripe' and provider_event_id=$1`,
+      [providerEventId]
+    );
+    expect(providerEvent.rows[0]).toMatchObject({
+      processing_state:'processed',
+      error_message:null,
+      related_payment_intent_id:payment.id
+    });
+    const ledger=await pool.query(
+      `select count(*)::int as n from ledger_entries
+        where payment_intent_id=$1 and entry_type='payment_capture'`,
+      [payment.id]
+    );
+    expect(Number(ledger.rows[0].n)).toBe(1);
+  });
+
   it('persists Stripe disputes idempotently and posts a loss once',async()=>{
     const providerIntentId=`pi-dispute-${Date.now()}-${Math.random()}`;
     const payment=await createPaymentIntent(admin,{
