@@ -138,6 +138,32 @@ describe('controlled Shop OS pilot readiness gate',()=>{
     expect(events.rows.map((row:any)=>row.event_type)).toEqual(['PILOT_READY','PILOT_STARTED','PILOT_COMPLETED']);
   });
 
+
+  it('keeps scoped admins inside their own pilot organization and location',async()=>{
+    const scopedAdminActor=await pool.query(
+      `insert into actors(actor_type,status,organization_id,location_id,attributes)
+       values('partner','active',$1,$2,'{}'::jsonb) returning id`,
+      [orgId,locationId]
+    );
+    const otherOrg=await pool.query(
+      `insert into organizations(organization_type,legal_name,display_name,status)
+       values('repair_partner',$1,$1,'active') returning id`,
+      [`ROVIQ Other Pilot ${Date.now()}-${Math.random()}`]
+    );
+    const otherLocation=await pool.query(
+      `insert into locations(organization_id,name,address,latitude,longitude,country_code,region,city,metadata)
+       values($1,'Other Pilot Shop','Isolation location',45.51,-122.66,'US','OR','Portland','{}'::jsonb)
+       returning id`,
+      [otherOrg.rows[0].id]
+    );
+    const scopedAdmin={role:'admin',actorId:scopedAdminActor.rows[0].id} as const;
+    await expect(getPilotReadiness(scopedAdmin,{
+      organizationId:otherOrg.rows[0].id,
+      locationId:otherLocation.rows[0].id
+    })).rejects.toMatchObject({message:'forbidden',statusCode:403});
+    await pool.query('delete from organizations where id=$1',[otherOrg.rows[0].id]).catch(()=>{});
+  });
+
   it('fails closed when native capacity is removed from the pilot location',async()=>{
     await pool.query(
       `update capacity_windows set capacity_state='blocked',capacity_units=0 where organization_id=$1 and location_id=$2`,
