@@ -8,6 +8,11 @@ function httpError(message:string,statusCode:number){
   return Object.assign(new Error(message),{statusCode});
 }
 
+const REQUIRED_COMPLETION_EVIDENCE=['scheduling','repairOrder','notifications','payments','reconciliation'] as const;
+function evidenceSatisfied(value:unknown){
+  return value===true || (typeof value==='string'&&['passed','verified','completed'].includes(value.toLowerCase()));
+}
+
 async function assertScope(principal:Principal,organizationId:string,locationId:string){
   if(principal.role!=='admin') throw httpError('forbidden',403);
   const scope=await getAdminActorScope(principal,pool);
@@ -199,6 +204,9 @@ export async function finishPilotRun(principal:Principal,pilotRunId:string,input
       if(!linkedCases.rowCount) throw httpError('pilot_case_required',409);
       if(linkedCases.rows.some((caseRow:any)=>!['completed','cancelled'].includes(caseRow.state))) throw httpError('pilot_cases_not_terminal',409);
       if(!linkedCases.rows.some((caseRow:any)=>caseRow.state==='completed')) throw httpError('pilot_completed_case_required',409);
+      const evidence=input.evidence??{};
+      const missing=REQUIRED_COMPLETION_EVIDENCE.filter((key)=>!evidenceSatisfied(evidence[key]));
+      if(missing.length) throw Object.assign(new Error('pilot_evidence_incomplete'),{statusCode:409,missingEvidence:missing});
     }
     if(input.outcome==='aborted'&&!input.abortReason?.trim()) throw httpError('pilot_abort_reason_required',400);
 
