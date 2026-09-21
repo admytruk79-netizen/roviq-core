@@ -331,7 +331,7 @@ export async function upsertNetworkHandoff(input:{
        reference_type,reference_id,status,metadata
      ) values($1,$2,$3,$4,$5,$6,$7,$8)
      on conflict(service_case_id,handoff_type,reference_type,reference_id)
-     do update set fulfillment_plan_id=coalesce(excluded.fulfillment_plan_id,network_handoffs.fulfillment_plan_id),
+     do update set fulfillment_plan_id=coalesce(network_handoffs.fulfillment_plan_id,excluded.fulfillment_plan_id),
        participant_actor_id=coalesce(excluded.participant_actor_id,network_handoffs.participant_actor_id),
        status=excluded.status,metadata=network_handoffs.metadata||excluded.metadata,updated_at=now()
      returning *`,
