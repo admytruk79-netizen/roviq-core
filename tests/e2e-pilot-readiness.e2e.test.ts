@@ -149,6 +149,21 @@ describe('controlled Shop OS pilot readiness gate',()=>{
   });
 
 
+
+  it('refuses to complete a pilot without a linked completed canonical case',async()=>{
+    const created=await createPilotRun(admin,{organizationId:orgId,locationId});
+    await startPilotRun(admin,created.id);
+    await expect(finishPilotRun(admin,created.id,{
+      outcome:'completed',
+      evidence:{scheduling:'passed'}
+    })).rejects.toMatchObject({message:'pilot_case_required',statusCode:409});
+    const aborted=await finishPilotRun(admin,created.id,{
+      outcome:'aborted',
+      abortReason:'Acceptance test verified missing-case completion gate.'
+    });
+    expect(aborted.status).toBe('aborted');
+  });
+
   it('keeps scoped admins inside their own pilot organization and location',async()=>{
     const scopedAdminActor=await pool.query(
       `insert into actors(actor_type,status,organization_id,location_id,attributes)
