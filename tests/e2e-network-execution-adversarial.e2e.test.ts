@@ -104,6 +104,72 @@ describe('network execution adversarial invariants',()=>{
     });
   });
 
+
+  it('keeps a failed provider handoff in recovery until an explicit replan',async()=>{
+    const domain=await pool.query(`select id from domains where code='maintenance' limit 1`);
+    const serviceCase=await pool.query(
+      `insert into service_cases(domain_id,case_type,state)
+       values($1,'maintenance','repair_in_progress') returning id`,
+      [domain.rows[0].id]
+    );
+    const recoveryCaseId=serviceCase.rows[0].id as string;
+    const provider=await pool.query(
+      `insert into actors(actor_type,status) values('shop','active') returning id`
+    );
+    const providerId=provider.rows[0].id as string;
+    const plan=await pool.query(
+      `insert into fulfillment_plans(
+         service_case_id,version,status,selected_actor_id,blockers,dependency_snapshot
+       ) values($1,1,'accepted',$2,'[]'::jsonb,'{}'::jsonb) returning id`,
+      [recoveryCaseId,providerId]
+    );
+    await pool.query(
+      `insert into fulfillment_candidates(
+         fulfillment_plan_id,actor_id,rank,participant_status,serviceability,signals
+       ) values($1,$2,1,'accepted','{}'::jsonb,'{}'::jsonb)`,
+      [plan.rows[0].id,providerId]
+    );
+    await pool.query(
+      `insert into participant_acceptances(
+         fulfillment_plan_id,service_case_id,actor_id,decision,source_type
+       ) values($1,$2,$3,'accepted','match_offer')`,
+      [plan.rows[0].id,recoveryCaseId,providerId]
+    );
+
+    await upsertNetworkHandoff({
+      caseId:recoveryCaseId,
+      handoffType:'service_provider',
+      participantActorId:providerId,
+      referenceType:'match_offer',
+      referenceId:'offer-recovery-test',
+      status:'failed'
+    });
+
+    const afterFailure=await pool.query(
+      `select status,recovery_required_at,recovery_reason from fulfillment_plans where id=$1`,
+      [plan.rows[0].id]
+    );
+    expect(afterFailure.rows[0].status).toBe('blocked');
+    expect(afterFailure.rows[0].recovery_required_at).toBeTruthy();
+    expect(afterFailure.rows[0].recovery_reason).toBe('service_provider_failed');
+
+    await upsertNetworkHandoff({
+      caseId:recoveryCaseId,
+      handoffType:'service_provider',
+      participantActorId:providerId,
+      referenceType:'match_offer',
+      referenceId:'offer-recovery-test',
+      status:'completed'
+    });
+
+    const stillRecovering=await pool.query(
+      `select status,recovery_required_at from fulfillment_plans where id=$1`,
+      [plan.rows[0].id]
+    );
+    expect(stillRecovering.rows[0].status).toBe('blocked');
+    expect(stillRecovering.rows[0].recovery_required_at).toBeTruthy();
+  });
+
   it('does not rebind a historical handoff to a later fulfillment plan',async()=>{
     const initial=await upsertNetworkHandoff({
       caseId,
