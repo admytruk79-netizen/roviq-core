@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { pool } from '../src/db/pool.js';
 import { getPilotReadiness } from '../src/services/pilot-readiness.js';
+import { createPaymentIntent } from '../src/services/payment-core.js';
 import { addPilotRunCase, createPilotRun, finishPilotRun, getPilotRunHealth, startPilotRun } from '../src/services/pilot-runs.js';
 
 const admin={role:'admin'} as const;
@@ -244,6 +245,43 @@ describe('controlled Shop OS pilot readiness gate',()=>{
     const aborted=await finishPilotRun(admin,created.id,{
       outcome:'aborted',
       abortReason:'Acceptance test verified linked notification failure detection.'
+    });
+    expect(aborted.status).toBe('aborted');
+  });
+
+
+  it('degrades a live pilot when a linked case has a failed payment-provider event',async()=>{
+    const created=await createPilotRun(admin,{organizationId:orgId,locationId});
+    await startPilotRun(admin,created.id);
+
+    const domain=await pool.query(`select id from domains where code='maintenance' limit 1`);
+    const serviceCase=await pool.query(
+      `insert into service_cases(domain_id,location_id,state,current_owner_role,current_owner_actor_id)
+       values($1,$2,'payment_pending','partner',$3) returning id`,
+      [domain.rows[0].id,locationId,partnerActorId]
+    );
+    await addPilotRunCase(admin,created.id,serviceCase.rows[0].id);
+    const payment=await createPaymentIntent(admin,{
+      caseId:serviceCase.rows[0].id,
+      amount:75,
+      currency:'USD',
+      provider:'stripe',
+      providerIntentId:`pi-pilot-failure-${Date.now()}-${Math.random()}`
+    });
+    await pool.query(
+      `insert into payment_provider_events(
+         provider,provider_event_id,event_type,processing_state,related_payment_intent_id,error_message,payload
+       ) values('stripe',$1,'payment_intent.payment_failed','failed',$2,'provider_timeout','{}'::jsonb)`,
+      [`evt-pilot-failure-${Date.now()}-${Math.random()}`,payment.id]
+    );
+
+    const health=await getPilotRunHealth(admin,created.id);
+    expect(health.status).toBe('degraded');
+    expect(health.operational.paymentProviderEvents.failed).toBe(1);
+
+    const aborted=await finishPilotRun(admin,created.id,{
+      outcome:'aborted',
+      abortReason:'Acceptance test verified linked payment-provider failure detection.'
     });
     expect(aborted.status).toBe('aborted');
   });
