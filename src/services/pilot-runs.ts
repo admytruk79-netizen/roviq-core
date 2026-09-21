@@ -249,15 +249,57 @@ export async function getPilotRunHealth(principal:Principal,pilotRunId:string){
   const run=runResult.rows[0];
   await assertScope(principal,run.organization_id,run.location_id);
 
-  const cases=await pool.query(
-    `select sc.state,count(*)::int as total
-       from pilot_run_cases prc
-       join service_cases sc on sc.id=prc.service_case_id
+  const [cases,delivery,exceptions,providerEvents]=await Promise.all([
+    pool.query(
+      `select sc.state,count(*)::int as total
+         from pilot_run_cases prc
+         join service_cases sc on sc.id=prc.service_case_id
+        where prc.pilot_run_id=$1
+        group by sc.state`,
+      [pilotRunId]
+    ),
+    pool.query(
+      `select
+         count(*) filter(where n.state='dead')::int as dead,
+         count(*) filter(where n.state='pending' and coalesce(n.attempt_count,0)>0)::int as retrying
+       from notification_outbox n
+       join pilot_run_cases prc on prc.service_case_id=n.case_id
+      where prc.pilot_run_id=$1`,
+      [pilotRunId]
+    ),
+    pool.query(
+      `select
+         count(*) filter(where ce.state='open')::int as open,
+         count(*) filter(where ce.state='open' and ce.severity='critical')::int as critical
+       from case_exceptions ce
+       join pilot_run_cases prc on prc.service_case_id=ce.case_id
+      where prc.pilot_run_id=$1`,
+      [pilotRunId]
+    ),
+    pool.query(
+      `select count(*)::int as failed
+       from payment_provider_events ppe
+       join payment_intents pi on pi.id=ppe.related_payment_intent_id
+       join pilot_run_cases prc on prc.service_case_id=pi.case_id
       where prc.pilot_run_id=$1
-      group by sc.state`,
-    [pilotRunId]
-  );
+        and ppe.processing_state='failed'`,
+      [pilotRunId]
+    )
+  ]);
   const caseStates=Object.fromEntries(cases.rows.map((row:any)=>[row.state,Number(row.total)]));
+  const operational={
+    notifications:{
+      dead:Number(delivery.rows[0]?.dead??0),
+      retrying:Number(delivery.rows[0]?.retrying??0)
+    },
+    exceptions:{
+      open:Number(exceptions.rows[0]?.open??0),
+      critical:Number(exceptions.rows[0]?.critical??0)
+    },
+    paymentProviderEvents:{
+      failed:Number(providerEvents.rows[0]?.failed??0)
+    }
+  };
 
   if(['completed','aborted'].includes(run.status)){
     return {
@@ -265,7 +307,8 @@ export async function getPilotRunHealth(principal:Principal,pilotRunId:string){
       runStatus:run.status,
       status:'closed' as const,
       readiness:null,
-      caseStates
+      caseStates,
+      operational
     };
   }
 
@@ -273,11 +316,19 @@ export async function getPilotRunHealth(principal:Principal,pilotRunId:string){
     organizationId:run.organization_id,
     locationId:run.location_id
   });
+  const runtimeCritical=
+    operational.notifications.dead+
+    operational.exceptions.critical+
+    operational.paymentProviderEvents.failed;
+  const runtimeWarnings=
+    operational.notifications.retrying+
+    Math.max(0,operational.exceptions.open-operational.exceptions.critical);
   return {
     pilotRunId,
     runStatus:run.status,
-    status:!readiness.ready?'degraded' as const:readiness.warningCount>0?'attention' as const:'healthy' as const,
+    status:!readiness.ready||runtimeCritical>0?'degraded' as const:(readiness.warningCount>0||runtimeWarnings>0)?'attention' as const:'healthy' as const,
     readiness,
-    caseStates
+    caseStates,
+    operational
   };
 }
