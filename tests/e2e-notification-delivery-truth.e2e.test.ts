@@ -36,6 +36,37 @@ describe('notification delivery operational truth',()=>{
     await pool.query(`delete from notification_outbox where id=any($1::uuid[])`,[[queued.id,retrying.id,delivered.id,failed.id]]);
   });
 
+
+  it('does not double-count actively processing notifications as queued or retrying',async()=>{
+    const processing=await createNotification('push');
+    await pool.query(
+      `update notification_outbox
+          set state='pending',attempt_count=2,locked_at=now(),locked_by='acceptance-worker'
+        where id=$1`,
+      [processing.id]
+    );
+
+    const before=await getNotificationDeliverySummary();
+    const processingCount=before.states.processing;
+
+    const scoped=await pool.query(
+      `select
+         count(*) filter(where state='pending' and coalesce(attempt_count,0)=0
+           and (locked_at is null or locked_at<now()-interval '5 minutes'))::int as queued,
+         count(*) filter(where state='pending' and coalesce(attempt_count,0)>0
+           and (locked_at is null or locked_at<now()-interval '5 minutes'))::int as retrying,
+         count(*) filter(where state='pending' and locked_at is not null and locked_at>=now()-interval '5 minutes')::int as processing
+       from notification_outbox where id=$1`,
+      [processing.id]
+    );
+    expect(Number(scoped.rows[0].processing)).toBe(1);
+    expect(Number(scoped.rows[0].queued)).toBe(0);
+    expect(Number(scoped.rows[0].retrying)).toBe(0);
+    expect(processingCount).toBeGreaterThanOrEqual(1);
+
+    await pool.query(`delete from notification_outbox where id=$1`,[processing.id]);
+  });
+
   it('requeues a dead notification without erasing delivery-attempt history',async()=>{
     const failed=await createNotification('push');
     await pool.query(`update notification_outbox set attempt_count=5,max_attempts=5,state='dead',last_error='provider_down' where id=$1`,[failed.id]);
