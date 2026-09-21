@@ -127,12 +127,14 @@ export async function transitionCase(
       [toState,caseId]
     );
     if(toState==='cancelled'){
-      await recordCancellationOutcome({caseId,actorId:principal.actorId??null,evidence:{source:'case_transition',from:c.state,...metadata}},client);
       await releaseCaseCapacity(caseId,client);
       // Linked Shop OS appointments are cancelled and their resource capacity rebuilt by the
       // trg_shop_os_cancel_case_appointments trigger (migrations/039), which fires synchronously
       // on the state update just above -- it is the sole authority for this, not duplicated here.
       await syncOperationalConstraints(caseId,client);
+      // Record cancellation only after capacity release and projection refresh so the retained
+      // dependency snapshot describes the final cancelled state rather than pre-release state.
+      await recordCancellationOutcome({caseId,actorId:principal.actorId??null,evidence:{source:'case_transition',from:c.state,...metadata}},client);
     }
     if(toState==='completed'){
       await consumeCaseCapacity(caseId,client);
