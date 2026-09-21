@@ -334,6 +334,59 @@ describe('controlled Shop OS pilot readiness gate',()=>{
     expect(aborted.status).toBe('aborted');
   });
 
+
+  it('surfaces open disputes as attention and failed partner settlements as degraded',async()=>{
+    const created=await createPilotRun(admin,{organizationId:orgId,locationId});
+    await startPilotRun(admin,created.id);
+
+    const domain=await pool.query(`select id from domains where code='maintenance' limit 1`);
+    const serviceCase=await pool.query(
+      `insert into service_cases(domain_id,location_id,state,current_owner_role,current_owner_actor_id)
+       values($1,$2,'payment_pending','partner',$3) returning id`,
+      [domain.rows[0].id,locationId,partnerActorId]
+    );
+    await addPilotRunCase(admin,created.id,serviceCase.rows[0].id);
+    const payment=await createPaymentIntent(admin,{
+      caseId:serviceCase.rows[0].id,
+      amount:40,
+      currency:'USD',
+      provider:'stripe',
+      providerIntentId:`pi-pilot-dispute-${Date.now()}-${Math.random()}`
+    });
+    const dispute=await pool.query(
+      `insert into payment_disputes(
+         payment_intent_id,provider,external_reference,status,amount_minor,currency,reason
+       ) values($1,'stripe',$2,'needs_response',1000,'USD','fraudulent') returning id`,
+      [payment.id,`dp-pilot-${Date.now()}-${Math.random()}`]
+    );
+
+    const attention=await getPilotRunHealth(admin,created.id);
+    expect(attention.status).toBe('attention');
+    expect(attention.operational.disputes.open).toBe(1);
+
+    await pool.query(
+      `update payment_disputes set status='won',resolved_at=now() where id=$1`,
+      [dispute.rows[0].id]
+    );
+    await pool.query(
+      `insert into settlement_payouts(
+         case_id,counterparty_actor_id,payment_intent_id,amount,currency,state,provider
+       ) values($1,$2,$3,10,'USD','failed','stripe')`,
+      [serviceCase.rows[0].id,partnerActorId,payment.id]
+    );
+
+    const degraded=await getPilotRunHealth(admin,created.id);
+    expect(degraded.status).toBe('degraded');
+    expect(degraded.operational.disputes.open).toBe(0);
+    expect(degraded.operational.settlements.failed).toBe(1);
+
+    const aborted=await finishPilotRun(admin,created.id,{
+      outcome:'aborted',
+      abortReason:'Acceptance test verified dispute and settlement health signals.'
+    });
+    expect(aborted.status).toBe('aborted');
+  });
+
   it('refuses to complete a pilot without a linked completed canonical case',async()=>{
     const created=await createPilotRun(admin,{organizationId:orgId,locationId});
     await startPilotRun(admin,created.id);
