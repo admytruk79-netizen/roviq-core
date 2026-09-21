@@ -163,10 +163,10 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   app.post('/api/admin/testing/customer-session', { preHandler: [requireRole('admin'),requireAdminTestingEnabled] }, async (req, reply) => adminTestSession(req,reply,'customer'));
-  app.post('/api/admin/testing/partner-session', { preHandler: requireRole('admin') }, async (req, reply) => adminTestSession(req,reply,'partner'));
-  app.post('/api/admin/testing/tow-session', { preHandler: requireRole('admin') }, async (req, reply) => adminTestSession(req,reply,'tow'));
-  app.post('/api/admin/testing/diagnostic-session', { preHandler: requireRole('admin') }, async (req, reply) => adminTestSession(req,reply,'diagnostic'));
-  app.post('/api/admin/testing/parts-session', { preHandler: requireRole('admin') }, async (req, reply) => adminTestSession(req,reply,'parts'));
+  app.post('/api/admin/testing/partner-session', { preHandler: [requireRole('admin'),requireAdminTestingEnabled] }, async (req, reply) => adminTestSession(req,reply,'partner'));
+  app.post('/api/admin/testing/tow-session', { preHandler: [requireRole('admin'),requireAdminTestingEnabled] }, async (req, reply) => adminTestSession(req,reply,'tow'));
+  app.post('/api/admin/testing/diagnostic-session', { preHandler: [requireRole('admin'),requireAdminTestingEnabled] }, async (req, reply) => adminTestSession(req,reply,'diagnostic'));
+  app.post('/api/admin/testing/parts-session', { preHandler: [requireRole('admin'),requireAdminTestingEnabled] }, async (req, reply) => adminTestSession(req,reply,'parts'));
 
   app.post('/api/admin/identities', { preHandler: requireRole('admin') }, async (req, reply) => {
     const b = createIdentityBody.parse(req.body);
