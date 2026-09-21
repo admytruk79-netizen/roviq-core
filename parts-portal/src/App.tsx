@@ -301,8 +301,8 @@ export default function App() {
         <span className="eyebrow">Fulfilment</span>
         <h1>Parts orders</h1>
         <p>Confirm inventory, reserve stock and keep fulfilment status current. Geography is restricted to the selected case order.</p>
-        {error && <div className="error">{error}</div>}
-        {message && <div className="success">{message}</div>}
+        {error && <div className="error" role="alert" aria-live="assertive">{error}</div>}
+        {message && <div className="success" role="status" aria-live="polite">{message}</div>}
         <div className="actions"><button className="secondary" type="button" onClick={refreshAll}>Refresh orders</button></div>
 
         <div className="grid">
@@ -368,9 +368,9 @@ function Login(props: any) {
         <h1>Sign in</h1>
         <p>Confirm, fulfil and deliver without losing the service context.</p>
         <label>Email<input type="email" required autoComplete="email" value={props.email} onChange={(event: any) => props.setEmail(event.target.value)} /></label>
-        <label>Password<div className="password"><input type={props.show ? 'text' : 'password'} required autoComplete="current-password" value={props.password} onChange={(event: any) => props.setPassword(event.target.value)} /><button type="button" onClick={() => props.setShow(!props.show)}>{props.show ? 'Hide' : 'Show'}</button></div></label>
-        {props.error && <div className="error">{props.error}</div>}
-        <button className="primary">Enter portal</button>
+        <label>Password<div className="password"><input type={props.show ? 'text' : 'password'} required autoComplete="current-password" value={props.password} onChange={(event: any) => props.setPassword(event.target.value)} /><button type="button" aria-label={props.show ? 'Hide password' : 'Show password'} onClick={() => props.setShow(!props.show)}>{props.show ? 'Hide' : 'Show'}</button></div></label>
+        {props.error && <div className="error" role="alert" aria-live="assertive">{props.error}</div>}
+        <button className="primary" type="submit">Enter portal</button>
       </form>
     </div>
   );
