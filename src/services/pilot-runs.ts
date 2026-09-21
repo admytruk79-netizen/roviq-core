@@ -323,7 +323,7 @@ export async function getPilotRunHealth(principal:Principal,pilotRunId:string){
   const run=runResult.rows[0];
   await assertScope(principal,run.organization_id,run.location_id);
 
-  const [cases,delivery,exceptions,providerEvents]=await Promise.all([
+  const [cases,delivery,exceptions,providerEvents,disputes,payouts,recovery]=await Promise.all([
     pool.query(
       `select sc.state,count(*)::int as total
          from pilot_run_cases prc
@@ -358,6 +358,33 @@ export async function getPilotRunHealth(principal:Principal,pilotRunId:string){
       where prc.pilot_run_id=$1
         and ppe.processing_state='failed'`,
       [pilotRunId]
+    ),
+    pool.query(
+      `select count(*)::int as open
+         from payment_disputes d
+         join payment_intents pi on pi.id=d.payment_intent_id
+         join pilot_run_cases prc on prc.service_case_id=pi.case_id
+        where prc.pilot_run_id=$1
+          and d.status in ('needs_response','under_review')`,
+      [pilotRunId]
+    ),
+    pool.query(
+      `select
+         count(*) filter(where sp.state='failed')::int as failed,
+         count(*) filter(where sp.state in ('pending','approved','processing'))::int as in_flight
+       from settlement_payouts sp
+       join pilot_run_cases prc on prc.service_case_id=sp.case_id
+      where prc.pilot_run_id=$1`,
+      [pilotRunId]
+    ),
+    pool.query(
+      `select count(*)::int as required
+         from fulfillment_plans fp
+         join pilot_run_cases prc on prc.service_case_id=fp.service_case_id
+        where prc.pilot_run_id=$1
+          and fp.status not in ('superseded','completed','cancelled')
+          and fp.recovery_required_at is not null`,
+      [pilotRunId]
     )
   ]);
   const caseStates=Object.fromEntries(cases.rows.map((row:any)=>[row.state,Number(row.total)]));
@@ -372,6 +399,16 @@ export async function getPilotRunHealth(principal:Principal,pilotRunId:string){
     },
     paymentProviderEvents:{
       failed:Number(providerEvents.rows[0]?.failed??0)
+    },
+    disputes:{
+      open:Number(disputes.rows[0]?.open??0)
+    },
+    settlements:{
+      failed:Number(payouts.rows[0]?.failed??0),
+      inFlight:Number(payouts.rows[0]?.in_flight??0)
+    },
+    fulfillment:{
+      recoveryRequired:Number(recovery.rows[0]?.required??0)
     }
   };
 
@@ -393,10 +430,14 @@ export async function getPilotRunHealth(principal:Principal,pilotRunId:string){
   const runtimeCritical=
     operational.notifications.dead+
     operational.exceptions.critical+
-    operational.paymentProviderEvents.failed;
+    operational.paymentProviderEvents.failed+
+    operational.settlements.failed+
+    operational.fulfillment.recoveryRequired;
   const runtimeWarnings=
     operational.notifications.retrying+
-    Math.max(0,operational.exceptions.open-operational.exceptions.critical);
+    Math.max(0,operational.exceptions.open-operational.exceptions.critical)+
+    operational.disputes.open+
+    operational.settlements.inFlight;
   return {
     pilotRunId,
     runStatus:run.status,
