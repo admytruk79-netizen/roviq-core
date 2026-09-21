@@ -46,6 +46,7 @@ export async function createPilotRun(principal:Principal,input:{organizationId:s
     return created.rows[0];
   }catch(error){
     await client.query('rollback').catch(()=>{});
+    if((error as {code?:string}).code==='23505') throw httpError('pilot_run_already_open',409);
     throw error;
   }finally{client.release();}
 }
