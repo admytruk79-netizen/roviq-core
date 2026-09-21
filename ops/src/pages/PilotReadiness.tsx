@@ -229,6 +229,22 @@ export function PilotReadinessPage(){
           </div>
         </div>
 
+        {['ready','active'].includes(run.status)&&<div className="mt-4 border-t border-white/10 pt-4">
+          <div className="text-sm font-semibold">Canonical pilot cases</div>
+          <p className="mt-1 text-xs text-[var(--roviq-muted)]">Link each Service Case used by this run. Pilot completion requires at least one completed linked case and no linked case left non-terminal.</p>
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+            <label className="sr-only" htmlFor={`pilot-case-${run.id}`}>Service Case ID</label>
+            <input id={`pilot-case-${run.id}`} className="roviq-input flex-1" placeholder="Service Case UUID" value={pilotCaseId} onChange={event=>setPilotCaseId(event.target.value)} />
+            <button className="roviq-btn-secondary" disabled={runBusy||!pilotCaseId.trim()} onClick={()=>void linkCase(run.id)}>Link case</button>
+          </div>
+          <div className="mt-3 space-y-2">
+            {(runCases[run.id]??[]).length===0?<div className="text-xs text-[var(--roviq-muted)]">No Service Cases linked yet.</div>:(runCases[run.id]??[]).map(pilotCase=><div key={pilotCase.id} className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm">
+              <span className="min-w-0 truncate font-mono text-xs">{pilotCase.id}</span>
+              <span className="shrink-0 rounded-full border border-white/10 px-2 py-1 text-xs">{humanizeToken(pilotCase.state)}</span>
+            </div>)}
+          </div>
+        </div>}
+
         {run.status==='active'&&<div className="mt-4 border-t border-white/10 pt-4">
           <div className="text-sm font-semibold">Completion evidence</div>
           <p className="mt-1 text-xs text-[var(--roviq-muted)]">Confirm each live workflow was actually exercised before marking the run complete.</p>
