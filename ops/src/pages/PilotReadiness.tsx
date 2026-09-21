@@ -21,6 +21,7 @@ type PilotCheck={
 };
 
 type PilotCase={id:string;state:string;priority:string;created_at:string;updated_at:string;added_at:string};
+type PilotHealth={pilotRunId:string;runStatus:string;status:'healthy'|'attention'|'degraded'|'closed';readiness:PilotReadiness|null;caseStates:Record<string,number>};
 
 type PilotRun={
   id:string;
@@ -64,6 +65,7 @@ export function PilotReadinessPage(){
   const [runBusy,setRunBusy]=useState(false);
   const [pilotCaseId,setPilotCaseId]=useState('');
   const [runCases,setRunCases]=useState<Record<string,PilotCase[]>>({});
+  const [runHealth,setRunHealth]=useState<Record<string,PilotHealth>>({});
   const [evidence,setEvidence]=useState({scheduling:false,repairOrder:false,notifications:false,payments:false,reconciliation:false});
 
   const nativeConnections=useMemo(
@@ -125,8 +127,12 @@ export function PilotReadinessPage(){
   }
 
   async function loadRunCases(id:string){
-    const result=await api.get<{cases:PilotCase[]}>(`/api/admin/pilot/runs/${id}/cases`);
+    const [result,health]=await Promise.all([
+      api.get<{cases:PilotCase[]}>(`/api/admin/pilot/runs/${id}/cases`),
+      api.get<PilotHealth>(`/api/admin/pilot/runs/${id}/health`)
+    ]);
     setRunCases(current=>({...current,[id]:result.cases}));
+    setRunHealth(current=>({...current,[id]:health}));
   }
 
   async function linkCase(id:string){
@@ -220,6 +226,7 @@ export function PilotReadinessPage(){
             <div className="flex items-center gap-2">
               <strong>Pilot {run.id.slice(0,8)}</strong>
               <span className="rounded-full border border-white/10 px-2 py-1 text-xs font-semibold">{humanizeToken(run.status)}</span>
+              {runHealth[run.id]&&<span className={`rounded-full border px-2 py-1 text-xs font-semibold ${runHealth[run.id].status==='degraded'?'border-rose-300/30 bg-rose-400/10 text-rose-100':runHealth[run.id].status==='attention'?'border-amber-300/30 bg-amber-400/10 text-amber-100':'border-emerald-300/30 bg-emerald-400/10 text-emerald-200'}`}>{humanizeToken(runHealth[run.id].status)}</span>}
             </div>
             <p className="mt-1 text-xs text-[var(--roviq-muted)]">Created {new Date(run.created_at).toLocaleString()}</p>
           </div>
