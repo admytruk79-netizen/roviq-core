@@ -54,11 +54,8 @@ export async function generateFulfillmentPlan(principal:Principal,caseId:string)
   // may itself persist a routing decision/recommendation, so holding the case row
   // here would create a cross-connection lock cycle.
   await syncOperationalConstraints(caseId,pool);
-  const snapshot=await loadDependencySnapshot(caseId,pool);
-  const blockers=constraintBlockers(snapshot.constraints);
   const routing=await routeMaintenanceDemand(serviceCase.demand_id);
   const ranked=Array.isArray(routing.ranked)?routing.ranked:[];
-  const status=fulfillmentPlanStatus(ranked.length,blockers);
 
   const client=await pool.connect();
   let plan:any;
@@ -71,6 +68,10 @@ export async function generateFulfillmentPlan(principal:Principal,caseId:string)
     );
     if(!current.rowCount) throw Object.assign(new Error('case_not_found'),{statusCode:404});
     if(current.rows[0].demand_id!==serviceCase.demand_id) throw Object.assign(new Error('case_demand_changed'),{statusCode:409});
+
+    const snapshot=await loadDependencySnapshot(caseId,client);
+    const blockers=constraintBlockers(snapshot.constraints);
+    const status=fulfillmentPlanStatus(ranked.length,blockers);
 
     const versionResult=await client.query(
       `select coalesce(max(version),0)+1 as next_version from fulfillment_plans where service_case_id=$1`,
@@ -89,7 +90,7 @@ export async function generateFulfillmentPlan(principal:Principal,caseId:string)
         service_case_id,version,status,routing_decision_id,selected_actor_id,blockers,dependency_snapshot,created_by_actor_id
        ) values($1,$2,$3,$4,$5,$6,$7,$8) returning *`,
       [
-        caseId,version,status,routing.decision?.id??null,routing.recommendedActorId??null,
+        caseId,version,status,routing.decision?.id??null,null,
         JSON.stringify(blockers),JSON.stringify(snapshot),principal.actorId??null
       ]
     );
