@@ -4,6 +4,7 @@ import { pool } from '../../db/pool.js';
 import { audit } from '../../services/audit.js';
 import { authorizeExistingOfferSelection } from '../../services/selection-authority.js';
 import { requireRole } from '../middleware/principal.js';
+import { getOperationalHealthSummary } from '../../services/operations.js';
 
 const partnerRepairActorTypes = new Set(['partner','shop','repair_shop','service_provider','dealer','dealership']);
 
@@ -153,6 +154,10 @@ export async function adminRoutes(app: FastifyInstance) {
       [query.domain ?? null,query.policyKey ?? null]
     );
     return { policies:r.rows };
+  });
+
+  app.get('/api/admin/operations/health-summary', { preHandler: requireRole('admin') }, async () => {
+    return await getOperationalHealthSummary();
   });
 
   app.get('/api/admin/audit', { preHandler: requireRole('admin') }, async () => {
