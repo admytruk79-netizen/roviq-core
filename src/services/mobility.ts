@@ -60,7 +60,7 @@ export async function assignMobility(principal: Principal, allocationId:string, 
     const a = await client.query('select * from mobility_allocations where id=$1 for update',[allocationId]);
     if (!a.rowCount) { await client.query('rollback'); return null; }
     if(a.rows[0].case_id!==caseId) throw new Error('mobility_case_changed');
-    if (!['requested','reserved'].includes(a.rows[0].state)) throw new Error('invalid_allocation_state');
+    if (!['requested','reserved','declined','failed'].includes(a.rows[0].state)) throw new Error('invalid_allocation_state');
     if (input.resourceId) {
       const resource = await client.query('select * from mobility_resources where id=$1 for update',[input.resourceId]);
       if (!resource.rowCount) throw new Error('resource_not_found');
