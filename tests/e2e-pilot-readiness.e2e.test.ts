@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { pool } from '../src/db/pool.js';
 import { getPilotReadiness } from '../src/services/pilot-readiness.js';
-import { addPilotRunCase, createPilotRun, finishPilotRun, startPilotRun } from '../src/services/pilot-runs.js';
+import { addPilotRunCase, createPilotRun, finishPilotRun, getPilotRunHealth, startPilotRun } from '../src/services/pilot-runs.js';
 
 const admin={role:'admin'} as const;
 
@@ -183,6 +183,37 @@ describe('controlled Shop OS pilot readiness gate',()=>{
     const aborted=await finishPilotRun(admin,created.id,{
       outcome:'aborted',
       abortReason:'Acceptance test verified fail-closed start revalidation.'
+    });
+    expect(aborted.status).toBe('aborted');
+  });
+
+
+  it('detects an active-pilot resource failure without declaring the run healthy',async()=>{
+    const created=await createPilotRun(admin,{organizationId:orgId,locationId});
+    await startPilotRun(admin,created.id);
+
+    const before=await getPilotRunHealth(admin,created.id);
+    expect(['healthy','attention']).toContain(before.status);
+
+    await pool.query(
+      `update service_resources
+          set operational_state='offline',updated_at=now()
+        where organization_id=$1 and location_id=$2 and resource_type='technician'`,
+      [orgId,locationId]
+    );
+    const degraded=await getPilotRunHealth(admin,created.id);
+    expect(degraded.status).toBe('degraded');
+    expect(degraded.readiness?.checks.find((check)=>check.key==='usable_technician')?.status).toBe('blocker');
+
+    await pool.query(
+      `update service_resources
+          set operational_state='available',updated_at=now()
+        where organization_id=$1 and location_id=$2 and resource_type='technician'`,
+      [orgId,locationId]
+    );
+    const aborted=await finishPilotRun(admin,created.id,{
+      outcome:'aborted',
+      abortReason:'Acceptance test verified live resource-failure detection.'
     });
     expect(aborted.status).toBe('aborted');
   });
