@@ -241,6 +241,36 @@ export async function markFulfillmentRecoveryRequired(input:{
   return result.rows[0]??null;
 }
 
+
+async function reconcileAcceptedPlan(caseId:string,planId:string,actorId:string,db:Queryable){
+  const planResult=await db.query(
+    `select status,recovery_required_at
+       from fulfillment_plans
+      where id=$1 and service_case_id=$2
+      for update`,
+    [planId,caseId]
+  );
+  if(!planResult.rowCount) return null;
+  const plan=planResult.rows[0];
+  const unresolved=await db.query(
+    `select count(*)::int as total
+       from case_constraints
+      where service_case_id=$1
+        and status not in ('satisfied','waived')`,
+    [caseId]
+  );
+  const blockedByConstraint=Number(unresolved.rows[0]?.total??0)>0;
+  const nextStatus=plan.recovery_required_at||blockedByConstraint?'blocked':'accepted';
+  const result=await db.query(
+    `update fulfillment_plans
+        set status=$2,selected_actor_id=$3,updated_at=now()
+      where id=$1 and status not in ('completed','cancelled','superseded')
+      returning *`,
+    [planId,nextStatus,actorId]
+  );
+  return result.rows[0]??null;
+}
+
 export async function syncFulfillmentParticipantDecision(input:{
   caseId:string;
   actorId:string;
@@ -292,12 +322,7 @@ export async function syncFulfillmentParticipantDecision(input:{
        where fulfillment_plan_id=$1 and id<>$2 and participant_status='proposed'`,
       [plan.id,candidate.id]
     );
-    await db.query(
-      `update fulfillment_plans
-         set status='accepted',selected_actor_id=$2,updated_at=now()
-       where id=$1 and status in ('feasible','accepted')`,
-      [plan.id,input.actorId]
-    );
+    await reconcileAcceptedPlan(input.caseId,plan.id,input.actorId,db);
   }else{
     await db.query(
       `update fulfillment_plans
@@ -348,6 +373,14 @@ export async function upsertNetworkHandoff(input:{
       referenceType:input.referenceType,
       referenceId:input.referenceId
     },db);
+  }else if(plan){
+    const accepted=await db.query(
+      `select actor_id from participant_acceptances
+        where fulfillment_plan_id=$1 and decision='accepted'
+        order by decided_at desc limit 1`,
+      [plan.id]
+    );
+    if(accepted.rowCount) await reconcileAcceptedPlan(input.caseId,plan.id,accepted.rows[0].actor_id,db);
   }
   return result.rows[0];
 }
