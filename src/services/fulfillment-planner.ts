@@ -59,6 +59,7 @@ export async function generateFulfillmentPlan(principal:Principal,caseId:string)
 
   const client=await pool.connect();
   let plan:any;
+  let blockerCount=0;
   const candidates:any[]=[];
   try{
     await client.query('begin');
@@ -71,6 +72,7 @@ export async function generateFulfillmentPlan(principal:Principal,caseId:string)
 
     const snapshot=await loadDependencySnapshot(caseId,client);
     const blockers=constraintBlockers(snapshot.constraints);
+    blockerCount=blockers.length;
     const status=fulfillmentPlanStatus(ranked.length,blockers);
 
     const versionResult=await client.query(
@@ -124,10 +126,10 @@ export async function generateFulfillmentPlan(principal:Principal,caseId:string)
     version:plan.version,
     status:plan.status,
     candidateCount:candidates.length,
-    blockerCount:blockers.length
+    blockerCount
   });
   await audit(principal,'generate_fulfillment_plan','fulfillment_plan',plan.id,'network_fulfillment_plan_generated',{
-    caseId,version:plan.version,status:plan.status,candidateCount:candidates.length,blockerCount:blockers.length
+    caseId,version:plan.version,status:plan.status,candidateCount:candidates.length,blockerCount
   });
   return {plan,candidates};
 }
