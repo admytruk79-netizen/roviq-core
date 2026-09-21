@@ -16,6 +16,7 @@ export function Layout() {
 
   return (
     <div className="roviq-shell">
+      <a href="#main-content" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-lg focus:bg-white focus:px-3 focus:py-2 focus:text-black">Skip to main content</a>
       <header className="roviq-header">
         <div className="mx-auto max-w-7xl px-4 py-2.5 sm:px-6 sm:py-3">
           <div className="flex items-center justify-between gap-3">
@@ -51,7 +52,7 @@ export function Layout() {
           </div>
         </div>
       </header>
-      <main className="roviq-grid-glow mx-auto min-h-[calc(100vh-60px)] max-w-7xl px-4 py-5 sm:px-6 sm:py-7">
+      <main id="main-content" tabIndex={-1} className="roviq-grid-glow mx-auto min-h-[calc(100vh-60px)] max-w-7xl px-4 py-5 sm:px-6 sm:py-7">
         <Outlet />
       </main>
     </div>
