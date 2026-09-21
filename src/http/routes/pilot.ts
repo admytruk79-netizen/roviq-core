@@ -73,7 +73,11 @@ export async function pilotRoutes(app:FastifyInstance){
       return {run:await finishPilotRun(req.principal,id,body)};
     }catch(error){
       const statusCode=(error as {statusCode?:number}).statusCode;
-      if(statusCode) return reply.code(statusCode).send({error:error instanceof Error?error.message:'pilot_run_error',...((error as {missingEvidence?:string[]}).missingEvidence?{missingEvidence:(error as {missingEvidence:string[]}).missingEvidence}:{})});
+      if(statusCode) return reply.code(statusCode).send({
+        error:error instanceof Error?error.message:'pilot_run_error',
+        ...((error as {missingEvidence?:string[]}).missingEvidence?{missingEvidence:(error as {missingEvidence:string[]}).missingEvidence}:{}),
+        ...((error as {blockers?:unknown[]}).blockers?{blockers:(error as {blockers:unknown[]}).blockers}:{})
+      });
       throw error;
     }
   });
