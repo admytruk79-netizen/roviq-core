@@ -465,3 +465,151 @@ export async function getPilotRunHealth(principal:Principal,pilotRunId:string){
     operational
   };
 }
+
+
+export async function getPilotRunMetrics(principal:Principal,pilotRunId:string){
+  if(principal.role!=='admin') throw httpError('forbidden',403);
+  const runResult=await pool.query(`select * from pilot_runs where id=$1`,[pilotRunId]);
+  if(!runResult.rowCount) throw httpError('pilot_run_not_found',404);
+  const run=runResult.rows[0];
+  await assertScope(principal,run.organization_id,run.location_id);
+
+  const [cases,appointments,repairOrders,transport,mobility,parts,notifications,payments,disputes,payouts,exceptions]=await Promise.all([
+    pool.query(
+      `select
+         count(*)::int as total,
+         count(*) filter(where sc.state='completed')::int as completed,
+         count(*) filter(where sc.state='cancelled')::int as cancelled,
+         coalesce(avg(extract(epoch from (sc.completed_at-sc.created_at))/60)
+           filter(where sc.completed_at is not null),0)::numeric as avg_completion_minutes
+       from pilot_run_cases prc
+       join service_cases sc on sc.id=prc.service_case_id
+      where prc.pilot_run_id=$1`,
+      [pilotRunId]
+    ),
+    pool.query(
+      `select
+         count(*)::int as total,
+         count(*) filter(where a.appointment_status='completed')::int as completed,
+         count(*) filter(where a.appointment_status='no_show')::int as no_show,
+         count(*) filter(where a.appointment_status='cancelled')::int as cancelled
+       from roviq_appointments a
+       join pilot_run_cases prc on prc.service_case_id=a.service_case_id
+      where prc.pilot_run_id=$1`,
+      [pilotRunId]
+    ),
+    pool.query(
+      `select
+         count(*)::int as total,
+         count(*) filter(where ro.status in ('completed','closed'))::int as completed
+       from shop_repair_orders ro
+       join pilot_run_cases prc on prc.service_case_id=ro.service_case_id
+      where prc.pilot_run_id=$1`,
+      [pilotRunId]
+    ),
+    pool.query(
+      `select
+         count(*)::int as total,
+         count(*) filter(where td.status='delivered')::int as delivered,
+         count(*) filter(where td.status='failed')::int as failed
+       from transport_dispatches td
+       join pilot_run_cases prc on prc.service_case_id=td.case_id
+      where prc.pilot_run_id=$1`,
+      [pilotRunId]
+    ),
+    pool.query(
+      `select
+         count(*)::int as total,
+         count(*) filter(where ma.state='completed')::int as completed,
+         count(*) filter(where ma.state='failed')::int as failed
+       from mobility_allocations ma
+       join pilot_run_cases prc on prc.service_case_id=ma.case_id
+      where prc.pilot_run_id=$1`,
+      [pilotRunId]
+    ),
+    pool.query(
+      `select
+         count(*)::int as total,
+         count(*) filter(where po.status='delivered')::int as delivered,
+         count(*) filter(where po.status='failed')::int as failed
+       from parts_orders po
+       join pilot_run_cases prc on prc.service_case_id=po.case_id
+      where prc.pilot_run_id=$1`,
+      [pilotRunId]
+    ),
+    pool.query(
+      `select
+         count(*)::int as total,
+         count(*) filter(where n.state='sent')::int as delivered,
+         count(*) filter(where n.state='dead')::int as dead,
+         count(*) filter(where n.state='pending' and coalesce(n.attempt_count,0)>0)::int as retrying
+       from notification_outbox n
+       join pilot_run_cases prc on prc.service_case_id=n.case_id
+      where prc.pilot_run_id=$1`,
+      [pilotRunId]
+    ),
+    pool.query(
+      `select
+         count(*)::int as total,
+         count(*) filter(where pi.state in ('captured','partially_refunded','refunded'))::int as captured,
+         count(*) filter(where pi.state='failed')::int as failed,
+         coalesce(sum(pi.amount) filter(where pi.state in ('captured','partially_refunded','refunded')),0)::numeric as captured_amount
+       from payment_intents pi
+       join pilot_run_cases prc on prc.service_case_id=pi.case_id
+      where prc.pilot_run_id=$1`,
+      [pilotRunId]
+    ),
+    pool.query(
+      `select
+         count(*)::int as total,
+         count(*) filter(where d.status in ('needs_response','under_review'))::int as open,
+         count(*) filter(where d.status='lost')::int as lost
+       from payment_disputes d
+       join payment_intents pi on pi.id=d.payment_intent_id
+       join pilot_run_cases prc on prc.service_case_id=pi.case_id
+      where prc.pilot_run_id=$1`,
+      [pilotRunId]
+    ),
+    pool.query(
+      `select
+         count(*)::int as total,
+         count(*) filter(where sp.state='paid')::int as paid,
+         count(*) filter(where sp.state='failed')::int as failed,
+         coalesce(sum(sp.amount) filter(where sp.state='paid'),0)::numeric as paid_amount
+       from settlement_payouts sp
+       join pilot_run_cases prc on prc.service_case_id=sp.case_id
+      where prc.pilot_run_id=$1`,
+      [pilotRunId]
+    ),
+    pool.query(
+      `select
+         count(*)::int as total,
+         count(*) filter(where ce.state='open')::int as open,
+         count(*) filter(where ce.state='open' and ce.severity='critical')::int as critical
+       from case_exceptions ce
+       join pilot_run_cases prc on prc.service_case_id=ce.case_id
+      where prc.pilot_run_id=$1`,
+      [pilotRunId]
+    )
+  ]);
+
+  const numberRow=(row:any)=>Object.fromEntries(
+    Object.entries(row??{}).map(([key,value])=>[key,Number(value??0)])
+  );
+  return {
+    pilotRunId,
+    generatedAt:new Date().toISOString(),
+    runStatus:run.status,
+    cases:numberRow(cases.rows[0]),
+    appointments:numberRow(appointments.rows[0]),
+    repairOrders:numberRow(repairOrders.rows[0]),
+    transport:numberRow(transport.rows[0]),
+    mobility:numberRow(mobility.rows[0]),
+    parts:numberRow(parts.rows[0]),
+    notifications:numberRow(notifications.rows[0]),
+    payments:numberRow(payments.rows[0]),
+    disputes:numberRow(disputes.rows[0]),
+    settlements:numberRow(payouts.rows[0]),
+    exceptions:numberRow(exceptions.rows[0])
+  };
+}
