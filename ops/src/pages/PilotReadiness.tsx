@@ -20,6 +20,22 @@ type PilotCheck={
   evidence?:Record<string,unknown>;
 };
 
+type PilotRun={
+  id:string;
+  organization_id:string;
+  location_id:string;
+  organization_name?:string|null;
+  location_name?:string|null;
+  status:'planned'|'ready'|'active'|'completed'|'aborted';
+  readiness_snapshot:Record<string,unknown>;
+  evidence:Record<string,unknown>;
+  started_at?:string|null;
+  completed_at?:string|null;
+  aborted_at?:string|null;
+  abort_reason?:string|null;
+  created_at:string;
+};
+
 type PilotReadiness={
   scope:{organizationId:string;locationId:string|null};
   generatedAt:string;
@@ -42,6 +58,9 @@ export function PilotReadinessPage(){
   const [readiness,setReadiness]=useState<PilotReadiness|null>(null);
   const [loading,setLoading]=useState(true);
   const [error,setError]=useState('');
+  const [runs,setRuns]=useState<PilotRun[]>([]);
+  const [runBusy,setRunBusy]=useState(false);
+  const [evidence,setEvidence]=useState({scheduling:false,repairOrder:false,notifications:false,payments:false,reconciliation:false});
 
   const nativeConnections=useMemo(
     ()=>connections.filter(connection=>connection.mode==='roviq_native'),
@@ -53,8 +72,9 @@ export function PilotReadinessPage(){
     setLoading(true);
     setError('');
     try{
-      const result=await api.get<{connections:Connection[]}>('/api/admin/integrations/connections');
+      const [result,pilotRuns]=await Promise.all([api.get<{connections:Connection[]}>('/api/admin/integrations/connections'),api.get<{runs:PilotRun[]}>('/api/admin/pilot/runs')]);
       setConnections(result.connections);
+      setRuns(pilotRuns.runs);
       const first=result.connections.find(connection=>connection.mode==='roviq_native');
       if(first&&!selected) setSelected(first.id);
     }catch(err){
