@@ -4,6 +4,7 @@ import { pool } from '../../db/pool.js';
 import { hashPassword, issueAccessToken, verifyPasswordConstantTime } from '../../services/auth.js';
 import { audit } from '../../services/audit.js';
 import { requireRole } from '../middleware/principal.js';
+import { env } from '../../config/env.js';
 
 const loginBody = z.object({ email: z.string().email(), password: z.string().min(8) });
 const createIdentityBody = z.object({
@@ -13,6 +14,11 @@ const createIdentityBody = z.object({
 });
 
 type TestRole='customer'|'partner'|'tow'|'diagnostic'|'parts';
+
+async function requireAdminTestingEnabled(_req:any,reply:any){
+  if(!env.ALLOW_DEV_HEADERS) return reply.code(404).send({error:'not_found'});
+}
+
 
 async function ensurePartnerTestReadiness(actorId:string, domainId:string) {
   const client=await pool.connect();
@@ -156,7 +162,7 @@ export async function authRoutes(app: FastifyInstance) {
     return { accessToken, tokenType:'Bearer', expiresIn:28800, principal:{ role:identity.role, actorId:identity.actor_id } };
   });
 
-  app.post('/api/admin/testing/customer-session', { preHandler: requireRole('admin') }, async (req, reply) => adminTestSession(req,reply,'customer'));
+  app.post('/api/admin/testing/customer-session', { preHandler: [requireRole('admin'),requireAdminTestingEnabled] }, async (req, reply) => adminTestSession(req,reply,'customer'));
   app.post('/api/admin/testing/partner-session', { preHandler: requireRole('admin') }, async (req, reply) => adminTestSession(req,reply,'partner'));
   app.post('/api/admin/testing/tow-session', { preHandler: requireRole('admin') }, async (req, reply) => adminTestSession(req,reply,'tow'));
   app.post('/api/admin/testing/diagnostic-session', { preHandler: requireRole('admin') }, async (req, reply) => adminTestSession(req,reply,'diagnostic'));
