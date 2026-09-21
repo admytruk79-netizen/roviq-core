@@ -270,8 +270,10 @@ export async function getNotificationDeliverySummary(input:{
     )`;
   const counts=await pool.query(`
     select
-      count(*) filter(where n.state='pending' and coalesce(n.attempt_count,0)=0)::int as queued,
-      count(*) filter(where n.state='pending' and coalesce(n.attempt_count,0)>0)::int as retrying,
+      count(*) filter(where n.state='pending' and coalesce(n.attempt_count,0)=0
+        and (n.locked_at is null or n.locked_at<now()-interval '5 minutes'))::int as queued,
+      count(*) filter(where n.state='pending' and coalesce(n.attempt_count,0)>0
+        and (n.locked_at is null or n.locked_at<now()-interval '5 minutes'))::int as retrying,
       count(*) filter(where n.state='sent')::int as delivered,
       count(*) filter(where n.state='dead')::int as failed,
       count(*) filter(where n.state='pending' and n.locked_at is not null and n.locked_at>=now()-interval '5 minutes')::int as processing
