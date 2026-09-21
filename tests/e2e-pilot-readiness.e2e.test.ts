@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { pool } from '../src/db/pool.js';
 import { getPilotReadiness } from '../src/services/pilot-readiness.js';
+import { createPilotRun, finishPilotRun, startPilotRun } from '../src/services/pilot-runs.js';
 
 const admin={role:'admin'} as const;
 
@@ -85,6 +86,7 @@ describe('controlled Shop OS pilot readiness gate',()=>{
         [previousSms.provider,previousSms.enabled,JSON.stringify(previousSms.configuration??{}),previousSms.updated_at]
       );
     }
+    await pool.query('delete from pilot_runs where organization_id=$1',[orgId]).catch(()=>{});
     await pool.query('delete from organizations where id=$1',[orgId]).catch(()=>{});
     for(const [key,value] of Object.entries(previousEnv)){
       if(value===undefined) delete process.env[key];
@@ -103,6 +105,37 @@ describe('controlled Shop OS pilot readiness gate',()=>{
     expect(result.checks.find((check)=>check.key==='future_capacity')?.status).toBe('pass');
     expect(result.checks.find((check)=>check.key==='external_notifications')?.status).toBe('pass');
     expect(result.checks.find((check)=>check.key==='payment_provider')?.status).toBe('pass');
+  });
+
+
+  it('records an auditable ready-to-active-to-completed pilot lifecycle',async()=>{
+    const created=await createPilotRun(admin,{organizationId:orgId,locationId});
+    expect(created.status).toBe('ready');
+    expect(created.readiness_snapshot.ready).toBe(true);
+
+    const started=await startPilotRun(admin,created.id);
+    expect(started.status).toBe('active');
+    expect(started.started_at).toBeTruthy();
+
+    const completed=await finishPilotRun(admin,created.id,{
+      outcome:'completed',
+      evidence:{
+        scheduling:'passed',
+        repairOrder:'passed',
+        notifications:'passed',
+        payments:'passed',
+        reconciliation:'passed'
+      }
+    });
+    expect(completed.status).toBe('completed');
+    expect(completed.completed_at).toBeTruthy();
+    expect(completed.evidence.scheduling).toBe('passed');
+
+    const events=await pool.query(
+      `select event_type from events where aggregate_type='pilot_run' and aggregate_id=$1 order by occurred_at asc`,
+      [created.id]
+    );
+    expect(events.rows.map((row:any)=>row.event_type)).toEqual(['PILOT_READY','PILOT_STARTED','PILOT_COMPLETED']);
   });
 
   it('fails closed when native capacity is removed from the pilot location',async()=>{
