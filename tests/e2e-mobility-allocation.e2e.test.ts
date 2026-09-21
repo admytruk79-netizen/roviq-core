@@ -91,6 +91,13 @@ describe('mobility allocation end-to-end lifecycle', () => {
     expect(mismatchRes.statusCode).toBe(409);
     expect(JSON.parse(mismatchRes.body).error).toBe('resource_provider_mismatch');
 
+    const missingProviderRes = await app.inject({
+      method: 'POST', url: `/api/admin/mobility/${allocationId}/assign`, headers: adminHeaders(),
+      payload: { providerActorId: '00000000-0000-4000-8000-000000009999' }
+    });
+    expect(missingProviderRes.statusCode).toBe(404);
+    expect(JSON.parse(missingProviderRes.body).error).toBe('provider_not_found');
+
     const assignRes = await app.inject({
       method: 'POST', url: `/api/admin/mobility/${allocationId}/assign`, headers: adminHeaders(),
       payload: { providerActorId: fleetActorId, resourceId }
