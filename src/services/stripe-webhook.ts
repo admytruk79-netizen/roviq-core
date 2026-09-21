@@ -96,7 +96,22 @@ async function beginProviderEvent(event:StripeEvent){
      returning id`,
     [event.id,event.type,JSON.stringify(event)]
   );
-  return Boolean(inserted.rowCount);
+  if(inserted.rowCount) return true;
+
+  const retry=await pool.query(
+    `update payment_provider_events
+        set processing_state='received',
+            event_type=$2,
+            payload=$3,
+            error_message=null,
+            processed_at=null
+      where provider='stripe'
+        and provider_event_id=$1
+        and processing_state='failed'
+      returning id`,
+    [event.id,event.type,JSON.stringify(event)]
+  );
+  return Boolean(retry.rowCount);
 }
 
 async function finishProviderEvent(eventId:string,state:'processed'|'ignored'|'failed',paymentIntentId:string|null,errorMessage:string|null=null){
