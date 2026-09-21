@@ -232,3 +232,44 @@ export async function finishPilotRun(principal:Principal,pilotRunId:string,input
     throw error;
   }finally{client.release();}
 }
+
+
+export async function getPilotRunHealth(principal:Principal,pilotRunId:string){
+  if(principal.role!=='admin') throw httpError('forbidden',403);
+  const runResult=await pool.query(`select * from pilot_runs where id=$1`,[pilotRunId]);
+  if(!runResult.rowCount) throw httpError('pilot_run_not_found',404);
+  const run=runResult.rows[0];
+  await assertScope(principal,run.organization_id,run.location_id);
+
+  const cases=await pool.query(
+    `select sc.state,count(*)::int as total
+       from pilot_run_cases prc
+       join service_cases sc on sc.id=prc.service_case_id
+      where prc.pilot_run_id=$1
+      group by sc.state`,
+    [pilotRunId]
+  );
+  const caseStates=Object.fromEntries(cases.rows.map((row:any)=>[row.state,Number(row.total)]));
+
+  if(['completed','aborted'].includes(run.status)){
+    return {
+      pilotRunId,
+      runStatus:run.status,
+      status:'closed' as const,
+      readiness:null,
+      caseStates
+    };
+  }
+
+  const readiness=await getPilotReadiness(principal,{
+    organizationId:run.organization_id,
+    locationId:run.location_id
+  });
+  return {
+    pilotRunId,
+    runStatus:run.status,
+    status:!readiness.ready?'degraded' as const:readiness.warningCount>0?'attention' as const:'healthy' as const,
+    readiness,
+    caseStates
+  };
+}
