@@ -448,6 +448,42 @@ describe('controlled Shop OS pilot readiness gate',()=>{
   });
 
 
+
+  it('blocks completion when a completed case lacks canonical fulfillment completion truth',async()=>{
+    const created=await createPilotRun(admin,{organizationId:orgId,locationId});
+    await startPilotRun(admin,created.id);
+
+    const domain=await pool.query(`select id from domains where code='maintenance' limit 1`);
+    const serviceCase=await pool.query(
+      `insert into service_cases(domain_id,location_id,state,current_owner_role,current_owner_actor_id,completed_at)
+       values($1,$2,'completed','partner',$3,now()) returning id`,
+      [domain.rows[0].id,locationId,partnerActorId]
+    );
+    await addPilotRunCase(admin,created.id,serviceCase.rows[0].id);
+    const evidence={
+      scheduling:'passed',
+      repairOrder:'passed',
+      notifications:'passed',
+      payments:'passed',
+      reconciliation:'passed'
+    };
+
+    await expect(finishPilotRun(admin,created.id,{outcome:'completed',evidence}))
+      .rejects.toMatchObject({
+        message:'pilot_operational_blockers',
+        statusCode:409,
+        blockers:expect.arrayContaining([
+          expect.objectContaining({kind:'completion_truth_missing',caseId:serviceCase.rows[0].id})
+        ])
+      });
+
+    const aborted=await finishPilotRun(admin,created.id,{
+      outcome:'aborted',
+      abortReason:'Acceptance test verified canonical completion truth is mandatory.'
+    });
+    expect(aborted.status).toBe('aborted');
+  });
+
   it('blocks pilot completion while linked operational failures remain unresolved',async()=>{
     const created=await createPilotRun(admin,{organizationId:orgId,locationId});
     await startPilotRun(admin,created.id);
