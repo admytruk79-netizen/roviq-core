@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { pool } from '../src/db/pool.js';
-import { upsertNetworkHandoff } from '../src/services/network-execution.js';
+import { syncFulfillmentParticipantDecision, upsertNetworkHandoff } from '../src/services/network-execution.js';
 
 describe('network execution adversarial invariants',()=>{
   let caseId:string;
@@ -25,6 +25,84 @@ describe('network execution adversarial invariants',()=>{
   });
 
   afterAll(async()=>{await pool.end();});
+
+
+  it('does not mark a provider-accepted plan executable while canonical constraints are pending',async()=>{
+    const domain=await pool.query(`select id from domains where code='maintenance' limit 1`);
+    const serviceCase=await pool.query(
+      `insert into service_cases(domain_id,case_type,state)
+       values($1,'maintenance','provider_pending') returning id`,
+      [domain.rows[0].id]
+    );
+    const constrainedCaseId=serviceCase.rows[0].id as string;
+    const provider=await pool.query(
+      `insert into actors(actor_type,status) values('shop','active') returning id`
+    );
+    const providerId=provider.rows[0].id as string;
+    const plan=await pool.query(
+      `insert into fulfillment_plans(service_case_id,version,status,blockers,dependency_snapshot)
+       values($1,1,'feasible','[]'::jsonb,'{}'::jsonb) returning id`,
+      [constrainedCaseId]
+    );
+    const candidate=await pool.query(
+      `insert into fulfillment_candidates(fulfillment_plan_id,actor_id,rank,serviceability,signals)
+       values($1,$2,1,'{}'::jsonb,'{}'::jsonb) returning id`,
+      [plan.rows[0].id,providerId]
+    );
+    await pool.query(
+      `insert into case_constraints(service_case_id,constraint_type,status,details)
+       values($1,'parts','required','{}'::jsonb)`,
+      [constrainedCaseId]
+    );
+
+    await syncFulfillmentParticipantDecision({
+      caseId:constrainedCaseId,
+      actorId:providerId,
+      decision:'accepted',
+      sourceType:'match_offer',
+      sourceReferenceId:'offer-pending-parts'
+    });
+
+    const blocked=await pool.query(
+      `select status,selected_actor_id,recovery_required_at from fulfillment_plans where id=$1`,
+      [plan.rows[0].id]
+    );
+    expect(blocked.rows[0].status).toBe('blocked');
+    expect(blocked.rows[0].selected_actor_id).toBe(providerId);
+    expect(blocked.rows[0].recovery_required_at).toBeNull();
+
+    await pool.query(
+      `update case_constraints set status='satisfied',updated_at=now()
+        where service_case_id=$1 and constraint_type='parts'`,
+      [constrainedCaseId]
+    );
+    await upsertNetworkHandoff({
+      caseId:constrainedCaseId,
+      handoffType:'service_provider',
+      participantActorId:providerId,
+      referenceType:'match_offer',
+      referenceId:'offer-pending-parts',
+      status:'accepted'
+    });
+
+    const accepted=await pool.query(
+      `select status,selected_actor_id,recovery_required_at from fulfillment_plans where id=$1`,
+      [plan.rows[0].id]
+    );
+    expect(accepted.rows[0].status).toBe('accepted');
+    expect(accepted.rows[0].selected_actor_id).toBe(providerId);
+    expect(accepted.rows[0].recovery_required_at).toBeNull();
+
+    const participant=await pool.query(
+      `select decision,fulfillment_candidate_id from participant_acceptances
+        where fulfillment_plan_id=$1 and actor_id=$2`,
+      [plan.rows[0].id,providerId]
+    );
+    expect(participant.rows[0]).toMatchObject({
+      decision:'accepted',
+      fulfillment_candidate_id:candidate.rows[0].id
+    });
+  });
 
   it('does not rebind a historical handoff to a later fulfillment plan',async()=>{
     const initial=await upsertNetworkHandoff({
