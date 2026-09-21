@@ -377,6 +377,52 @@ describe('controlled Shop OS pilot readiness gate',()=>{
     expect(aborted.status).toBe('aborted');
   });
 
+
+  it('blocks pilot completion while linked operational failures remain unresolved',async()=>{
+    const created=await createPilotRun(admin,{organizationId:orgId,locationId});
+    await startPilotRun(admin,created.id);
+
+    const domain=await pool.query(`select id from domains where code='maintenance' limit 1`);
+    const serviceCase=await pool.query(
+      `insert into service_cases(domain_id,location_id,state,current_owner_role,current_owner_actor_id,completed_at)
+       values($1,$2,'completed','partner',$3,now()) returning id`,
+      [domain.rows[0].id,locationId,partnerActorId]
+    );
+    await addPilotRunCase(admin,created.id,serviceCase.rows[0].id);
+    const notification=await pool.query(
+      `insert into notification_outbox(
+         case_id,channel,recipient_type,recipient_id,template_key,payload,state,attempt_count,max_attempts,last_error
+       ) values($1,'sms','actor',$2,'pilot_completion_blocker','{}'::jsonb,'dead',5,5,'provider_down')
+       returning id`,
+      [serviceCase.rows[0].id,partnerActorId]
+    );
+    const evidence={
+      scheduling:'passed',
+      repairOrder:'passed',
+      notifications:'passed',
+      payments:'passed',
+      reconciliation:'passed'
+    };
+
+    await expect(finishPilotRun(admin,created.id,{outcome:'completed',evidence}))
+      .rejects.toMatchObject({
+        message:'pilot_operational_blockers',
+        statusCode:409,
+        blockers:expect.arrayContaining([
+          expect.objectContaining({kind:'notification_delivery',id:notification.rows[0].id})
+        ])
+      });
+
+    await pool.query(
+      `update notification_outbox
+          set state='sent',sent_at=now(),last_error=null,locked_at=null,locked_by=null
+        where id=$1`,
+      [notification.rows[0].id]
+    );
+    const completed=await finishPilotRun(admin,created.id,{outcome:'completed',evidence});
+    expect(completed.status).toBe('completed');
+  });
+
   it('keeps scoped admins inside their own pilot organization and location',async()=>{
     const scopedAdminActor=await pool.query(
       `insert into actors(actor_type,status,organization_id,location_id,attributes)
