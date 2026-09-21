@@ -116,3 +116,19 @@ jobs:
         run: npm run db:migrate
       - name: Run full Core end-to-end acceptance suite
         run: npm run test:e2e
+      - name: Prove database backup and restore
+        shell: bash
+        run: |
+          set -euo pipefail
+          pg_dump "$DATABASE_URL" --format=custom --no-owner --no-acl --file=/tmp/roviq-acceptance.dump
+          dropdb --if-exists --host=localhost --username=postgres roviq_restore_test
+          createdb --host=localhost --username=postgres roviq_restore_test
+          pg_restore --host=localhost --username=postgres --dbname=roviq_restore_test --no-owner --no-acl /tmp/roviq-acceptance.dump
+          psql "postgresql://postgres:postgres@localhost:5432/roviq_restore_test" -v ON_ERROR_STOP=1 <<'SQL'
+          select case when count(*) > 0 then 1 else 1/0 end as migrations_restored from schema_migrations;
+          select case when to_regclass('public.service_cases') is not null then 1 else 1/0 end as service_cases_restored;
+          select case when to_regclass('public.payment_intents') is not null then 1 else 1/0 end as payments_restored;
+          select case when to_regclass('public.audit_log') is not null then 1 else 1/0 end as audit_restored;
+          SQL
+          test -s /tmp/roviq-acceptance.dump
+          echo "Backup/restore evidence: $(du -h /tmp/roviq-acceptance.dump | cut -f1) dump restored successfully."
