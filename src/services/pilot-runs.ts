@@ -51,11 +51,39 @@ export async function createPilotRun(principal:Principal,input:{organizationId:s
   }finally{client.release();}
 }
 
+async function assertCaseBelongsToPilot(caseId:string,organizationId:string,locationId:string){
+  const linked=await pool.query(`
+    select exists(
+      select 1
+      from service_cases sc
+      left join actors owner on owner.id=sc.current_owner_actor_id
+      left join actors selected on selected.id=sc.selected_actor_id
+      left join actors recommended on recommended.id=sc.recommended_actor_id
+      where sc.id=$1 and (
+        (owner.organization_id=$2 and (owner.location_id=$3 or owner.location_id is null))
+        or (selected.organization_id=$2 and (selected.location_id=$3 or selected.location_id is null))
+        or (recommended.organization_id=$2 and (recommended.location_id=$3 or recommended.location_id is null))
+        or exists(
+          select 1 from matches_offers mo
+          join actors provider on provider.id=mo.actor_id
+          where mo.case_id=sc.id
+            and mo.outcome='accepted'
+            and provider.organization_id=$2
+            and (provider.location_id=$3 or provider.location_id is null)
+        )
+      )
+    ) as linked`,
+    [caseId,organizationId,locationId]
+  );
+  if(!linked.rows[0]?.linked) throw httpError('pilot_case_scope_mismatch',409);
+}
+
 export async function listPilotRuns(principal:Principal){
   if(principal.role!=='admin') throw httpError('forbidden',403);
   const scope=await getAdminActorScope(principal,pool);
   const result=await pool.query(
-    `select pr.*,o.display_name as organization_name,l.name as location_name
+    `select pr.*,o.display_name as organization_name,l.name as location_name,
+       (select count(*)::int from pilot_run_cases prc where prc.pilot_run_id=pr.id) as case_count
        from pilot_runs pr
        join organizations o on o.id=pr.organization_id
        join locations l on l.id=pr.location_id
@@ -64,6 +92,42 @@ export async function listPilotRuns(principal:Principal){
       order by pr.created_at desc
       limit 100`,
     [scope?.organizationId??null,scope?.locationId??null]
+  );
+  return result.rows;
+}
+
+
+export async function addPilotRunCase(principal:Principal,pilotRunId:string,caseId:string){
+  if(principal.role!=='admin') throw httpError('forbidden',403);
+  const run=await pool.query(`select * from pilot_runs where id=$1`,[pilotRunId]);
+  if(!run.rowCount) throw httpError('pilot_run_not_found',404);
+  const row=run.rows[0];
+  await assertScope(principal,row.organization_id,row.location_id);
+  if(!['ready','active'].includes(row.status)) throw httpError('pilot_run_not_open',409);
+  await assertCaseBelongsToPilot(caseId,row.organization_id,row.location_id);
+  await pool.query(
+    `insert into pilot_run_cases(pilot_run_id,service_case_id,added_by_actor_id)
+     values($1,$2,$3)
+     on conflict(pilot_run_id,service_case_id) do nothing`,
+    [pilotRunId,caseId,principal.actorId??null]
+  );
+  await audit(principal,'add_pilot_case','pilot_run',pilotRunId,'controlled_pilot_gate',{caseId});
+  return getPilotRunCases(principal,pilotRunId);
+}
+
+export async function getPilotRunCases(principal:Principal,pilotRunId:string){
+  if(principal.role!=='admin') throw httpError('forbidden',403);
+  const run=await pool.query(`select * from pilot_runs where id=$1`,[pilotRunId]);
+  if(!run.rowCount) throw httpError('pilot_run_not_found',404);
+  const row=run.rows[0];
+  await assertScope(principal,row.organization_id,row.location_id);
+  const result=await pool.query(
+    `select sc.id,sc.state,sc.priority,sc.created_at,sc.updated_at,prc.added_at
+       from pilot_run_cases prc
+       join service_cases sc on sc.id=prc.service_case_id
+      where prc.pilot_run_id=$1
+      order by prc.added_at asc,sc.id`,
+    [pilotRunId]
   );
   return result.rows;
 }
@@ -117,6 +181,19 @@ export async function finishPilotRun(principal:Principal,pilotRunId:string,input
     await assertScope(principal,row.organization_id,row.location_id);
     if(!['ready','active'].includes(row.status)) throw httpError('pilot_run_not_finishable',409);
     if(input.outcome==='completed'&&row.status!=='active') throw httpError('pilot_run_not_finishable',409);
+    if(input.outcome==='completed'){
+      const linkedCases=await client.query(
+        `select sc.id,sc.state
+           from pilot_run_cases prc
+           join service_cases sc on sc.id=prc.service_case_id
+          where prc.pilot_run_id=$1
+          order by prc.added_at asc`,
+        [pilotRunId]
+      );
+      if(!linkedCases.rowCount) throw httpError('pilot_case_required',409);
+      if(linkedCases.rows.some((caseRow:any)=>!['completed','cancelled'].includes(caseRow.state))) throw httpError('pilot_cases_not_terminal',409);
+      if(!linkedCases.rows.some((caseRow:any)=>caseRow.state==='completed')) throw httpError('pilot_completed_case_required',409);
+    }
     if(input.outcome==='aborted'&&!input.abortReason?.trim()) throw httpError('pilot_abort_reason_required',400);
 
     const updated=await client.query(
