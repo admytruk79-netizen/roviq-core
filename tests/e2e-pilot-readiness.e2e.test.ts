@@ -529,6 +529,46 @@ describe('controlled Shop OS pilot readiness gate',()=>{
     expect(completed.status).toBe('completed');
   });
 
+
+  it('prevents scoped admins from attaching an unrelated tenant case to a pilot run',async()=>{
+    const created=await createPilotRun(admin,{organizationId:orgId,locationId});
+    const scopedAdminActor=await pool.query(
+      `insert into actors(actor_type,status,organization_id,location_id,attributes)
+       values('partner','active',$1,$2,'{}'::jsonb) returning id`,
+      [orgId,locationId]
+    );
+    const scopedAdmin={role:'admin',actorId:scopedAdminActor.rows[0].id} as const;
+
+    const otherOrg=await pool.query(
+      `insert into organizations(organization_type,display_name,status)
+       values('repair_partner',$1,'active') returning id`,
+      [`Foreign Pilot Tenant ${Date.now()}-${Math.random()}`]
+    );
+    const otherLocation=await pool.query(
+      `insert into locations(organization_id,name,country_code,region,city)
+       values($1,'Foreign Shop','US','OR','Portland') returning id`,
+      [otherOrg.rows[0].id]
+    );
+    const domain=await pool.query(`select id from domains where code='maintenance' limit 1`);
+    const foreignCase=await pool.query(
+      `insert into service_cases(domain_id,location_id,case_type,state)
+       values($1,$2,'maintenance','provider_selection') returning id`,
+      [domain.rows[0].id,otherLocation.rows[0].id]
+    );
+
+    await expect(addPilotRunCase(scopedAdmin,created.id,foreignCase.rows[0].id))
+      .rejects.toMatchObject({message:'pilot_case_scope_mismatch',statusCode:409});
+
+    const cases=await pool.query(`select service_case_id from pilot_run_cases where pilot_run_id=$1`,[created.id]);
+    expect(cases.rowCount).toBe(0);
+
+    await finishPilotRun(admin,created.id,{
+      outcome:'aborted',
+      abortReason:'Acceptance test verified tenant isolation on pilot case membership.'
+    });
+    await pool.query('delete from organizations where id=$1',[otherOrg.rows[0].id]).catch(()=>{});
+  });
+
   it('keeps scoped admins inside their own pilot organization and location',async()=>{
     const scopedAdminActor=await pool.query(
       `insert into actors(actor_type,status,organization_id,location_id,attributes)
