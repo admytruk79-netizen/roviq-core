@@ -64,8 +64,8 @@ export async function mobilityRoutes(app: FastifyInstance) {
       return { allocation };
     } catch (e) {
       const m=e instanceof Error?e.message:'assignment_failed';
-      if (['resource_not_found'].includes(m)) return reply.code(404).send({ error:m });
-      if (['resource_provider_mismatch','resource_unavailable','invalid_allocation_state'].includes(m)) return reply.code(409).send({ error:m });
+      if (['resource_not_found','provider_not_found'].includes(m)) return reply.code(404).send({ error:m });
+      if (['resource_provider_mismatch','resource_unavailable','invalid_allocation_state','provider_not_available'].includes(m)) return reply.code(409).send({ error:m });
       throw e;
     }
   });
