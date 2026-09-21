@@ -76,6 +76,8 @@ jobs:
         env:
           VITE_API_BASE_URL: https://roviq-core.admytruk79.workers.dev
         run: npm run build
+      - name: Record accessibility baseline and enforce performance budget
+        run: node scripts/check-portal-evidence.mjs ${{ matrix.directory }}
 
   system-acceptance:
     runs-on: ubuntu-latest
