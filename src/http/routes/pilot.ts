@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireRole } from '../middleware/principal.js';
 import { getPilotReadiness } from '../../services/pilot-readiness.js';
-import { addPilotRunCase, createPilotRun, finishPilotRun, getPilotRunCases, listPilotRuns, startPilotRun } from '../../services/pilot-runs.js';
+import { addPilotRunCase, createPilotRun, finishPilotRun, getPilotRunCases, getPilotRunHealth, listPilotRuns, startPilotRun } from '../../services/pilot-runs.js';
 
 export async function pilotRoutes(app:FastifyInstance){
   app.get('/api/admin/pilot/runs',{preHandler:requireRole('admin')},async(req)=>{
@@ -14,6 +14,16 @@ export async function pilotRoutes(app:FastifyInstance){
     try{
       return reply.code(201).send({run:await createPilotRun(req.principal,body)});
     }catch(error){
+      const statusCode=(error as {statusCode?:number}).statusCode;
+      if(statusCode) return reply.code(statusCode).send({error:error instanceof Error?error.message:'pilot_run_error'});
+      throw error;
+    }
+  });
+
+  app.get('/api/admin/pilot/runs/:id/health',{preHandler:requireRole('admin')},async(req,reply)=>{
+    const {id}=z.object({id:z.string().uuid()}).parse(req.params);
+    try{return await getPilotRunHealth(req.principal,id);}
+    catch(error){
       const statusCode=(error as {statusCode?:number}).statusCode;
       if(statusCode) return reply.code(statusCode).send({error:error instanceof Error?error.message:'pilot_run_error'});
       throw error;
