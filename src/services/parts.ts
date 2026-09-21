@@ -110,18 +110,40 @@ export async function createPartsOrder(principal: Principal, input:{ caseId:stri
 }
 
 export async function assignSupplier(principal: Principal, orderId:string, supplierActorId:string) {
-  const supplier = await pool.query(`select id,actor_type,status from actors where id=$1`,[supplierActorId]);
-  if (!supplier.rowCount || supplier.rows[0].status !== 'active') throw new Error('supplier_not_available');
-  if (!['parts','partner','dealership'].includes(supplier.rows[0].actor_type)) throw new Error('invalid_supplier_type');
-  const r = await pool.query(
-    `update parts_orders set supplier_actor_id=$1,status='supplier_assigned',updated_at=now()
-     where id=$2 and status in ('requested','supplier_assigned','failed') returning *`,[supplierActorId,orderId]
-  );
-  if (!r.rowCount) throw new Error('order_not_assignable');
-  await upsertNetworkHandoff({caseId:r.rows[0].case_id,handoffType:'parts',participantActorId:supplierActorId,referenceType:'parts_order',referenceId:orderId,status:'assigned',metadata:{partsStatus:'supplier_assigned'}},pool);
-  await appendCaseEvent(r.rows[0].case_id,'PARTS_SUPPLIER_ASSIGNED',principal,{ orderId,supplierActorId });
-  await queueNotification({ caseId:r.rows[0].case_id, channel:'push', recipientType:'actor', recipientId:supplierActorId, templateKey:'parts_order_assigned', payload:{ orderId } });
-  await audit(principal,'assign_parts_supplier','parts_order',orderId,'supplier_assigned',{ supplierActorId });
+  const client=await pool.connect();
+  let row:any;
+  try{
+    await client.query('begin');
+    const supplier=await client.query(`select id,actor_type,status from actors where id=$1`,[supplierActorId]);
+    if(!supplier.rowCount||supplier.rows[0].status!=='active') throw new Error('supplier_not_available');
+    if(!['parts','partner','dealership'].includes(supplier.rows[0].actor_type)) throw new Error('invalid_supplier_type');
+    const order=await client.query(`select * from parts_orders where id=$1 for update`,[orderId]);
+    if(!order.rowCount) throw new Error('order_not_found');
+    if(!['requested','supplier_assigned','failed'].includes(order.rows[0].status)) throw new Error('order_not_assignable');
+    const updated=await client.query(
+      `update parts_orders
+          set supplier_actor_id=$1,status='supplier_assigned',updated_at=now()
+        where id=$2 returning *`,
+      [supplierActorId,orderId]
+    );
+    row=updated.rows[0];
+    await upsertNetworkHandoff({
+      caseId:row.case_id,
+      handoffType:'parts',
+      participantActorId:supplierActorId,
+      referenceType:'parts_order',
+      referenceId:orderId,
+      status:'assigned',
+      metadata:{partsStatus:'supplier_assigned'}
+    },client);
+    await client.query('commit');
+  }catch(error){
+    await client.query('rollback').catch(()=>{});
+    throw error;
+  }finally{client.release();}
+  await appendCaseEvent(row.case_id,'PARTS_SUPPLIER_ASSIGNED',principal,{orderId,supplierActorId});
+  await queueNotification({caseId:row.case_id,channel:'push',recipientType:'actor',recipientId:supplierActorId,templateKey:'parts_order_assigned',payload:{orderId}});
+  await audit(principal,'assign_parts_supplier','parts_order',orderId,'supplier_assigned',{supplierActorId});
   return getPartsOrder(orderId);
 }
 
