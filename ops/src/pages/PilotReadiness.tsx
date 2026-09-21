@@ -20,6 +20,8 @@ type PilotCheck={
   evidence?:Record<string,unknown>;
 };
 
+type PilotCase={id:string;state:string;priority:string;created_at:string;updated_at:string;added_at:string};
+
 type PilotRun={
   id:string;
   organization_id:string;
@@ -60,6 +62,8 @@ export function PilotReadinessPage(){
   const [error,setError]=useState('');
   const [runs,setRuns]=useState<PilotRun[]>([]);
   const [runBusy,setRunBusy]=useState(false);
+  const [pilotCaseId,setPilotCaseId]=useState('');
+  const [runCases,setRunCases]=useState<Record<string,PilotCase[]>>({});
   const [evidence,setEvidence]=useState({scheduling:false,repairOrder:false,notifications:false,payments:false,reconciliation:false});
 
   const nativeConnections=useMemo(
@@ -120,6 +124,22 @@ export function PilotReadinessPage(){
     finally{setRunBusy(false);}
   }
 
+  async function loadRunCases(id:string){
+    const result=await api.get<{cases:PilotCase[]}>(`/api/admin/pilot/runs/${id}/cases`);
+    setRunCases(current=>({...current,[id]:result.cases}));
+  }
+
+  async function linkCase(id:string){
+    if(!pilotCaseId.trim())return;
+    setRunBusy(true); setError('');
+    try{
+      const result=await api.post<{cases:PilotCase[]}>(`/api/admin/pilot/runs/${id}/cases`,{caseId:pilotCaseId.trim()});
+      setRunCases(current=>({...current,[id]:result.cases}));
+      setPilotCaseId('');
+    }catch(err){setError(err instanceof Error?err.message:'Unable to link pilot case');}
+    finally{setRunBusy(false);}
+  }
+
   async function startRun(id:string){
     setRunBusy(true); setError('');
     try{await api.post(`/api/admin/pilot/runs/${id}/start`,{});await refreshRuns();await evaluate();}
@@ -152,6 +172,10 @@ export function PilotReadinessPage(){
     const connection=nativeConnections.find(item=>item.id===selected);
     if(connection) void evaluate(connection);
   },[selected,connections.length]);
+  useEffect(()=>{
+    const openRun=runs.find(run=>run.location_id===activeConnection?.location_id&&['ready','active'].includes(run.status));
+    if(openRun) void loadRunCases(openRun.id);
+  },[runs.map(run=>`${run.id}:${run.status}`).join('|'),activeConnection?.location_id]);
 
   return <section className="space-y-5" aria-labelledby="pilot-title">
     <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
