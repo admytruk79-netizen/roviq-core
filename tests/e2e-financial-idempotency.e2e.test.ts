@@ -153,9 +153,9 @@ describe('financial provider replay and concurrency invariants',()=>{
       }}
     } as any);
 
-    const opened=await pool.query(`select state,amount from payment_disputes where provider='stripe' and provider_dispute_id=$1`,[disputeId]);
-    expect(opened.rows[0].state).toBe('needs_response');
-    expect(Number(opened.rows[0].amount)).toBe(50);
+    const opened=await pool.query(`select status,amount_minor from payment_disputes where provider='stripe' and external_reference=$1`,[disputeId]);
+    expect(opened.rows[0].status).toBe('needs_response');
+    expect(Number(opened.rows[0].amount_minor)).toBe(5000);
 
     const lostEventId=`evt-dispute-lost-${Date.now()}-${Math.random()}`;
     const lostEvent={
@@ -169,7 +169,7 @@ describe('financial provider replay and concurrency invariants',()=>{
     await applyStripeWebhook(lostEvent);
     await applyStripeWebhook(lostEvent);
 
-    const dispute=await pool.query(`select state from payment_disputes where provider='stripe' and provider_dispute_id=$1`,[disputeId]);
+    const dispute=await pool.query(`select status from payment_disputes where provider='stripe' and external_reference=$1`,[disputeId]);
     const ledger=await pool.query(
       `select count(*)::int as n,coalesce(sum(amount),0)::numeric as amount
          from ledger_entries
@@ -180,7 +180,7 @@ describe('financial provider replay and concurrency invariants',()=>{
       `select count(*)::int as n from payment_provider_events where provider='stripe' and provider_event_id=$1`,
       [lostEventId]
     );
-    expect(dispute.rows[0].state).toBe('lost');
+    expect(dispute.rows[0].status).toBe('lost');
     expect(Number(ledger.rows[0].n)).toBe(1);
     expect(Number(ledger.rows[0].amount)).toBe(-50);
     expect(Number(providerEvents.rows[0].n)).toBe(1);
