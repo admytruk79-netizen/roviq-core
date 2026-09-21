@@ -179,7 +179,7 @@ export async function startPilotRun(principal:Principal,pilotRunId:string){
 
 
 async function completionOperationalBlockers(client:{query:(text:string,params?:unknown[])=>Promise<any>},pilotRunId:string){
-  const [notifications,exceptions,providerEvents,disputes,payouts,recovery]=await Promise.all([
+  const [notifications,exceptions,providerEvents,disputes,payouts,recovery,completionTruth]=await Promise.all([
     client.query(
       `select n.id,n.state,n.attempt_count,n.last_error
          from notification_outbox n
@@ -237,6 +237,23 @@ async function completionOperationalBlockers(client:{query:(text:string,params?:
           and fp.recovery_required_at is not null
         order by fp.updated_at asc`,
       [pilotRunId]
+    ),
+    client.query(
+      `select sc.id
+         from pilot_run_cases prc
+         join service_cases sc on sc.id=prc.service_case_id
+        where prc.pilot_run_id=$1
+          and sc.state='completed'
+          and not exists(
+            select 1
+              from completion_outcomes co
+              join fulfillment_plans fp on fp.id=co.fulfillment_plan_id
+             where co.service_case_id=sc.id
+               and co.outcome='completed'
+               and fp.status='completed'
+          )
+        order by sc.id`,
+      [pilotRunId]
     )
   ]);
   return [
@@ -245,7 +262,8 @@ async function completionOperationalBlockers(client:{query:(text:string,params?:
     ...providerEvents.rows.map((row:any)=>({kind:'payment_provider_event',id:row.id,providerEventId:row.provider_event_id,eventType:row.event_type,error:row.error_message??null})),
     ...disputes.rows.map((row:any)=>({kind:'payment_dispute',id:row.id,reference:row.external_reference,status:row.status})),
     ...payouts.rows.map((row:any)=>({kind:'partner_settlement',id:row.id,state:row.state,provider:row.provider,providerReference:row.provider_payout_id??null})),
-    ...recovery.rows.map((row:any)=>({kind:'fulfillment_recovery',id:row.id,caseId:row.service_case_id,status:row.status,reason:row.recovery_reason??null}))
+    ...recovery.rows.map((row:any)=>({kind:'fulfillment_recovery',id:row.id,caseId:row.service_case_id,status:row.status,reason:row.recovery_reason??null})),
+    ...completionTruth.rows.map((row:any)=>({kind:'completion_truth_missing',caseId:row.id}))
   ];
 }
 
