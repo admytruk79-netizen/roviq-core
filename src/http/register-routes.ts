@@ -32,6 +32,7 @@ import { localRoutes } from './routes/local.js';
 import { triageEvaluationRoutes } from './routes/triage-evaluation.js';
 import { connectedVehicleRoutes } from './routes/connected-vehicles.js';
 import { networkOrchestrationRoutes } from './routes/network-orchestration.js';
+import { pilotRoutes } from './routes/pilot.js';
 
 type RoutePlugin = FastifyPluginAsync | ((app: FastifyInstance) => Promise<void>);
 
@@ -47,7 +48,7 @@ const routeModules: RouteModule[] = [
   { name: 'service-operations', plugins: [diagnosticRoutes, fieldServiceRoutes, transportRoutes, mobilityRoutes, partsRoutes] },
   { name: 'shop-os', plugins: [shopOsRoutes, shopOsDeferredAppointmentChoiceRoutes, shopOsFloorRoutes] },
   { name: 'financial-and-communications', plugins: [paymentWebhookRoutes, paymentRoutes, commerceRoutes, notificationRoutes] },
-  { name: 'integration-and-observability', plugins: [integrationRoutes, analyticsRoutes, localRoutes] },
+  { name: 'integration-and-observability', plugins: [integrationRoutes, analyticsRoutes, localRoutes, pilotRoutes] },
   { name: 'actor-surfaces', plugins: [partnerRoutes, adminRoutes] }
 ];
 
