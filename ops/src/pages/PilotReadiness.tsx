@@ -22,6 +22,8 @@ type PilotCheck={
 
 type PilotCase={id:string;state:string;priority:string;created_at:string;updated_at:string;added_at:string};
 type PilotHealth={pilotRunId:string;runStatus:string;status:'healthy'|'attention'|'degraded'|'closed';readiness:PilotReadiness|null;caseStates:Record<string,number>};
+type MetricGroup=Record<string,number>;
+type PilotMetrics={pilotRunId:string;generatedAt:string;runStatus:string;cases:MetricGroup;appointments:MetricGroup;repairOrders:MetricGroup;transport:MetricGroup;mobility:MetricGroup;parts:MetricGroup;notifications:MetricGroup;payments:MetricGroup;disputes:MetricGroup;settlements:MetricGroup;exceptions:MetricGroup};
 
 type PilotRun={
   id:string;
@@ -66,6 +68,7 @@ export function PilotReadinessPage(){
   const [pilotCaseId,setPilotCaseId]=useState('');
   const [runCases,setRunCases]=useState<Record<string,PilotCase[]>>({});
   const [runHealth,setRunHealth]=useState<Record<string,PilotHealth>>({});
+  const [runMetrics,setRunMetrics]=useState<Record<string,PilotMetrics>>({});
   const [evidence,setEvidence]=useState({scheduling:false,repairOrder:false,notifications:false,payments:false,reconciliation:false});
 
   const nativeConnections=useMemo(
@@ -127,12 +130,14 @@ export function PilotReadinessPage(){
   }
 
   async function loadRunCases(id:string){
-    const [result,health]=await Promise.all([
+    const [result,health,metrics]=await Promise.all([
       api.get<{cases:PilotCase[]}>(`/api/admin/pilot/runs/${id}/cases`),
-      api.get<PilotHealth>(`/api/admin/pilot/runs/${id}/health`)
+      api.get<PilotHealth>(`/api/admin/pilot/runs/${id}/health`),
+      api.get<PilotMetrics>(`/api/admin/pilot/runs/${id}/metrics`)
     ]);
     setRunCases(current=>({...current,[id]:result.cases}));
     setRunHealth(current=>({...current,[id]:health}));
+    setRunMetrics(current=>({...current,[id]:metrics}));
   }
 
   async function linkCase(id:string){
@@ -235,6 +240,25 @@ export function PilotReadinessPage(){
             {['ready','active'].includes(run.status)&&<button className="roviq-btn-secondary" disabled={runBusy} onClick={()=>void abortRun(run.id)}>Abort</button>}
           </div>
         </div>
+
+        {runMetrics[run.id]&&<div className="mt-4 grid gap-2 border-t border-white/10 pt-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+            <div className="text-xs text-[var(--roviq-muted)]">Cases</div>
+            <div className="mt-1 text-lg font-semibold">{runMetrics[run.id].cases.completed??0}/{runMetrics[run.id].cases.total??0} completed</div>
+          </div>
+          <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+            <div className="text-xs text-[var(--roviq-muted)]">Notifications</div>
+            <div className="mt-1 text-lg font-semibold">{runMetrics[run.id].notifications.delivered??0}/{runMetrics[run.id].notifications.total??0} delivered</div>
+          </div>
+          <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+            <div className="text-xs text-[var(--roviq-muted)]">Payments</div>
+            <div className="mt-1 text-lg font-semibold">{runMetrics[run.id].payments.captured??0} captured</div>
+          </div>
+          <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+            <div className="text-xs text-[var(--roviq-muted)]">Exceptions</div>
+            <div className="mt-1 text-lg font-semibold">{runMetrics[run.id].exceptions.open??0} open</div>
+          </div>
+        </div>}
 
         {['ready','active'].includes(run.status)&&<div className="mt-4 border-t border-white/10 pt-4">
           <div className="text-sm font-semibold">Canonical pilot cases</div>
