@@ -3,7 +3,7 @@ import { pool } from '../src/db/pool.js';
 import { getPilotReadiness } from '../src/services/pilot-readiness.js';
 import { createPaymentIntent } from '../src/services/payment-core.js';
 import { requeueFailedNotification } from '../src/services/notifications.js';
-import { addPilotRunCase, createPilotRun, finishPilotRun, getPilotRunHealth, startPilotRun } from '../src/services/pilot-runs.js';
+import { addPilotRunCase, createPilotRun, finishPilotRun, getPilotRunHealth, getPilotRunMetrics, startPilotRun } from '../src/services/pilot-runs.js';
 
 const admin={role:'admin'} as const;
 
@@ -400,6 +400,44 @@ describe('controlled Shop OS pilot readiness gate',()=>{
     const aborted=await finishPilotRun(admin,created.id,{
       outcome:'aborted',
       abortReason:'Acceptance test verified dispute and settlement health signals.'
+    });
+    expect(aborted.status).toBe('aborted');
+  });
+
+
+  it('reports scoped pilot operating metrics from linked canonical cases',async()=>{
+    const created=await createPilotRun(admin,{organizationId:orgId,locationId});
+    await startPilotRun(admin,created.id);
+
+    const domain=await pool.query(`select id from domains where code='maintenance' limit 1`);
+    const serviceCase=await pool.query(
+      `insert into service_cases(domain_id,location_id,state,current_owner_role,current_owner_actor_id)
+       values($1,$2,'repair_in_progress','partner',$3) returning id`,
+      [domain.rows[0].id,locationId,partnerActorId]
+    );
+    await addPilotRunCase(admin,created.id,serviceCase.rows[0].id);
+    await pool.query(
+      `insert into notification_outbox(
+         case_id,channel,recipient_type,recipient_id,template_key,payload,state,attempt_count,max_attempts
+       ) values($1,'sms','actor',$2,'pilot_metrics','{}'::jsonb,'sent',1,5)`,
+      [serviceCase.rows[0].id,partnerActorId]
+    );
+    await pool.query(
+      `insert into transport_dispatches(case_id,transport_type,status)
+       values($1,'tow','delivered')`,
+      [serviceCase.rows[0].id]
+    );
+
+    const metrics=await getPilotRunMetrics(admin,created.id);
+    expect(metrics.cases.total).toBe(1);
+    expect(metrics.notifications.total).toBe(1);
+    expect(metrics.notifications.delivered).toBe(1);
+    expect(metrics.transport.total).toBe(1);
+    expect(metrics.transport.delivered).toBe(1);
+
+    const aborted=await finishPilotRun(admin,created.id,{
+      outcome:'aborted',
+      abortReason:'Acceptance test verified pilot metrics aggregation.'
     });
     expect(aborted.status).toBe('aborted');
   });
