@@ -7,6 +7,21 @@ import { addPilotRunCase, createPilotRun, finishPilotRun, getPilotRunHealth, sta
 
 const admin={role:'admin'} as const;
 
+async function addCanonicalCompletionTruth(caseId:string){
+  const plan=await pool.query(
+    `insert into fulfillment_plans(
+       service_case_id,version,status,blockers,dependency_snapshot
+     ) values($1,1,'completed','[]'::jsonb,'{}'::jsonb) returning id`,
+    [caseId]
+  );
+  await pool.query(
+    `insert into completion_outcomes(
+       service_case_id,fulfillment_plan_id,outcome,dependency_snapshot,evidence
+     ) values($1,$2,'completed','{}'::jsonb,$3)`,
+    [caseId,plan.rows[0].id,JSON.stringify({source:'pilot_acceptance_test'})]
+  );
+}
+
 describe('controlled Shop OS pilot readiness gate',()=>{
   let orgId:string;
   let locationId:string;
@@ -128,6 +143,7 @@ describe('controlled Shop OS pilot readiness gate',()=>{
       [domain.rows[0].id,locationId,partnerActorId]
     );
     await addPilotRunCase(admin,created.id,serviceCase.rows[0].id);
+    await addCanonicalCompletionTruth(serviceCase.rows[0].id);
 
     const completed=await finishPilotRun(admin,created.id,{
       outcome:'completed',
@@ -263,6 +279,7 @@ describe('controlled Shop OS pilot readiness gate',()=>{
       [domain.rows[0].id,locationId,partnerActorId]
     );
     await addPilotRunCase(admin,created.id,serviceCase.rows[0].id);
+    await addCanonicalCompletionTruth(serviceCase.rows[0].id);
     const notification=await pool.query(
       `insert into notification_outbox(
          case_id,channel,recipient_type,recipient_id,template_key,payload,state,attempt_count,max_attempts,last_error
