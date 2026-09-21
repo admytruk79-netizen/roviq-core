@@ -105,6 +105,48 @@ export function PilotReadinessPage(){
     }
   }
 
+  async function refreshRuns(){
+    const result=await api.get<{runs:PilotRun[]}>('/api/admin/pilot/runs');
+    setRuns(result.runs);
+  }
+
+  async function createRun(){
+    if(!activeConnection?.organization_id||!activeConnection.location_id||!readiness?.ready)return;
+    setRunBusy(true); setError('');
+    try{
+      await api.post('/api/admin/pilot/runs',{organizationId:activeConnection.organization_id,locationId:activeConnection.location_id});
+      await refreshRuns();
+    }catch(err){setError(err instanceof Error?err.message:'Unable to create pilot run');}
+    finally{setRunBusy(false);}
+  }
+
+  async function startRun(id:string){
+    setRunBusy(true); setError('');
+    try{await api.post(`/api/admin/pilot/runs/${id}/start`,{});await refreshRuns();await evaluate();}
+    catch(err){setError(err instanceof Error?err.message:'Unable to start pilot run');}
+    finally{setRunBusy(false);}
+  }
+
+  async function completeRun(id:string){
+    if(!Object.values(evidence).every(Boolean))return;
+    setRunBusy(true); setError('');
+    try{
+      await api.post(`/api/admin/pilot/runs/${id}/finish`,{outcome:'completed',evidence});
+      await refreshRuns();
+      setEvidence({scheduling:false,repairOrder:false,notifications:false,payments:false,reconciliation:false});
+    }catch(err){setError(err instanceof Error?err.message:'Unable to complete pilot run');}
+    finally{setRunBusy(false);}
+  }
+
+  async function abortRun(id:string){
+    const reason=window.prompt('Why is this pilot run being aborted?');
+    if(!reason?.trim())return;
+    setRunBusy(true); setError('');
+    try{await api.post(`/api/admin/pilot/runs/${id}/finish`,{outcome:'aborted',abortReason:reason.trim()});await refreshRuns();}
+    catch(err){setError(err instanceof Error?err.message:'Unable to abort pilot run');}
+    finally{setRunBusy(false);}
+  }
+
   useEffect(()=>{void loadConnections();},[]);
   useEffect(()=>{
     const connection=nativeConnections.find(item=>item.id===selected);
