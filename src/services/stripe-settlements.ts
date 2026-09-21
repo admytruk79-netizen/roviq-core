@@ -58,7 +58,7 @@ export async function createStripePartnerSettlement(principal:Principal,input:{
 
   if(payout.state==='pending') await updatePayoutState(principal,payout.id,'approved');
   const refreshed=(await pool.query('select * from settlement_payouts where id=$1',[payout.id])).rows[0];
-  if(refreshed.state==='approved') await updatePayoutState(principal,payout.id,'processing');
+  if(refreshed.state==='approved'||refreshed.state==='failed') await updatePayoutState(principal,payout.id,'processing');
 
   const body=new URLSearchParams({
     amount:String(toMinorUnits(input.amount,currency)),
