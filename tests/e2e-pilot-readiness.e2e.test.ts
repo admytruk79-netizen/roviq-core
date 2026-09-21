@@ -218,6 +218,36 @@ describe('controlled Shop OS pilot readiness gate',()=>{
     expect(aborted.status).toBe('aborted');
   });
 
+
+  it('degrades a live pilot when a linked case has a dead customer notification',async()=>{
+    const created=await createPilotRun(admin,{organizationId:orgId,locationId});
+    await startPilotRun(admin,created.id);
+
+    const domain=await pool.query(`select id from domains where code='maintenance' limit 1`);
+    const serviceCase=await pool.query(
+      `insert into service_cases(domain_id,location_id,state,current_owner_role,current_owner_actor_id)
+       values($1,$2,'repair_in_progress','partner',$3) returning id`,
+      [domain.rows[0].id,locationId,partnerActorId]
+    );
+    await addPilotRunCase(admin,created.id,serviceCase.rows[0].id);
+    await pool.query(
+      `insert into notification_outbox(
+         case_id,channel,recipient_type,recipient_id,template_key,payload,state,attempt_count,max_attempts,last_error
+       ) values($1,'sms','actor',$2,'pilot_failure','{}'::jsonb,'dead',5,5,'provider_down')`,
+      [serviceCase.rows[0].id,partnerActorId]
+    );
+
+    const health=await getPilotRunHealth(admin,created.id);
+    expect(health.status).toBe('degraded');
+    expect(health.operational.notifications.dead).toBe(1);
+
+    const aborted=await finishPilotRun(admin,created.id,{
+      outcome:'aborted',
+      abortReason:'Acceptance test verified linked notification failure detection.'
+    });
+    expect(aborted.status).toBe('aborted');
+  });
+
   it('refuses to complete a pilot without a linked completed canonical case',async()=>{
     const created=await createPilotRun(admin,{organizationId:orgId,locationId});
     await startPilotRun(admin,created.id);
