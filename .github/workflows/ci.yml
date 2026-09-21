@@ -134,3 +134,45 @@ jobs:
           SQL
           test -s /tmp/roviq-acceptance.dump
           echo "Backup/restore evidence: $(du -h /tmp/roviq-acceptance.dump | cut -f1) dump restored successfully."
+      - name: Prove active pilot survives database restart
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          insert into organizations(id,organization_type,display_name,status)
+          values('00000000-0000-4000-8000-000000000901','repair_partner','CI Restart Pilot','active')
+          on conflict(id) do nothing;
+          insert into locations(id,organization_id,name,country_code,region,city)
+          values('00000000-0000-4000-8000-000000000902','00000000-0000-4000-8000-000000000901','CI Restart Shop','US','OR','Portland')
+          on conflict(id) do nothing;
+          insert into pilot_runs(id,organization_id,location_id,status,readiness_snapshot,evidence,started_at)
+          values(
+            '00000000-0000-4000-8000-000000000903',
+            '00000000-0000-4000-8000-000000000901',
+            '00000000-0000-4000-8000-000000000902',
+            'active',
+            '{"ready":true,"source":"ci_restart_evidence"}'::jsonb,
+            '{}'::jsonb,
+            now()
+          )
+          on conflict(id) do update set status='active',updated_at=now();
+          SQL
+          PG_CONTAINER="$(docker ps --filter ancestor=postgres:16 --format '{{.ID}}' | head -n1)"
+          test -n "$PG_CONTAINER"
+          docker restart "$PG_CONTAINER" >/dev/null
+          for attempt in $(seq 1 30); do
+            if pg_isready --host=localhost --port=5432 --username=postgres --dbname=roviq_test >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          pg_isready --host=localhost --port=5432 --username=postgres --dbname=roviq_test
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          select case when status='active' then 1 else 1/0 end as active_pilot_survived_restart
+          from pilot_runs
+          where id='00000000-0000-4000-8000-000000000903';
+          select case when readiness_snapshot->>'source'='ci_restart_evidence' then 1 else 1/0 end as pilot_evidence_survived_restart
+          from pilot_runs
+          where id='00000000-0000-4000-8000-000000000903';
+          SQL
+          npm run db:migrate
