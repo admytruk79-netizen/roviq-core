@@ -124,22 +124,23 @@ async function applyStripeDispute(event:StripeEvent,object:StripeObject){
   if(!object.id||typeof object.payment_intent!=='string'||object.amount===undefined) throw new Error('stripe_webhook_payload_invalid');
   const payment=await localPayment(object.payment_intent);
   const currency=requireMatchingCurrency(payment.currency,object.currency);
-  const amount=stripeMinorToMajor(currency,object.amount)!;
+  const amountMinor=Number(object.amount);
+  if(!Number.isSafeInteger(amountMinor)||amountMinor<=0) throw new Error('stripe_webhook_payload_invalid');
+  const amount=stripeMinorToMajor(currency,amountMinor)!;
   const state=disputeState(object.status);
   const dueAt=object.evidence_details?.due_by
     ? new Date(object.evidence_details.due_by*1000).toISOString()
     : null;
   const dispute=await pool.query(
     `insert into payment_disputes(
-       payment_intent_id,provider,provider_dispute_id,amount,currency,reason,state,evidence_due_at,metadata,closed_at
-     ) values($1,'stripe',$2,$3,$4,$5,$6,$7,$8,case when $6 in ('won','lost','warning_closed') then now() else null end)
-     on conflict(provider,provider_dispute_id)
-     do update set state=excluded.state,reason=excluded.reason,evidence_due_at=excluded.evidence_due_at,
+       payment_intent_id,provider,external_reference,status,amount_minor,currency,reason,evidence_due_at,metadata,resolved_at
+     ) values($1,'stripe',$2,$3,$4,$5,$6,$7,$8,case when $3 in ('won','lost','warning_closed') then now() else null end)
+     on conflict(provider,external_reference)
+     do update set status=excluded.status,reason=excluded.reason,evidence_due_at=excluded.evidence_due_at,
        metadata=payment_disputes.metadata||excluded.metadata,
-       closed_at=case when excluded.state in ('won','lost','warning_closed') then coalesce(payment_disputes.closed_at,now()) else null end,
-       updated_at=now()
+       resolved_at=case when excluded.status in ('won','lost','warning_closed') then coalesce(payment_disputes.resolved_at,now()) else null end
      returning *`,
-    [payment.id,object.id,amount,currency,object.reason??null,state,dueAt,JSON.stringify({stripeEventId:event.id,stripeEventType:event.type})]
+    [payment.id,object.id,state,amountMinor,currency,object.reason??null,dueAt,JSON.stringify({stripeEventId:event.id,stripeEventType:event.type})]
   );
 
   if(state==='lost'){
