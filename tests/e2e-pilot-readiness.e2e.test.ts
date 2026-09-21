@@ -150,6 +150,43 @@ describe('controlled Shop OS pilot readiness gate',()=>{
 
 
 
+
+  it('revalidates connector and capacity health immediately before pilot start',async()=>{
+    const created=await createPilotRun(admin,{organizationId:orgId,locationId});
+
+    await pool.query(
+      `update partner_system_connections set connection_status='degraded',updated_at=now() where id=$1`,
+      [connectionId]
+    );
+    await expect(startPilotRun(admin,created.id))
+      .rejects.toMatchObject({message:'pilot_readiness_blocked',statusCode:409});
+
+    await pool.query(
+      `update partner_system_connections set connection_status='active',updated_at=now() where id=$1`,
+      [connectionId]
+    );
+    await pool.query(
+      `update capacity_windows set sync_state='stale',updated_at=now() where organization_id=$1 and location_id=$2`,
+      [orgId,locationId]
+    );
+    await expect(startPilotRun(admin,created.id))
+      .rejects.toMatchObject({message:'pilot_readiness_blocked',statusCode:409});
+
+    await pool.query(
+      `update capacity_windows set sync_state='current',capacity_state='available',capacity_units=1,updated_at=now()
+        where organization_id=$1 and location_id=$2`,
+      [orgId,locationId]
+    );
+    const started=await startPilotRun(admin,created.id);
+    expect(started.status).toBe('active');
+
+    const aborted=await finishPilotRun(admin,created.id,{
+      outcome:'aborted',
+      abortReason:'Acceptance test verified fail-closed start revalidation.'
+    });
+    expect(aborted.status).toBe('aborted');
+  });
+
   it('refuses to complete a pilot without a linked completed canonical case',async()=>{
     const created=await createPilotRun(admin,{organizationId:orgId,locationId});
     await startPilotRun(admin,created.id);
