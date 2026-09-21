@@ -179,6 +179,49 @@ export function PilotReadinessPage(){
 
     {!error&&loading&&!readiness&&<div className="roviq-panel p-6 text-sm text-[var(--roviq-muted)]" role="status" aria-live="polite">Evaluating pilot prerequisites…</div>}
 
+    {activeConnection&&<div className="roviq-panel p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="font-semibold">Pilot execution record</h2>
+          <p className="mt-1 text-sm text-[var(--roviq-muted)]">Create the run only after the readiness gate passes. Starting revalidates the gate again.</p>
+        </div>
+        <button className="roviq-btn-primary" disabled={!readiness?.ready||!activeConnection.location_id||runBusy||runs.some(run=>run.location_id===activeConnection.location_id&&['ready','active'].includes(run.status))} onClick={()=>void createRun()}>
+          {runBusy?'Working…':'Create pilot run'}
+        </button>
+      </div>
+
+      {runs.filter(run=>run.location_id===activeConnection.location_id).slice(0,3).map(run=><article key={run.id} className="mt-4 rounded-xl border border-white/10 bg-white/5 p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <strong>Pilot {run.id.slice(0,8)}</strong>
+              <span className="rounded-full border border-white/10 px-2 py-1 text-xs font-semibold">{humanizeToken(run.status)}</span>
+            </div>
+            <p className="mt-1 text-xs text-[var(--roviq-muted)]">Created {new Date(run.created_at).toLocaleString()}</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {run.status==='ready'&&<button className="roviq-btn-primary" disabled={runBusy} onClick={()=>void startRun(run.id)}>Start controlled pilot</button>}
+            {['ready','active'].includes(run.status)&&<button className="roviq-btn-secondary" disabled={runBusy} onClick={()=>void abortRun(run.id)}>Abort</button>}
+          </div>
+        </div>
+
+        {run.status==='active'&&<div className="mt-4 border-t border-white/10 pt-4">
+          <div className="text-sm font-semibold">Completion evidence</div>
+          <p className="mt-1 text-xs text-[var(--roviq-muted)]">Confirm each live workflow was actually exercised before marking the run complete.</p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {Object.entries(evidence).map(([key,value])=><label key={key} className="flex min-h-11 items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 text-sm">
+              <input type="checkbox" checked={value} onChange={event=>setEvidence(current=>({...current,[key]:event.target.checked}))}/>
+              {humanizeToken(key)}
+            </label>)}
+          </div>
+          <button className="roviq-btn-primary mt-3" disabled={runBusy||!Object.values(evidence).every(Boolean)} onClick={()=>void completeRun(run.id)}>Complete pilot run</button>
+        </div>}
+
+        {run.status==='completed'&&<div className="mt-3 text-sm text-emerald-200">Completed with retained evidence.</div>}
+        {run.status==='aborted'&&<div className="mt-3 text-sm text-rose-200">Aborted{run.abort_reason?`: ${run.abort_reason}`:''}</div>}
+      </article>)}
+    </div>}
+
     {readiness&&<div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-3">
         <div className="roviq-panel p-4">
