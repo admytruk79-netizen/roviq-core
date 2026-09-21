@@ -7,6 +7,7 @@ import { createPaymentIntent, createPayout, refundPayment, updatePaymentState, u
 import { getFinancialReconciliation } from '../../services/financial-reconciliation.js';
 import { loadCaseForPrincipal } from '../../services/case-access.js';
 import { createStripePaymentIntent } from '../../services/stripe-payments.js';
+import { createStripePartnerSettlement } from '../../services/stripe-settlements.js';
 
 function errorMessage(error:unknown,fallback:string){
   return error instanceof Error?error.message:fallback;
@@ -125,15 +126,40 @@ export async function paymentRoutes(app: FastifyInstance) {
     }
   });
 
+
+  app.post('/api/admin/payouts/stripe', { preHandler: requireRole('admin') }, async (req, reply) => {
+    const body=z.object({
+      caseId:z.string().uuid(),
+      counterpartyActorId:z.string().uuid(),
+      paymentIntentId:z.string().uuid(),
+      amount:z.number().positive(),
+      currency:z.string().length(3).default('USD'),
+      idempotencyKey:z.string().min(8).max(180),
+      metadata:z.record(z.unknown()).optional()
+    }).parse(req.body);
+    try{
+      return reply.code(201).send(await createStripePartnerSettlement(req.principal,body));
+    }catch(error){
+      const message=errorMessage(error,'stripe_settlement_error');
+      if(message==='forbidden') return reply.code(403).send({error:message});
+      if(['case_not_found','payment_not_found'].includes(message)) return reply.code(404).send({error:message});
+      if(['currency_precision_unsupported','invalid_financial_amount'].includes(message)) return reply.code(422).send({error:message});
+      if(['payout_counterparty_invalid','payout_payment_case_mismatch','payout_currency_mismatch','payout_exceeds_available_balance','payout_request_conflict','provider_payout_conflict','payout_request_terminal','stripe_connected_account_missing'].includes(message)) return reply.code(409).send({error:message});
+      if(message==='stripe_not_configured') return reply.code(503).send({error:message});
+      if(['stripe_settlement_request_failed','stripe_settlement_create_failed'].includes(message)) return reply.code(502).send({error:message});
+      throw error;
+    }
+  });
+
   app.post('/api/admin/payouts', { preHandler: requireRole('admin') }, async (req, reply) => {
-    const body = z.object({ caseId:z.string().uuid(), counterpartyActorId:z.string().uuid(), paymentIntentId:z.string().uuid().optional(), amount:z.number().nonnegative(), currency:z.string().length(3).default('USD'), provider:z.string().default('manual'), providerPayoutId:z.string().optional(), metadata:z.record(z.unknown()).optional() }).parse(req.body);
+    const body = z.object({ caseId:z.string().uuid(), counterpartyActorId:z.string().uuid(), paymentIntentId:z.string().uuid().optional(), amount:z.number().nonnegative(), currency:z.string().length(3).default('USD'), provider:z.string().default('manual'), providerPayoutId:z.string().optional(), clientRequestId:z.string().min(1).max(180).optional(), metadata:z.record(z.unknown()).optional() }).parse(req.body);
     try{return reply.code(201).send({ payout:await createPayout(req.principal,body) });}
     catch(e){
       const m=errorMessage(e,'payout_error');
       if(m==='forbidden')return reply.code(403).send({error:m});
       if(['case_not_found','payment_not_found'].includes(m))return reply.code(404).send({error:m});
       if(['currency_precision_unsupported','invalid_financial_amount'].includes(m))return reply.code(422).send({error:m});
-      if(['payout_counterparty_invalid','payout_payment_case_mismatch','payout_currency_mismatch','payout_exceeds_available_balance','provider_payout_conflict'].includes(m))return reply.code(409).send({error:m});
+      if(['payout_counterparty_invalid','payout_payment_case_mismatch','payout_currency_mismatch','payout_exceeds_available_balance','provider_payout_conflict','payout_request_conflict'].includes(m))return reply.code(409).send({error:m});
       throw e;
     }
   });
