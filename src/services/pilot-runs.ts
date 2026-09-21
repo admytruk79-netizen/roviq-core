@@ -60,7 +60,13 @@ async function assertCaseBelongsToPilot(caseId:string,organizationId:string,loca
       left join actors selected on selected.id=sc.selected_actor_id
       left join actors recommended on recommended.id=sc.recommended_actor_id
       where sc.id=$1 and (
-        (owner.organization_id=$2 and (owner.location_id=$3 or owner.location_id is null))
+        exists(
+          select 1 from locations case_location
+          where case_location.id=sc.location_id
+            and case_location.id=$3
+            and case_location.organization_id=$2
+        )
+        or (owner.organization_id=$2 and (owner.location_id=$3 or owner.location_id is null))
         or (selected.organization_id=$2 and (selected.location_id=$3 or selected.location_id is null))
         or (recommended.organization_id=$2 and (recommended.location_id=$3 or recommended.location_id is null))
         or exists(
