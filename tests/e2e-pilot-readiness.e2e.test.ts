@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { pool } from '../src/db/pool.js';
 import { getPilotReadiness } from '../src/services/pilot-readiness.js';
-import { createPilotRun, finishPilotRun, startPilotRun } from '../src/services/pilot-runs.js';
+import { addPilotRunCase, createPilotRun, finishPilotRun, startPilotRun } from '../src/services/pilot-runs.js';
 
 const admin={role:'admin'} as const;
 
@@ -9,6 +9,7 @@ describe('controlled Shop OS pilot readiness gate',()=>{
   let orgId:string;
   let locationId:string;
   let connectionId:string;
+  let partnerActorId:string;
   let previousSms:any;
   const previousEnv={
     TWILIO_ACCOUNT_SID:process.env.TWILIO_ACCOUNT_SID,
@@ -59,11 +60,12 @@ describe('controlled Shop OS pilot readiness gate',()=>{
        ) values($1,$2,$3,$4,'repair',now(),now()+interval '8 hours','available',1,1,'roviq_native','current')`,
       [orgId,locationId,connectionId,bay.rows[0].id]
     );
-    await pool.query(
+    const partnerActor=await pool.query(
       `insert into actors(actor_type,status,organization_id,location_id,attributes)
-       values('partner','active',$1,$2,$3)`,
+       values('partner','active',$1,$2,$3) returning id`,
       [orgId,locationId,JSON.stringify({stripeConnectedAccountId:'acct_pilot_test'})]
     );
+    partnerActorId=partnerActor.rows[0].id;
 
     const sms=await pool.query(`select * from notification_channel_configs where channel='sms'`);
     previousSms=sms.rows[0]??null;
@@ -116,6 +118,14 @@ describe('controlled Shop OS pilot readiness gate',()=>{
     const started=await startPilotRun(admin,created.id);
     expect(started.status).toBe('active');
     expect(started.started_at).toBeTruthy();
+
+    const domain=await pool.query(`select id from domains where code='maintenance' limit 1`);
+    const serviceCase=await pool.query(
+      `insert into service_cases(domain_id,location_id,state,current_owner_role,current_owner_actor_id,completed_at)
+       values($1,$2,'completed','partner',$3,now()) returning id`,
+      [domain.rows[0].id,locationId,partnerActorId]
+    );
+    await addPilotRunCase(admin,created.id,serviceCase.rows[0].id);
 
     const completed=await finishPilotRun(admin,created.id,{
       outcome:'completed',
