@@ -177,6 +177,78 @@ export async function startPilotRun(principal:Principal,pilotRunId:string){
   }finally{client.release();}
 }
 
+
+async function completionOperationalBlockers(client:{query:(text:string,params?:unknown[])=>Promise<any>},pilotRunId:string){
+  const [notifications,exceptions,providerEvents,disputes,payouts,recovery]=await Promise.all([
+    client.query(
+      `select n.id,n.state,n.attempt_count,n.last_error
+         from notification_outbox n
+         join pilot_run_cases prc on prc.service_case_id=n.case_id
+        where prc.pilot_run_id=$1
+          and (n.state='dead' or (n.state='pending' and coalesce(n.attempt_count,0)>0))
+        order by n.created_at asc`,
+      [pilotRunId]
+    ),
+    client.query(
+      `select ce.id,ce.exception_code,ce.severity,ce.state
+         from case_exceptions ce
+         join pilot_run_cases prc on prc.service_case_id=ce.case_id
+        where prc.pilot_run_id=$1
+          and ce.state='open'
+          and ce.severity='critical'
+        order by ce.created_at asc`,
+      [pilotRunId]
+    ),
+    client.query(
+      `select ppe.id,ppe.provider_event_id,ppe.event_type,ppe.error_message
+         from payment_provider_events ppe
+         join payment_intents pi on pi.id=ppe.related_payment_intent_id
+         join pilot_run_cases prc on prc.service_case_id=pi.case_id
+        where prc.pilot_run_id=$1
+          and ppe.processing_state='failed'
+        order by ppe.received_at asc`,
+      [pilotRunId]
+    ),
+    client.query(
+      `select d.id,d.external_reference,d.status
+         from payment_disputes d
+         join payment_intents pi on pi.id=d.payment_intent_id
+         join pilot_run_cases prc on prc.service_case_id=pi.case_id
+        where prc.pilot_run_id=$1
+          and d.status in ('needs_response','under_review')
+        order by d.opened_at asc`,
+      [pilotRunId]
+    ),
+    client.query(
+      `select sp.id,sp.state,sp.provider,sp.provider_payout_id
+         from settlement_payouts sp
+         join pilot_run_cases prc on prc.service_case_id=sp.case_id
+        where prc.pilot_run_id=$1
+          and sp.state in ('pending','approved','processing','failed')
+        order by sp.created_at asc`,
+      [pilotRunId]
+    ),
+    client.query(
+      `select fp.id,fp.service_case_id,fp.status,fp.recovery_reason
+         from fulfillment_plans fp
+         join pilot_run_cases prc on prc.service_case_id=fp.service_case_id
+        where prc.pilot_run_id=$1
+          and fp.status not in ('superseded','completed','cancelled')
+          and fp.recovery_required_at is not null
+        order by fp.updated_at asc`,
+      [pilotRunId]
+    )
+  ]);
+  return [
+    ...notifications.rows.map((row:any)=>({kind:'notification_delivery',id:row.id,state:row.state,attemptCount:Number(row.attempt_count??0),error:row.last_error??null})),
+    ...exceptions.rows.map((row:any)=>({kind:'critical_exception',id:row.id,code:row.exception_code,severity:row.severity})),
+    ...providerEvents.rows.map((row:any)=>({kind:'payment_provider_event',id:row.id,providerEventId:row.provider_event_id,eventType:row.event_type,error:row.error_message??null})),
+    ...disputes.rows.map((row:any)=>({kind:'payment_dispute',id:row.id,reference:row.external_reference,status:row.status})),
+    ...payouts.rows.map((row:any)=>({kind:'partner_settlement',id:row.id,state:row.state,provider:row.provider,providerReference:row.provider_payout_id??null})),
+    ...recovery.rows.map((row:any)=>({kind:'fulfillment_recovery',id:row.id,caseId:row.service_case_id,status:row.status,reason:row.recovery_reason??null}))
+  ];
+}
+
 export async function finishPilotRun(principal:Principal,pilotRunId:string,input:{
   outcome:'completed'|'aborted';
   abortReason?:string;
@@ -207,6 +279,8 @@ export async function finishPilotRun(principal:Principal,pilotRunId:string,input
       const evidence=input.evidence??{};
       const missing=REQUIRED_COMPLETION_EVIDENCE.filter((key)=>!evidenceSatisfied(evidence[key]));
       if(missing.length) throw Object.assign(new Error('pilot_evidence_incomplete'),{statusCode:409,missingEvidence:missing});
+      const blockers=await completionOperationalBlockers(client,pilotRunId);
+      if(blockers.length) throw Object.assign(new Error('pilot_operational_blockers'),{statusCode:409,blockers});
     }
     if(input.outcome==='aborted'&&!input.abortReason?.trim()) throw httpError('pilot_abort_reason_required',400);
 
