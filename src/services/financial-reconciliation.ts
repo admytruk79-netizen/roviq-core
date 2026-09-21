@@ -67,16 +67,16 @@ async function reconcileSnapshot(bounded:number){
       const refundLedger=Number(row.refund_ledger_amount);
       const capturedStates=['captured','partially_refunded','refunded'];
       if(row.provider!=='manual'&&!row.provider_intent_id&&!['failed','cancelled'].includes(row.state)){
-        discrepancies.push({kind:'payment_provider_reference_missing',severity:'critical',caseId:row.case_id,paymentIntentId:row.id,payoutId:null,provider:row.provider,providerReference:null,message:'Provider-backed payment has no provider intent reference.',observed:{state:row.status,amount,currency:row.currency}});
+        discrepancies.push({kind:'payment_provider_reference_missing',severity:'critical',caseId:row.case_id,paymentIntentId:row.id,payoutId:null,provider:row.provider,providerReference:null,message:'Provider-backed payment has no provider intent reference.',observed:{state:row.state,amount,currency:row.currency}});
       }
       if(capturedStates.includes(row.state)&&Number(row.capture_events)===0){
-        discrepancies.push({kind:'payment_capture_event_missing',severity:'critical',caseId:row.case_id,paymentIntentId:row.id,payoutId:null,provider:row.provider,providerReference:row.provider_intent_id,message:'Captured payment state has no capture event.',observed:{state:row.status,amount,currency:row.currency}});
+        discrepancies.push({kind:'payment_capture_event_missing',severity:'critical',caseId:row.case_id,paymentIntentId:row.id,payoutId:null,provider:row.provider,providerReference:row.provider_intent_id,message:'Captured payment state has no capture event.',observed:{state:row.state,amount,currency:row.currency}});
       }
       if(capturedStates.includes(row.state)&&capturedLedger!==amount){
-        discrepancies.push({kind:'payment_capture_ledger_mismatch',severity:'critical',caseId:row.case_id,paymentIntentId:row.id,payoutId:null,provider:row.provider,providerReference:row.provider_intent_id,message:'Captured payment amount does not match posted capture ledger amount.',observed:{paymentAmount:amount,captureLedgerAmount:capturedLedger,state:row.status,currency:row.currency}});
+        discrepancies.push({kind:'payment_capture_ledger_mismatch',severity:'critical',caseId:row.case_id,paymentIntentId:row.id,payoutId:null,provider:row.provider,providerReference:row.provider_intent_id,message:'Captured payment amount does not match posted capture ledger amount.',observed:{paymentAmount:amount,captureLedgerAmount:capturedLedger,state:row.state,currency:row.currency}});
       }
       if(Math.abs(refundLedger)!==refunded){
-        discrepancies.push({kind:'payment_refund_ledger_mismatch',severity:'critical',caseId:row.case_id,paymentIntentId:row.id,payoutId:null,provider:row.provider,providerReference:row.provider_intent_id,message:'Refund events do not match refund ledger postings.',observed:{refundEventsAmount:refunded,refundLedgerAmount:refundLedger,state:row.status,currency:row.currency}});
+        discrepancies.push({kind:'payment_refund_ledger_mismatch',severity:'critical',caseId:row.case_id,paymentIntentId:row.id,payoutId:null,provider:row.provider,providerReference:row.provider_intent_id,message:'Refund events do not match refund ledger postings.',observed:{refundEventsAmount:refunded,refundLedgerAmount:refundLedger,state:row.state,currency:row.currency}});
       }
       if(row.state==='refunded'&&refunded!==amount){
         discrepancies.push({kind:'payment_refund_state_mismatch',severity:'critical',caseId:row.case_id,paymentIntentId:row.id,payoutId:null,provider:row.provider,providerReference:row.provider_intent_id,message:'Payment is marked refunded but total refund events do not equal the captured amount.',observed:{paymentAmount:amount,refundedAmount:refunded,currency:row.currency}});
@@ -90,7 +90,7 @@ async function reconcileSnapshot(bounded:number){
       const amount=Number(row.amount);
       const ledger=Number(row.payout_ledger_amount);
       if(row.provider!=='manual'&&!row.provider_payout_id){
-        discrepancies.push({kind:'payout_provider_reference_missing',severity:'critical',caseId:row.case_id,paymentIntentId:row.payment_intent_id,payoutId:row.id,provider:row.provider,providerReference:null,message:'Provider-backed payout has no provider payout reference.',observed:{state:row.status,amount,currency:row.currency}});
+        discrepancies.push({kind:'payout_provider_reference_missing',severity:'critical',caseId:row.case_id,paymentIntentId:row.payment_intent_id,payoutId:row.id,provider:row.provider,providerReference:null,message:'Provider-backed payout has no provider payout reference.',observed:{state:row.state,amount,currency:row.currency}});
       }
       if(row.payment_intent_id&&row.payment_currency&&row.payment_currency!==row.currency){
         discrepancies.push({kind:'payout_currency_mismatch',severity:'critical',caseId:row.case_id,paymentIntentId:row.payment_intent_id,payoutId:row.id,provider:row.provider,providerReference:row.provider_payout_id,message:'Payout currency does not match its linked payment.',observed:{payoutCurrency:row.currency,paymentCurrency:row.payment_currency}});
@@ -99,7 +99,7 @@ async function reconcileSnapshot(bounded:number){
         discrepancies.push({kind:'payout_ledger_mismatch',severity:'critical',caseId:row.case_id,paymentIntentId:row.payment_intent_id,payoutId:row.id,provider:row.provider,providerReference:row.provider_payout_id,message:'Paid payout does not match its posted provider-payable ledger amount.',observed:{payoutAmount:amount,payoutLedgerAmount:ledger,currency:row.currency}});
       }
       if(row.state!=='paid'&&ledger!==0){
-        discrepancies.push({kind:'premature_payout_ledger_entry',severity:'critical',caseId:row.case_id,paymentIntentId:row.payment_intent_id,payoutId:row.id,provider:row.provider,providerReference:row.provider_payout_id,message:'A provider payout ledger entry exists before the payout is paid.',observed:{state:row.status,payoutLedgerAmount:ledger,currency:row.currency}});
+        discrepancies.push({kind:'premature_payout_ledger_entry',severity:'critical',caseId:row.case_id,paymentIntentId:row.payment_intent_id,payoutId:row.id,provider:row.provider,providerReference:row.provider_payout_id,message:'A provider payout ledger entry exists before the payout is paid.',observed:{state:row.state,payoutLedgerAmount:ledger,currency:row.currency}});
       }
       if(row.payment_intent_id&&row.payment_state&&['created','requires_action','authorized','cancelled','failed','refunded'].includes(row.payment_state)){
         discrepancies.push({kind:'payout_linked_to_uncaptured_payment',severity:'critical',caseId:row.case_id,paymentIntentId:row.payment_intent_id,payoutId:row.id,provider:row.provider,providerReference:row.provider_payout_id,message:'Payout is linked to a payment with no remaining captured funding.',observed:{payoutState:row.state,paymentState:row.payment_state}});
