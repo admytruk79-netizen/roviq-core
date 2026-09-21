@@ -232,6 +232,35 @@ describe('controlled Shop OS pilot readiness gate',()=>{
     expect(aborted.status).toBe('aborted');
   });
 
+
+  it('rejects API attempts to complete a pilot with partial evidence',async()=>{
+    const created=await createPilotRun(admin,{organizationId:orgId,locationId});
+    await startPilotRun(admin,created.id);
+
+    const domain=await pool.query(`select id from domains where code='maintenance' limit 1`);
+    const serviceCase=await pool.query(
+      `insert into service_cases(domain_id,location_id,state,current_owner_role,current_owner_actor_id,completed_at)
+       values($1,$2,'completed','partner',$3,now()) returning id`,
+      [domain.rows[0].id,locationId,partnerActorId]
+    );
+    await addPilotRunCase(admin,created.id,serviceCase.rows[0].id);
+
+    await expect(finishPilotRun(admin,created.id,{
+      outcome:'completed',
+      evidence:{scheduling:'passed'}
+    })).rejects.toMatchObject({
+      message:'pilot_evidence_incomplete',
+      statusCode:409,
+      missingEvidence:expect.arrayContaining(['repairOrder','notifications','payments','reconciliation'])
+    });
+
+    const aborted=await finishPilotRun(admin,created.id,{
+      outcome:'aborted',
+      abortReason:'Acceptance test verified incomplete-evidence completion is rejected.'
+    });
+    expect(aborted.status).toBe('aborted');
+  });
+
   it('keeps scoped admins inside their own pilot organization and location',async()=>{
     const scopedAdminActor=await pool.query(
       `insert into actors(actor_type,status,organization_id,location_id,attributes)
