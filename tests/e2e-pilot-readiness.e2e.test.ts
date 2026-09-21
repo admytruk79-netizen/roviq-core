@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { pool } from '../src/db/pool.js';
 import { getPilotReadiness } from '../src/services/pilot-readiness.js';
 import { createPaymentIntent } from '../src/services/payment-core.js';
+import { requeueFailedNotification } from '../src/services/notifications.js';
 import { addPilotRunCase, createPilotRun, finishPilotRun, getPilotRunHealth, startPilotRun } from '../src/services/pilot-runs.js';
 
 const admin={role:'admin'} as const;
@@ -249,6 +250,53 @@ describe('controlled Shop OS pilot readiness gate',()=>{
     expect(aborted.status).toBe('aborted');
   });
 
+
+
+  it('moves a dead linked notification from degraded to recoverable retry state',async()=>{
+    const created=await createPilotRun(admin,{organizationId:orgId,locationId});
+    await startPilotRun(admin,created.id);
+
+    const domain=await pool.query(`select id from domains where code='maintenance' limit 1`);
+    const serviceCase=await pool.query(
+      `insert into service_cases(domain_id,location_id,state,current_owner_role,current_owner_actor_id)
+       values($1,$2,'repair_in_progress','partner',$3) returning id`,
+      [domain.rows[0].id,locationId,partnerActorId]
+    );
+    await addPilotRunCase(admin,created.id,serviceCase.rows[0].id);
+    const notification=await pool.query(
+      `insert into notification_outbox(
+         case_id,channel,recipient_type,recipient_id,template_key,payload,state,attempt_count,max_attempts,last_error
+       ) values($1,'sms','actor',$2,'pilot_recovery','{}'::jsonb,'dead',5,5,'provider_down')
+       returning id`,
+      [serviceCase.rows[0].id,partnerActorId]
+    );
+
+    const degraded=await getPilotRunHealth(admin,created.id);
+    expect(degraded.status).toBe('degraded');
+    expect(degraded.operational.notifications.dead).toBe(1);
+
+    await requeueFailedNotification(admin,notification.rows[0].id);
+    const retrying=await getPilotRunHealth(admin,created.id);
+    expect(retrying.status).toBe('attention');
+    expect(retrying.operational.notifications.dead).toBe(0);
+    expect(retrying.operational.notifications.retrying).toBe(1);
+
+    await pool.query(
+      `update notification_outbox
+          set state='sent',sent_at=now(),attempt_count=6,last_error=null,locked_at=null,locked_by=null
+        where id=$1`,
+      [notification.rows[0].id]
+    );
+    const recovered=await getPilotRunHealth(admin,created.id);
+    expect(recovered.operational.notifications.dead).toBe(0);
+    expect(recovered.operational.notifications.retrying).toBe(0);
+
+    const aborted=await finishPilotRun(admin,created.id,{
+      outcome:'aborted',
+      abortReason:'Acceptance test verified notification recovery state transitions.'
+    });
+    expect(aborted.status).toBe('aborted');
+  });
 
   it('degrades a live pilot when a linked case has a failed payment-provider event',async()=>{
     const created=await createPilotRun(admin,{organizationId:orgId,locationId});
