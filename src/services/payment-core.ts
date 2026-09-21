@@ -47,12 +47,24 @@ export async function refundPayment(principal:Principal,paymentIntentId:string,a
   }catch(error){await client.query('rollback');throw error;}finally{client.release();}
 }
 
-export async function createPayout(principal:Principal,input:{caseId:string;counterpartyActorId:string;paymentIntentId?:string;amount:number;currency?:string;provider?:string;providerPayoutId?:string;metadata?:Record<string,unknown>}){
+export async function createPayout(principal:Principal,input:{caseId:string;counterpartyActorId:string;paymentIntentId?:string;amount:number;currency?:string;provider?:string;providerPayoutId?:string;clientRequestId?:string;metadata?:Record<string,unknown>}){
   const normalizedCurrency=normalizeFinancialCurrency(input.currency),normalizedProvider=normalizeProvider(input.provider);assertFinancialAmount(input.amount,normalizedCurrency);const client=await pool.connect();try{await client.query('begin');const serviceCase=await client.query('select id from service_cases where id=$1 for update',[input.caseId]);if(!serviceCase.rowCount) throw new Error('case_not_found');await assertFinancialCaseAccess(principal,input.caseId,client);const actor=await client.query(`select id,status from actors where id=$1`,[input.counterpartyActorId]);if(!actor.rowCount||actor.rows[0].status!=='active') throw new Error('payout_counterparty_invalid');const requestedPaymentIntentId=input.paymentIntentId??null;let linkedPaymentAmount:number|null=null;
     if(input.paymentIntentId){const payment=await client.query(`select case_id,currency,amount from payment_intents where id=$1 for update`,[input.paymentIntentId]);if(!payment.rowCount) throw new Error('payment_not_found');if(payment.rows[0].case_id!==input.caseId) throw new Error('payout_payment_case_mismatch');if(payment.rows[0].currency!==normalizedCurrency) throw new Error('payout_currency_mismatch');linkedPaymentAmount=Number(payment.rows[0].amount);}
+    if(input.clientRequestId){
+      const existingRequest=await client.query(
+        `select * from settlement_payouts where provider=$1 and client_request_id=$2`,
+        [normalizedProvider,input.clientRequestId]
+      );
+      if(existingRequest.rowCount){
+        const row=existingRequest.rows[0];
+        if(row.case_id!==input.caseId||row.counterparty_actor_id!==input.counterpartyActorId||!amountEquals(row.amount,input.amount)||row.currency!==normalizedCurrency||(row.payment_intent_id??null)!==requestedPaymentIntentId) throw new Error('payout_request_conflict');
+        await client.query('commit');
+        return row;
+      }
+    }
     if(input.providerPayoutId){const existing=await client.query(`select * from settlement_payouts where provider=$1 and provider_payout_id=$2`,[normalizedProvider,input.providerPayoutId]);if(existing.rowCount){const row=existing.rows[0];if(row.case_id!==input.caseId||row.counterparty_actor_id!==input.counterpartyActorId||!amountEquals(row.amount,input.amount)||row.currency!==normalizedCurrency||(row.payment_intent_id??null)!==requestedPaymentIntentId) throw new Error('provider_payout_conflict');await client.query('commit');return row;}}
     if(input.paymentIntentId&&linkedPaymentAmount!==null){const committed=await client.query(`select coalesce((select sum(amount) from payment_events where payment_intent_id=$1 and event_type='REFUND'),0)::numeric as refunded,coalesce((select sum(amount) from settlement_payouts where payment_intent_id=$1 and state not in ('cancelled','failed')),0)::numeric as paid_out`,[input.paymentIntentId]);const available=linkedPaymentAmount-Number(committed.rows[0].refunded)-Number(committed.rows[0].paid_out);if(input.amount>available) throw new Error('payout_exceeds_available_balance');}
-    const r=await client.query(`insert into settlement_payouts(case_id,counterparty_actor_id,payment_intent_id,amount,currency,provider,provider_payout_id,metadata) values($1,$2,$3,$4,$5,$6,$7,$8) returning *`,[input.caseId,input.counterpartyActorId,requestedPaymentIntentId,input.amount,normalizedCurrency,normalizedProvider,input.providerPayoutId??null,JSON.stringify(input.metadata??{})]);const payout=r.rows[0];await appendCaseEvent(input.caseId,'PAYOUT_CREATED',principal,{payoutId:payout.id,counterpartyActorId:input.counterpartyActorId,amount:input.amount},client);await insertFinancialAudit(client,principal,'create_payout','settlement_payout',payout.id,'provider_settlement',{caseId:input.caseId});await client.query('commit');return payout;
+    const r=await client.query(`insert into settlement_payouts(case_id,counterparty_actor_id,payment_intent_id,amount,currency,provider,provider_payout_id,client_request_id,metadata) values($1,$2,$3,$4,$5,$6,$7,$8,$9) returning *`,[input.caseId,input.counterpartyActorId,requestedPaymentIntentId,input.amount,normalizedCurrency,normalizedProvider,input.providerPayoutId??null,input.clientRequestId??null,JSON.stringify(input.metadata??{})]);const payout=r.rows[0];await appendCaseEvent(input.caseId,'PAYOUT_CREATED',principal,{payoutId:payout.id,counterpartyActorId:input.counterpartyActorId,amount:input.amount},client);await insertFinancialAudit(client,principal,'create_payout','settlement_payout',payout.id,'provider_settlement',{caseId:input.caseId});await client.query('commit');return payout;
   }catch(error){await client.query('rollback');throw error;}finally{client.release();}
 }
 
