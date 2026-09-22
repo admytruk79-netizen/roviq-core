@@ -563,6 +563,7 @@ describe('controlled Shop OS pilot readiness gate',()=>{
         where id=$1`,
       [notification.rows[0].id]
     );
+    await addCanonicalCompletionTruth(serviceCase.rows[0].id);
     const completed=await finishPilotRun(admin,created.id,{outcome:'completed',evidence});
     expect(completed.status).toBe('completed');
   });
