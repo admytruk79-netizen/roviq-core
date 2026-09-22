@@ -150,7 +150,7 @@ Common component:
 - role-specific quick actions/cards
 
 Customer/driver: Drive, vehicle, Local, journey, cases.
-Dispatcher/admin: queues, exceptions, assignment.
+Dispatcher: operational workspace for queues, unassigned work, exceptions, assignments, provider/tow coordination, ETAs and handoffs. It is a first-class front-end workspace even while the verified Core currently derives its authority from admin/operations permissions.
 Tow: pickups, routing, ETA, handoff.
 Shop/dealership: incoming work, scheduling/capacity, estimate, repair status.
 Fleet: vehicles, downtime, approvals, mobility/loaners.
@@ -202,5 +202,35 @@ Do not merge this branch to `main` or deploy it until:
 - Verified existing case access already grants access from real actor/case relations rather than relying only on the primary role label.
 - Added `cloudflare/actor-context.js`; no Drive-specific identity tables were introduced.
 - `POST /api/drive/respond` now verifies the existing Core JWT, resolves the actor, injects scoped actor context into intent classification, and checks conversational capability before routing.
-- Current authorization matrix is intentionally conservative. Dispatcher is represented through admin authority today because no separate dispatcher principal role exists in the verified Core role set. Do not invent a dispatcher role until the existing admin/operations model is deliberately split.
+- Current authorization matrix is intentionally conservative. **Dispatcher is a first-class ROVIQ workspace/actor experience.** The verified Core does not currently have a separate `dispatcher` authentication role, so dispatcher authority is presently derived from admin/operations permissions. This is intentional: visible workspace/persona and authentication role are separate concepts. Do not drop Dispatcher, and do not invent a parallel identity system just to expose the workspace.
 - Next: shared conversation/session persistence and tool registry. Consequential tool calls must reuse the authorization rules of their underlying Core endpoints rather than treating intent classification as authorization.
+
+
+## Workspace versus authentication role
+
+ROVIQ's adaptive front end must not equate a visible workspace with a hard-coded login role.
+
+Canonical resolution:
+`Identity -> Actor -> organization/relationships -> capabilities/permissions -> available workspace(s) -> authorized Core tools`
+
+First-class workspaces include Customer/Drive, Dispatcher, Tow, Shop/Dealership, Diagnostic, Fleet, Parts and Admin. A single authenticated person may be entitled to more than one workspace without creating duplicate identities.
+
+### Dispatcher workspace
+
+Dispatcher is mandatory in the unified front end. Initial surface:
+- incoming and unassigned cases
+- cases waiting beyond operational thresholds
+- exceptions/escalations
+- provider and diagnostic coordination
+- tow/transport coordination and ETAs
+- assignments/reassignments where authorized
+- case handoffs and blockers
+- Ask ROVIQ with dispatcher-scoped tools
+
+Dispatcher chat examples:
+- “Show cases waiting more than 20 minutes.”
+- “Which tow jobs are still unassigned?”
+- “What is blocking case 284?”
+- “Show the current handoff status.”
+
+The chat classifier may identify a `dispatch` intent, but execution authority comes from Core permissions and case/organization scope, never from the classifier itself.
