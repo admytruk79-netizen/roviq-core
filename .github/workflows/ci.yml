@@ -105,6 +105,7 @@ jobs:
       ALLOW_DEV_HEADERS: 'true'
       BOOTSTRAP_ADMIN_EMAIL: acceptance-admin@roviq.test
       BOOTSTRAP_ADMIN_PASSWORD: AcceptanceAdminPassword123!
+      PGPASSWORD: postgres
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
