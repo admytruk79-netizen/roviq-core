@@ -1,5 +1,6 @@
 import { buildPushPayload } from '@block65/webcrypto-web-push';
 import { handleLocalCoreRequest, isLocalCorePath } from './local-adapter.js';
+import { classifyDriveIntent, localSearchUrl } from './drive-router.js';
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -512,6 +513,67 @@ export default {
           (select count(*)::int from service_cases) service_cases,
           (select count(*)::int from demand_requests) demand_requests`;
         return json({ ok: true, service: 'roviq-core', counts: rows[0] });
+      }
+
+      if (url.pathname === '/api/drive/intent' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}));
+        const utterance = String(body.utterance || '').trim();
+        if (!utterance) return json({ error: 'utterance_required' }, 400);
+        const classification = await classifyDriveIntent(env, utterance, body.context || {});
+        return json({ ok: true, ...classification });
+      }
+
+      if (url.pathname === '/api/drive/respond' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}));
+        const utterance = String(body.utterance || '').trim();
+        if (!utterance) return json({ error: 'utterance_required' }, 400);
+
+        const classification = await classifyDriveIntent(env, utterance, body.context || {});
+
+        if (classification.intent === 'local_discovery') {
+          const localUrl = localSearchUrl(url, body);
+          const localRequest = new Request(localUrl, { method: 'GET', headers: request.headers });
+          return await handleLocalCoreRequest(localRequest, env, localUrl);
+        }
+
+        if (classification.intent === 'vehicle_issue') {
+          if (classification.safetyCritical) {
+            return json({
+              ok: true,
+              intent: 'vehicle_issue',
+              safetyCritical: true,
+              action: 'stop_safely',
+              message: 'A potentially critical vehicle condition was reported. Move to a safe location and stop the vehicle as soon as it is safe to do so.',
+              next: body.caseId ? 'triage' : 'create_service_case'
+            });
+          }
+          if (!body.caseId) {
+            return json({
+              ok: true,
+              intent: 'vehicle_issue',
+              safetyCritical: false,
+              action: 'collect_vehicle_issue',
+              next: 'create_service_case',
+              message: 'Vehicle concern recognized. A service case is required before AI triage can run.'
+            });
+          }
+          if (!env.AI) return json({ error: 'workers_ai_not_bound' }, 503);
+          const result = await runTriage(env, {
+            caseId: body.caseId,
+            symptoms: utterance,
+            vehicle: body.vehicle || {},
+            observations: body.observations || {}
+          });
+          return result.error ? json({ error: result.error }, result.status) : json({ ok: true, intent: 'vehicle_issue', ...result });
+        }
+
+        return json({
+          ok: true,
+          intent: classification.intent,
+          confidence: classification.confidence,
+          action: 'clarify',
+          message: 'I can help with places and stops, or with a vehicle concern. What would you like help with?'
+        });
       }
 
       if (url.pathname === '/api/triage/run' && request.method === 'POST') {
