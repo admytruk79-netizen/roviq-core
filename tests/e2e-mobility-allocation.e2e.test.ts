@@ -70,6 +70,15 @@ describe('mobility allocation end-to-end lifecycle', () => {
     });
     const secondAllocationId = JSON.parse(secondRequestRes.body).allocation.id;
 
+    const incapable = await app.inject({ method:'POST', url:'/api/admin/actors', headers:adminHeaders(), payload:{actorType:'customer'} });
+    const incapableActorId = JSON.parse(incapable.body).actor.id as string;
+    const incapableResourceRes = await app.inject({
+      method:'POST', url:'/api/admin/mobility/resources', headers:adminHeaders(),
+      payload:{actorId:incapableActorId,resourceType:'loaner',label:'Invalid loaner owner'}
+    });
+    expect(incapableResourceRes.statusCode).toBe(409);
+    expect(JSON.parse(incapableResourceRes.body).error).toBe('provider_not_mobility_capable');
+
     const resourceRes = await app.inject({
       method: 'POST', url: '/api/admin/mobility/resources', headers: adminHeaders(),
       payload: { actorId: fleetActorId, resourceType: 'loaner', label: 'Loaner #1' }
@@ -90,6 +99,13 @@ describe('mobility allocation end-to-end lifecycle', () => {
     });
     expect(mismatchRes.statusCode).toBe(409);
     expect(JSON.parse(mismatchRes.body).error).toBe('resource_provider_mismatch');
+
+    const incapableAssignRes = await app.inject({
+      method:'POST', url:`/api/admin/mobility/${allocationId}/assign`, headers:adminHeaders(),
+      payload:{providerActorId:incapableActorId}
+    });
+    expect(incapableAssignRes.statusCode).toBe(409);
+    expect(JSON.parse(incapableAssignRes.body).error).toBe('provider_not_mobility_capable');
 
     const missingProviderRes = await app.inject({
       method: 'POST', url: `/api/admin/mobility/${allocationId}/assign`, headers: adminHeaders(),
