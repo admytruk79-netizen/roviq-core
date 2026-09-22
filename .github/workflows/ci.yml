@@ -138,8 +138,8 @@ jobs:
           test "$RESTORED_MIGRATION_COUNT" -eq "$SOURCE_MIGRATION_COUNT"
 
           for table in service_cases payment_intents audit_log pilot_runs; do
-            RESTORED_TABLE="$(psql "$RESTORE_URL" -Atqc "select coalesce(to_regclass('public.' || '$table')::text,'')")"
-            test "$RESTORED_TABLE" = "$table"
+            TABLE_PRESENT="$(psql "$RESTORE_URL" -Atqc "select case when to_regclass('public.$table') is not null then 'yes' else 'no' end")"
+            test "$TABLE_PRESENT" = "yes"
             echo "Restored table verified: $table"
           done
 
