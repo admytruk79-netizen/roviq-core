@@ -177,12 +177,9 @@ jobs:
             sleep 1
           done
           pg_isready --host=localhost --port=5432 --username=postgres --dbname=roviq_test
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
-          select case when status='active' then 1 else 1/0 end as active_pilot_survived_restart
-          from pilot_runs
-          where id='00000000-0000-4000-8000-000000000903';
-          select case when readiness_snapshot->>'source'='ci_restart_evidence' then 1 else 1/0 end as pilot_evidence_survived_restart
-          from pilot_runs
-          where id='00000000-0000-4000-8000-000000000903';
-          SQL
+          PILOT_STATUS="$(psql "$DATABASE_URL" -Atqc "select status from pilot_runs where id='00000000-0000-4000-8000-000000000903'")"
+          PILOT_EVIDENCE_SOURCE="$(psql "$DATABASE_URL" -Atqc "select readiness_snapshot->>'source' from pilot_runs where id='00000000-0000-4000-8000-000000000903'")"
+          echo "Pilot after restart: status=$PILOT_STATUS evidence_source=$PILOT_EVIDENCE_SOURCE"
+          test "$PILOT_STATUS" = "active"
+          test "$PILOT_EVIDENCE_SOURCE" = "ci_restart_evidence"
           npm run db:migrate
