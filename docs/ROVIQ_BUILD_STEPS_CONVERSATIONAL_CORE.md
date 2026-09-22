@@ -30,7 +30,7 @@ Target intents:
 
 Safety-critical vehicle conditions always override discovery/routing requests.
 
-### 2. Authenticated actor context — NEXT
+### 2. Authenticated actor context — IN PROGRESS
 
 Every conversation request must resolve the authenticated principal into existing Core data. Do not create a `drive_actor` identity.
 
@@ -45,10 +45,13 @@ Required context:
 - current journey/session when applicable
 
 Build:
-- `resolveConversationActor(request, sql)`
-- `authorizeConversationCapability(actorContext, capability)`
-- structured 401/403 responses
-- actor-context audit event on consequential actions
+- [x] `resolveConversationActor(request, env, sql)` reusing the existing JWT/principal identity and actor model
+- [x] `authorizeConversationCapability(actorContext, capability)`
+- [x] Resolve organization/location and existing `actor_capabilities`
+- [x] Require actor authorization in `POST /api/drive/respond`
+- [x] Structured 401/403 responses
+- [ ] Actor-context audit event on consequential actions
+- [ ] Replace initial role/capability matrix with endpoint/tool-level authorization as each chat tool is wired
 
 Important: authorization is checked for every tool/action, not only at login.
 
@@ -190,3 +193,14 @@ Do not merge this branch to `main` or deploy it until:
 3. tests pass,
 4. Local API query behavior is verified,
 5. existing portals are regression-tested.
+
+
+## Build log — 2026-09-22
+
+- Verified existing Core authentication uses Bearer JWTs issued from `principal_identities`, with roles `admin/customer/partner/diagnostic/tow/parts/fleet` and actor IDs for non-admin principals.
+- Verified actors already carry `organization_id` and `location_id`, and supplemental operational permissions already use `actor_capabilities -> capabilities`.
+- Verified existing case access already grants access from real actor/case relations rather than relying only on the primary role label.
+- Added `cloudflare/actor-context.js`; no Drive-specific identity tables were introduced.
+- `POST /api/drive/respond` now verifies the existing Core JWT, resolves the actor, injects scoped actor context into intent classification, and checks conversational capability before routing.
+- Current authorization matrix is intentionally conservative. Dispatcher is represented through admin authority today because no separate dispatcher principal role exists in the verified Core role set. Do not invent a dispatcher role until the existing admin/operations model is deliberately split.
+- Next: shared conversation/session persistence and tool registry. Consequential tool calls must reuse the authorization rules of their underlying Core endpoints rather than treating intent classification as authorization.
