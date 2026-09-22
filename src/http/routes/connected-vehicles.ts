@@ -6,6 +6,8 @@ import { audit } from '../../services/audit.js';
 import { appendCaseEvent } from '../../services/case-events.js';
 import { loadCaseForPrincipal } from '../../services/case-access.js';
 import { requireRole } from '../middleware/principal.js';
+import { evaluateVehicleHealthSafety } from '../../services/vehicle-health-safety.js';
+import { raiseException } from '../../services/workflow-support.js';
 
 async function loadOwnedVehicle(principal:any, vehicleId:string) {
   const result = await pool.query(
@@ -182,11 +184,31 @@ export async function connectedVehicleRoutes(app:FastifyInstance) {
     if(body.serviceCaseId){
       const serviceCase=await loadCaseForPrincipal(req.principal,body.serviceCaseId);
       if(!serviceCase) return reply.code(404).send({error:'case_not_found'});
-      if(serviceCase.vehicle_id&&serviceCase.vehicle_id!==body.vehicleId) return reply.code(409).send({error:'case_vehicle_mismatch'});
-      if(!serviceCase.vehicle_id){
-        await pool.query(`update service_cases set vehicle_id=$2,updated_at=now() where id=$1 and vehicle_id is null`,[body.serviceCaseId,body.vehicleId]);
+      // service_cases.vehicle_id already exists (migration 016) referencing the older `vehicles`
+      // table used by the Service Plan/commerce domain -- a different table from this domain's
+      // customer_vehicles. connected_vehicle_id (migration 061) is this domain's own link so it
+      // doesn't collide with that pre-existing column/constraint.
+      if(serviceCase.connected_vehicle_id&&serviceCase.connected_vehicle_id!==body.vehicleId) return reply.code(409).send({error:'case_vehicle_mismatch'});
+      if(!serviceCase.connected_vehicle_id){
+        await pool.query(`update service_cases set connected_vehicle_id=$2,updated_at=now() where id=$1 and connected_vehicle_id is null`,[body.serviceCaseId,body.vehicleId]);
       }
     }
+
+    // A source's self-reported severity/safety_state is evidence, not authority -- recompute an
+    // independent safety floor the same way the AI triage path already does for free-text
+    // symptoms (triage-engine.ts's deterministicSafety), so a source cannot understate a
+    // condition Core can already recognize as critical from the DTC codes or text it sent.
+    const safety=evaluateVehicleHealthSafety({
+      dtcCodes:body.dtcCodes,eventType:body.eventType,normalizedSignals:body.normalizedSignals,metadata:body.metadata
+    });
+    const reportedSeverity=body.severity;
+    const reportedSafetyState=body.safetyState;
+    const severity=safety.matched?'critical':body.severity;
+    const safetyState=safety.matched?'stop_driving':body.safetyState;
+    const requiresHumanReview=safety.matched||severity==='critical'||safetyState==='stop_driving'||safetyState==='restricted_use';
+    const eventMetadata=safety.matched
+      ?{...body.metadata,reportedSeverity,reportedSafetyState,safetyOverrideMatches:safety.matches}
+      :body.metadata;
 
     const deduplicationKey=healthEventDedupKey({
       sourceId:body.sourceId,vehicleId:body.vehicleId,sourceEventId:body.sourceEventId,
@@ -195,15 +217,17 @@ export async function connectedVehicleRoutes(app:FastifyInstance) {
     const inserted=await pool.query(
       `insert into vehicle_health_events(
         vehicle_id,source_id,enrollment_id,service_case_id,source_event_id,event_type,severity,safety_state,
-        occurred_at,dtc_codes,normalized_signals,raw_reference,deduplication_key,triage_state,metadata
-       ) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+        occurred_at,dtc_codes,normalized_signals,raw_reference,deduplication_key,triage_state,
+        requires_human_review,safety_override,safety_override_reason,metadata
+       ) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
        on conflict(source_id,deduplication_key) do nothing
        returning *`,
       [
         body.vehicleId,body.sourceId,body.enrollmentId??null,body.serviceCaseId??null,body.sourceEventId??null,
-        body.eventType,body.severity,body.safetyState,body.occurredAt,body.dtcCodes,
+        body.eventType,severity,safetyState,body.occurredAt,body.dtcCodes,
         JSON.stringify(body.normalizedSignals),JSON.stringify(body.rawReference),deduplicationKey,
-        body.serviceCaseId?'linked_to_case':'unreviewed',JSON.stringify(body.metadata)
+        body.serviceCaseId?'linked_to_case':'unreviewed',
+        requiresHumanReview,safety.matched,safety.reason,JSON.stringify(eventMetadata)
       ]
     );
     const event=inserted.rows[0]??(
@@ -215,12 +239,21 @@ export async function connectedVehicleRoutes(app:FastifyInstance) {
     }
     if(inserted.rowCount&&body.serviceCaseId){
       await appendCaseEvent(body.serviceCaseId,'VEHICLE_HEALTH_EVENT_LINKED',req.principal,{
-        vehicleHealthEventId:event.id,eventType:body.eventType,severity:body.severity,safetyState:body.safetyState
+        vehicleHealthEventId:event.id,eventType:body.eventType,severity,safetyState
       });
+      if(safety.matched){
+        await appendCaseEvent(body.serviceCaseId,'VEHICLE_HEALTH_SAFETY_OVERRIDE',req.principal,{
+          vehicleHealthEventId:event.id,reason:safety.reason,reportedSeverity,reportedSafetyState
+        });
+        await raiseException(body.serviceCaseId,'VEHICLE_HEALTH_SAFETY_OVERRIDE',
+          `A connected vehicle-health event was independently flagged stop-driving (${safety.reason}), overriding the source's own report.`,
+          'critical',{vehicleHealthEventId:event.id,reason:safety.reason,reportedSeverity,reportedSafetyState}
+        );
+      }
     }
     if(inserted.rowCount){
       await audit(req.principal,'ingest_vehicle_health_event','vehicle_health_event',event.id,'connected_vehicle_event_ingested',{
-        vehicleId:body.vehicleId,sourceId:body.sourceId,severity:body.severity,linkedCaseId:body.serviceCaseId??null
+        vehicleId:body.vehicleId,sourceId:body.sourceId,severity,safetyOverride:safety.matched,linkedCaseId:body.serviceCaseId??null
       });
     }
     return reply.code(inserted.rowCount?201:200).send({event,deduplicated:!inserted.rowCount});
@@ -231,7 +264,8 @@ export async function connectedVehicleRoutes(app:FastifyInstance) {
     await loadOwnedVehicle(req.principal,vehicleId);
     const result=await pool.query(
       `select id,vehicle_id,source_id,enrollment_id,service_case_id,source_event_id,event_type,severity,safety_state,
-              occurred_at,received_at,dtc_codes,normalized_signals,triage_state,metadata
+              occurred_at,received_at,dtc_codes,normalized_signals,triage_state,
+              requires_human_review,safety_override,safety_override_reason,metadata
        from vehicle_health_events where vehicle_id=$1 order by occurred_at desc limit 250`,
       [vehicleId]
     );
