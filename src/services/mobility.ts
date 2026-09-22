@@ -15,6 +15,10 @@ export async function createMobilityResource(principal: Principal, input: {
   actorId: string; resourceType: string; externalReference?: string; label?: string;
   locationId?: string; attributes?: Record<string,unknown>; availableFrom?: string; availableUntil?: string;
 }) {
+  const actor=await pool.query(`select id,actor_type,status from actors where id=$1`,[input.actorId]);
+  if(!actor.rowCount) throw new Error('provider_not_found');
+  if(actor.rows[0].status!=='active') throw new Error('provider_not_available');
+  if(!['fleet','partner','dealership','shop'].includes(actor.rows[0].actor_type)) throw new Error('provider_not_mobility_capable');
   const r = await pool.query(
     `insert into mobility_resources(actor_id,resource_type,external_reference,label,location_id,attributes,available_from,available_until)
      values($1,$2,$3,$4,$5,$6,$7,$8) returning *`,
@@ -61,9 +65,10 @@ export async function assignMobility(principal: Principal, allocationId:string, 
     if (!a.rowCount) { await client.query('rollback'); return null; }
     if(a.rows[0].case_id!==caseId) throw new Error('mobility_case_changed');
     if (!['requested','reserved','declined','failed'].includes(a.rows[0].state)) throw new Error('invalid_allocation_state');
-    const provider=await client.query(`select id,status from actors where id=$1`,[input.providerActorId]);
+    const provider=await client.query(`select id,actor_type,status from actors where id=$1`,[input.providerActorId]);
     if(!provider.rowCount) throw new Error('provider_not_found');
     if(provider.rows[0].status!=='active') throw new Error('provider_not_available');
+    if(!['fleet','partner','dealership','shop'].includes(provider.rows[0].actor_type)) throw new Error('provider_not_mobility_capable');
     if (input.resourceId) {
       const resource = await client.query('select * from mobility_resources where id=$1 for update',[input.resourceId]);
       if (!resource.rowCount) throw new Error('resource_not_found');
