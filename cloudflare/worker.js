@@ -1,6 +1,7 @@
 import { buildPushPayload } from '@block65/webcrypto-web-push';
 import { handleLocalCoreRequest, isLocalCorePath } from './local-adapter.js';
 import { classifyDriveIntent, localSearchUrl } from './drive-router.js';
+import { resolveConversationActor, authorizeConversationCapability, conversationCapabilityForIntent } from './actor-context.js';
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -528,7 +529,31 @@ export default {
         const utterance = String(body.utterance || '').trim();
         if (!utterance) return json({ error: 'utterance_required' }, 400);
 
-        const classification = await classifyDriveIntent(env, utterance, body.context || {});
+        const sql = await sqlFor(env);
+        const actorContext = await resolveConversationActor(request, env, sql);
+        if (!actorContext.authenticated) return json({ error: actorContext.error }, 401);
+
+        const conversationContext = {
+          ...(body.context || {}),
+          actor: {
+            actorId: actorContext.actorId,
+            role: actorContext.role,
+            actorType: actorContext.actorType,
+            organizationId: actorContext.organizationId,
+            locationId: actorContext.locationId,
+            capabilities: actorContext.capabilities
+          }
+        };
+        const classification = await classifyDriveIntent(env, utterance, conversationContext);
+
+        const intentsToAuthorize = classification.intent === 'mixed'
+          ? (classification.components || [])
+          : [classification.intent];
+        for (const intent of intentsToAuthorize) {
+          const capability = conversationCapabilityForIntent(intent);
+          const authz = authorizeConversationCapability(actorContext, capability);
+          if (!authz.allowed) return json({ error: authz.error, capability: authz.capability, intent }, authz.status || 403);
+        }
 
         if (classification.intent === 'local_discovery') {
           const localUrl = localSearchUrl(url, body);
