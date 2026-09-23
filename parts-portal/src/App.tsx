@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { CoreCasePanel } from './CoreCasePanel';
 
 type Principal = { role: string; actorId?: string | null };
 type Order = { id: string; case_id: string; status: string; needed_by?: string; created_at?: string };
@@ -354,6 +355,7 @@ export default function App() {
         )}
 
         {active && <SpatialView caseId={active.case_id} />}
+        <CoreCasePanel />
       </main>
     </div>
   );
