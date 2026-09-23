@@ -2,6 +2,7 @@ import { buildPushPayload } from '@block65/webcrypto-web-push';
 import { handleLocalCoreRequest, isLocalCorePath } from './local-adapter.js';
 import { classifyDriveIntent, localSearchUrl } from './drive-router.js';
 import { resolveConversationActor, authorizeConversationCapability, conversationCapabilityForIntent } from './actor-context.js';
+import { loadOrCreateConversationSession, updateConversationSession, appendConversationTurn, sessionContext } from './conversation-session.js';
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -533,8 +534,25 @@ export default {
         const actorContext = await resolveConversationActor(request, env, sql);
         if (!actorContext.authenticated) return json({ error: actorContext.error }, 401);
 
+        let session;
+        try {
+          session = await loadOrCreateConversationSession(sql, actorContext, {
+            sessionId: body.sessionId,
+            workspace: body.workspace,
+            presentationSource: body.presentationSource
+          });
+        } catch (error) {
+          const message = String(error?.message || error);
+          if (message === 'conversation_session_forbidden') return json({ error: message }, 403);
+          if (message === 'conversation_session_not_found') return json({ error: message }, 404);
+          throw error;
+        }
+
+        await appendConversationTurn(sql, session.id, 'user', { content: utterance });
+
         const conversationContext = {
           ...(body.context || {}),
+          session: sessionContext(session),
           actor: {
             actorId: actorContext.actorId,
             role: actorContext.role,
@@ -545,6 +563,13 @@ export default {
           }
         };
         const classification = await classifyDriveIntent(env, utterance, conversationContext);
+        session = await updateConversationSession(sql, session.id, {
+          intent: classification.intent,
+          vehicleId: body.vehicleId,
+          serviceCaseId: body.caseId,
+          journeyContext: body.journeyContext,
+          entities: body.entities
+        }) || session;
 
         const intentsToAuthorize = classification.intent === 'mixed'
           ? (classification.components || [])
