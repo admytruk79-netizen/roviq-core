@@ -1,0 +1,50 @@
+name: Deploy ROVIQ Fleet Portal
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'fleet/**'
+      - '.github/workflows/deploy-fleet.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: roviq-fleet-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      VITE_API_BASE_URL: https://roviq-core.admytruk79.workers.dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        working-directory: fleet
+        run: npm ci --no-audit --no-fund
+      - name: Build Fleet portal
+        working-directory: fleet
+        run: npm run build
+      - name: Verify Cloudflare credentials
+        shell: bash
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN" || (echo "CLOUDFLARE_API_TOKEN is missing" && exit 1)
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || (echo "CLOUDFLARE_ACCOUNT_ID is missing" && exit 1)
+      - name: Ensure Cloudflare Pages project exists
+        working-directory: fleet
+        shell: bash
+        run: |
+          npx wrangler pages project list | grep -qw roviq-fleet-net \
+            || npx wrangler pages project create roviq-fleet-net --production-branch=main
+      - name: Deploy to Cloudflare Pages
+        working-directory: fleet
+        run: npx wrangler pages deploy dist --project-name=roviq-fleet-net --branch=main --commit-dirty=true
