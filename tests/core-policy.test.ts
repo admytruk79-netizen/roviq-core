@@ -18,4 +18,19 @@ describe('Core policy predicate evaluator',()=>{
     expect(policyPredicateMatches({'transition.to':{eq:'completed'}},facts)).toBe(false);
     expect(policyPredicateMatches({'case.constraints.missing':{exists:true}},facts)).toBe(false);
   });
+  it('can require current approval evidence through ordinary facts',()=>{
+    const completionFacts={
+      case:{constraints:{customerApprovalRequired:true}},
+      approval:{valid:false},
+      transition:{to:'completed'}
+    };
+    expect(policyPredicateMatches({
+      'case.constraints.customerApprovalRequired':{eq:true},
+      'approval.valid':{neq:true}
+    },completionFacts)).toBe(true);
+    expect(policyPredicateMatches({
+      'case.constraints.customerApprovalRequired':{eq:true},
+      'approval.valid':{neq:true}
+    },{...completionFacts,approval:{valid:true}})).toBe(false);
+  });
 });
