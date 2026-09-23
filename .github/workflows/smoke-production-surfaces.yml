@@ -11,9 +11,11 @@ on:
       - 'parts-portal/**'
       - 'tow/**'
       - 'ops/**'
+      - 'fleet/**'
       - 'cloudflare/**'
       - 'src/**'
       - '.github/workflows/smoke-production-surfaces.yml'
+      - '.github/workflows/deploy-fleet.yml'
 
 permissions:
   contents: read
@@ -38,7 +40,7 @@ jobs:
           - name: tow
             url: https://roviq-tow-net.pages.dev
           - name: ops
-            url: https://roviq-ops.pages.dev
+            url: https://roviq-ops.pages.dev https://roviq-fleet-net.pages.dev
     steps:
       - name: Fetch surface
         shell: bash
