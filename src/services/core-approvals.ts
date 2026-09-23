@@ -11,6 +11,7 @@ export async function requestCoreApproval(input:{
 },db:Queryable=pool){
   const c=await loadCoreCaseForPrincipal(input.principal,input.caseId,db);
   if(!c)throw new Error('case_not_found');
+  if(input.requestedFromActorId!==c.customer_actor_id&&input.requestedFromActorId!==c.current_owner_actor_id)throw new Error('approval_target_forbidden');
   const r=await db.query(`insert into core_approvals(case_id,approval_type,action,requested_from_actor_id,requested_by_actor_id,expected_case_version,payload,expires_at)
     values($1,$2,$3,$4,$5,$6,$7,$8) returning *`,
     [input.caseId,input.approvalType,input.action,input.requestedFromActorId,input.principal.actorId??null,Number(c.version),input.payload??{},input.expiresAt??null]);
