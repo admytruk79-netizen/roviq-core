@@ -8,8 +8,8 @@ const DEFINITIONS = Object.freeze({
   list_dispatch_queue: { intent: 'dispatch', capability: 'dispatch.read', method: 'GET' },
   list_dispatch_exceptions: { intent: 'dispatch', capability: 'dispatch.read', method: 'GET' },
   list_tow_assignments: { intent: 'tow', capability: 'tow.read', method: 'GET' },
-  list_shop_jobs: { intent: 'shop', capability: 'shop.read', method: 'GET' },
-  list_fleet_vehicles: { intent: 'fleet', capability: 'fleet.read', method: 'GET' }
+  list_shop_jobs: { intent: 'shop', capability: 'shop.read', method: 'GET', implemented: false },
+  list_fleet_vehicles: { intent: 'fleet', capability: 'fleet.read', method: 'GET', implemented: false }
 });
 
 export function conversationalToolDefinitions() {
@@ -54,14 +54,13 @@ export async function executeConversationTool(name, { env, request, actorContext
       return coreGet(env, request, '/api/admin/exceptions/v2?active=true');
     case 'list_tow_assignments':
       return coreGet(env, request, '/api/transport/me/dispatches');
-    case 'list_shop_jobs': {
-      // Case access remains relation-based in Core. Do not expose a network-wide shop queue.
-      const actorId = actorContext?.actorId;
-      if (!actorId) return { error: 'actor_required', status: 403 };
-      return coreGet(env, request, '/api/maintenance/provider/cases');
-    }
+    case 'list_shop_jobs':
+      // No verified aggregate shop-jobs endpoint exists yet. Add an actor-scoped Core endpoint
+      // before enabling this tool; never guess an endpoint or expose the global case queue.
+      return { error: 'conversation_tool_not_implemented', status: 501 };
     case 'list_fleet_vehicles':
-      return coreGet(env, request, '/api/fleet/me/vehicles');
+      // No verified fleet-vehicle aggregate endpoint exists yet.
+      return { error: 'conversation_tool_not_implemented', status: 501 };
     default:
       return { error: 'conversation_tool_not_implemented', status: 501 };
   }
