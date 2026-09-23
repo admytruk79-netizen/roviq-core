@@ -4,6 +4,8 @@ import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
 import { loadCoreCaseForPrincipal } from './core-case-access.js';
 import { startSaga, addSagaStep } from './saga-recovery.js';
+import { evaluateCorePolicy } from './core-policy.js';
+import { validateCoreApprovalEvidence } from './core-approvals.js';
 
 type Queryable=Pick<PoolClient,'query'>;
 export type TradePhase=
@@ -72,11 +74,15 @@ export async function loadTradeCase(principal:Principal,caseId:string,db:Queryab
 }
 
 export async function advanceTradePhase(input:{
-  principal:Principal; caseId:string; to:TradePhase; evidence?:Record<string,unknown>;
+  principal:Principal; caseId:string; to:TradePhase; expectedVersion:number; approvalId?:string; evidence?:Record<string,unknown>;
 },client:PoolClient){
   await loadTradeCase(input.principal,input.caseId,client);
   const r=await client.query('select * from trade_cases where case_id=$1 for update',[input.caseId]);
   const current=r.rows[0] as {phase:TradePhase};
+  const core=await client.query('select * from core_cases where id=$1 for update',[input.caseId]);
+  if(!core.rowCount)throw new Error('case_not_found');
+  const locked=core.rows[0];
+  if(Number(locked.version)!==input.expectedVersion)throw new Error('version_conflict');
   if(!tradePhaseAllowed(current.phase,input.to))throw new Error('trade_phase_not_allowed');
   const milestoneByTarget:Partial<Record<TradePhase,string>>={
     commercial_quote:'SOURCE_VERIFIED',
@@ -90,12 +96,24 @@ export async function advanceTradePhase(input:{
     const m=await client.query('select state from trade_case_milestones where case_id=$1 and milestone_code=$2',[input.caseId,required]);
     if(!m.rowCount||!['completed','waived'].includes(m.rows[0].state))throw new Error('trade_milestone_incomplete');
   }
-  const core=await client.query('select version from core_cases where id=$1 for update',[input.caseId]);
-  if(!core.rowCount)throw new Error('case_not_found');
-  const previousVersion=Number(core.rows[0].version),newVersion=previousVersion+1;
-  await client.query('update core_cases set version=$2,updated_at=now() where id=$1',[input.caseId,newVersion]);
+  const approval=await validateCoreApprovalEvidence({
+    caseId:input.caseId,approvalId:input.approvalId,action:`trade.phase:${input.to}`,expectedCaseVersion:input.expectedVersion
+  },client);
+  const policy=await evaluateCorePolicy({
+    action:'trade.phase',principal:input.principal,caseRecord:locked,toState:input.to,
+    facts:{evidence:input.evidence??{},approval}
+  },client);
+  if(policy.decision==='deny')throw new Error('policy_denied');
+  if(policy.decision==='require_review')throw new Error('policy_review_required');
+  if(input.to==='completed'&&!approval.valid)throw new Error(approval.reason);
+  const previousVersion=Number(locked.version),newVersion=previousVersion+1;
+  const coreState=input.to==='completed'?'completed':input.to==='cancelled'?'cancelled':locked.state==='intake'?'active':locked.state;
+  await client.query(`update core_cases set state=$2,version=$3,updated_at=now(),
+    completed_at=case when $2='completed' then now() else completed_at end,
+    cancelled_at=case when $2='cancelled' then now() else cancelled_at end
+    where id=$1`,[input.caseId,coreState,newVersion]);
   const u=await client.query('update trade_cases set phase=$2,updated_at=now() where case_id=$1 returning *',[input.caseId,input.to]);
-  const payload={from:current.phase,to:input.to,evidence:input.evidence??{}};
+  const payload={from:current.phase,to:input.to,evidence:input.evidence??{},approval:approval.valid?approval.approval:null};
   const correlationId=randomUUID();
   await client.query(`insert into core_case_events(case_id,actor_id,event_type,correlation_id,payload,previous_version,new_version)
     values($1,$2,'TRADE_PHASE_CHANGED',$3,$4,$5,$6)`,[
