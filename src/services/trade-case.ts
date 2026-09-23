@@ -89,11 +89,19 @@ export async function advanceTradePhase(input:{
     const m=await client.query('select state from trade_case_milestones where case_id=$1 and milestone_code=$2',[input.caseId,required]);
     if(!m.rowCount||!['completed','waived'].includes(m.rows[0].state))throw new Error('trade_milestone_incomplete');
   }
+  const core=await client.query('select version from core_cases where id=$1 for update',[input.caseId]);
+  if(!core.rowCount)throw new Error('case_not_found');
+  const previousVersion=Number(core.rows[0].version),newVersion=previousVersion+1;
+  await client.query('update core_cases set version=$2,updated_at=now() where id=$1',[input.caseId,newVersion]);
   const u=await client.query('update trade_cases set phase=$2,updated_at=now() where case_id=$1 returning *',[input.caseId,input.to]);
-  await client.query(`insert into core_case_events(case_id,actor_id,event_type,payload,previous_version,new_version)
-    select $1,$2,'TRADE_PHASE_CHANGED',$3,version,version from core_cases where id=$1`,[
-      input.caseId,input.principal.actorId??null,{from:current.phase,to:input.to,evidence:input.evidence??{}}
+  const payload={from:current.phase,to:input.to,evidence:input.evidence??{}};
+  const correlationId=randomUUID();
+  await client.query(`insert into core_case_events(case_id,actor_id,event_type,correlation_id,payload,previous_version,new_version)
+    values($1,$2,'TRADE_PHASE_CHANGED',$3,$4,$5,$6)`,[
+      input.caseId,input.principal.actorId??null,correlationId,payload,previousVersion,newVersion
     ]);
+  await client.query(`insert into core_outbox(aggregate_type,aggregate_id,event_type,payload,correlation_id)
+    values('case',$1,'TRADE_PHASE_CHANGED',$2,$3)`,[input.caseId,{caseId:input.caseId,...payload,version:newVersion},correlationId]);
   return u.rows[0];
 }
 
