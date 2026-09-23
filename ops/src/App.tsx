@@ -13,6 +13,9 @@ import { NetworkMap } from './pages/NetworkMap';
 import { IntegrationHealth } from './pages/IntegrationHealth';
 import { NotificationOperations } from './pages/NotificationOperations';
 import { FinancialOperations } from './pages/FinancialOperations';
+import { CommandCenter } from './pages/CommandCenter';
+import { CoreCases } from './pages/CoreCases';
+import { CoreCaseWorkspace } from './pages/CoreCaseWorkspace';
 
 function CaseControl() {
   return (
@@ -40,7 +43,10 @@ function App() {
           <Route path="/login" element={<Login />} />
           <Route element={<ProtectedRoute />}>
             <Route element={<Layout />}>
-              <Route path="/" element={<Cases />} />
+              <Route path="/" element={<CommandCenter />} />
+              <Route path="/cases" element={<Cases />} />
+              <Route path="/core-cases" element={<CoreCases />} />
+              <Route path="/core-cases/:id" element={<CoreCaseWorkspace />} />
               <Route path="/exceptions" element={<Exceptions />} />
               <Route path="/integrations" element={<IntegrationHealth />} />
               <Route path="/notifications" element={<NotificationOperations />} />
