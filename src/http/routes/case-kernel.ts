@@ -5,6 +5,7 @@ import { pool } from '../../db/pool.js';
 import { requireRole } from '../middleware/principal.js';
 import { withIdempotency } from '../../services/idempotency.js';
 import { loadCoreCaseForPrincipal } from '../../services/core-case-access.js';
+import { evaluateCorePolicy } from '../../services/core-policy.js';
 
 const caseType=z.enum(['maintenance','transport','mobility','fleet','trade']);
 const createBody=z.object({
@@ -79,6 +80,9 @@ export async function caseKernelRoutes(app:FastifyInstance){
         if(Number(locked.version)!==body.expectedVersion)return {status:409,body:{error:'version_conflict',currentVersion:Number(locked.version),state:locked.state}};
         if(terminal.has(locked.state))return {status:409,body:{error:'terminal_case',state:locked.state}};
         if(!(allowed[locked.state]?.has(body.requestedTransition)))return {status:422,body:{error:'transition_not_allowed',from:locked.state,to:body.requestedTransition}};
+        const policy=await evaluateCorePolicy({action:'case.transition',principal:req.principal,caseRecord:locked,toState:body.requestedTransition,facts:{evidence:body.evidence}},client);
+        if(policy.decision==='deny')return {status:403,body:{error:'policy_denied',reason:policy.reason,matchedRules:policy.matchedRules}};
+        if(policy.decision==='require_review')return {status:409,body:{error:'policy_review_required',reason:policy.reason,matchedRules:policy.matchedRules}};
         const nextVersion=Number(locked.version)+1, correlationId=body.correlationId??randomUUID(), now=new Date();
         const done=body.requestedTransition==='completed'?now:null, cancelled=body.requestedTransition==='cancelled'?now:null;
         const u=await client.query('update core_cases set state=$2,version=$3,updated_at=$4,completed_at=coalesce($5,completed_at),cancelled_at=coalesce($6,cancelled_at) where id=$1 and version=$7 returning *',[id,body.requestedTransition,nextVersion,now,done,cancelled,body.expectedVersion]);
