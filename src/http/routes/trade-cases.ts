@@ -9,7 +9,8 @@ function err(error:unknown,reply:FastifyReply){
   const m=error instanceof Error?error.message:'trade_operation_failed';
   if(m==='forbidden')return reply.code(403).send({error:m});
   if(m.includes('not_found')||m==='case_not_found')return reply.code(404).send({error:m});
-  if(m==='trade_phase_not_allowed'||m==='trade_milestone_incomplete')return reply.code(409).send({error:m});
+  if(['trade_phase_not_allowed','trade_milestone_incomplete','version_conflict','policy_review_required','approval_missing','approval_not_found','approval_stale','approval_expired','approval_action_mismatch'].includes(m))return reply.code(409).send({error:m});
+  if(m==='policy_denied')return reply.code(403).send({error:m});
   return reply.code(400).send({error:m});
 }
 
@@ -48,10 +49,12 @@ export async function tradeCaseRoutes(app:FastifyInstance){
     const {id}=req.params as {id:string};
     const b=z.object({
       to:z.enum(['sourcing','verification','commercial_quote','approval','compliance_documents','freight_booking','in_transit','destination_handoff','completed','cancelled']),
+      expectedVersion:z.number().int().positive(),
+      approvalId:z.string().uuid().optional(),
       evidence:z.record(z.unknown()).default({})
     }).parse(req.body);
     const client=await pool.connect();
-    try{await client.query('begin');const trade=await advanceTradePhase({principal:req.principal,caseId:id,to:b.to,evidence:b.evidence},client);await client.query('commit');return{trade};}
+    try{await client.query('begin');const trade=await advanceTradePhase({principal:req.principal,caseId:id,to:b.to,expectedVersion:b.expectedVersion,approvalId:b.approvalId,evidence:b.evidence},client);await client.query('commit');return{trade};}
     catch(e){await client.query('rollback');return err(e,reply);}finally{client.release();}
   });
 
