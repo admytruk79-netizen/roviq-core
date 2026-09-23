@@ -31,9 +31,10 @@ export async function createTradeCase(input:{
   marketId?:string; locationId?:string; priority?:'low'|'normal'|'high'|'urgent';
 },client:PoolClient){
   const customerActorId=input.principal.role==='customer'?input.principal.actorId??null:null;
-  const c=await client.query(`insert into core_cases(case_type,market_id,location_id,customer_actor_id,priority,requirements,constraints,attributes)
-    values('trade',$1,$2,$3,$4,$5,$6,$7) returning *`,[
-      input.marketId??null,input.locationId??null,customerActorId,input.priority??'normal',
+  const ownerActorId=input.principal.role==='customer'?null:input.principal.actorId??null;
+  const c=await client.query(`insert into core_cases(case_type,market_id,location_id,customer_actor_id,current_owner_actor_id,priority,requirements,constraints,attributes)
+    values('trade',$1,$2,$3,$4,$5,$6,$7,$8) returning *`,[
+      input.marketId??null,input.locationId??null,customerActorId,ownerActorId,input.priority??'normal',
       {tradeMode:input.tradeMode},
       {customerApprovalRequired:true},
       {originCountry:input.originCountry,destinationCountry:input.destinationCountry}
