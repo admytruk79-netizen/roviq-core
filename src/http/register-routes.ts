@@ -38,6 +38,7 @@ import { sagaRoutes } from './routes/sagas.js';
 import { policyRoutes } from './routes/policies.js';
 import { coreApprovalToolRoutes } from './routes/core-approval-tools.js';
 import { tradeCaseRoutes } from './routes/trade-cases.js';
+import { coreOperationsRoutes } from './routes/core-operations.js';
 
 type RoutePlugin = FastifyPluginAsync | ((app: FastifyInstance) => Promise<void>);
 
@@ -47,7 +48,7 @@ type RouteModule = {
 };
 
 const routeModules: RouteModule[] = [
-  { name: 'platform', plugins: [authRoutes, coreRoutes, meRoutes, caseKernelRoutes, capabilityRoutes, connectorGatewayRoutes, sagaRoutes, policyRoutes, coreApprovalToolRoutes, tradeCaseRoutes] },
+  { name: 'platform', plugins: [authRoutes, coreRoutes, meRoutes, caseKernelRoutes, capabilityRoutes, connectorGatewayRoutes, sagaRoutes, policyRoutes, coreApprovalToolRoutes, tradeCaseRoutes, coreOperationsRoutes] },
   { name: 'case-lifecycle', plugins: [demandRoutes, caseRoutes, exceptionRoutes, servicePlanRoutes, quoteRoutes, caseAddonItemRoutes] },
   { name: 'coordination', plugins: [routingRoutes, triageRoutes, triageEvaluationRoutes, coherenceRoutes, connectedVehicleRoutes] },
   { name: 'service-operations', plugins: [diagnosticRoutes, fieldServiceRoutes, transportRoutes, mobilityRoutes, partsRoutes] },
