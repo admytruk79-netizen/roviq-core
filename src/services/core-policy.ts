@@ -20,7 +20,7 @@ function getPath(source:unknown,path:string){
   return current;
 }
 function equal(a:unknown,b:unknown){return JSON.stringify(a)===JSON.stringify(b);}
-function predicateMatches(predicate:Record<string,unknown>,facts:Record<string,unknown>){
+export function policyPredicateMatches(predicate:Record<string,unknown>,facts:Record<string,unknown>){
   for(const [path,condition] of Object.entries(predicate)){
     const actual=getPath(facts,path);
     if(condition&&typeof condition==='object'&&!Array.isArray(condition)){
@@ -59,7 +59,7 @@ export async function evaluateCorePolicy(input:{
       and (actor_role is null or actor_role=$5)
     order by priority desc,created_at,id`,
     [input.action,c?.case_type??null,c?.state??null,input.toState??null,input.principal.role]);
-  const matched=r.rows.filter(rule=>predicateMatches(rule.predicate??{},facts));
+  const matched=r.rows.filter(rule=>policyPredicateMatches(rule.predicate??{},facts));
   let decision:Decision='allow';
   if(matched.some(x=>x.effect==='deny'))decision='deny';
   else if(matched.some(x=>x.effect==='require_review'))decision='require_review';
