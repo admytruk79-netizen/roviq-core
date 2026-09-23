@@ -26,6 +26,7 @@ const next:Record<TradePhase,ReadonlySet<TradePhase>>={
 };
 
 export function tradePhaseAllowed(from:TradePhase,to:TradePhase){return Boolean(next[from]?.has(to));}
+export function tradePhaseTransitions(from:TradePhase){return [...(next[from]??[])];}
 
 export async function createTradeCase(input:{
   principal:Principal; tradeMode:'export'|'import'; originCountry:string; destinationCountry:string;
