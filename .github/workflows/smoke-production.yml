@@ -15,6 +15,7 @@ on:
       - 'parts-portal/**'
       - 'tow/**'
       - 'ops/**'
+      - 'fleet/**'
       - '.github/workflows/deploy-cloudflare.yml'
       - '.github/workflows/deploy-web.yml'
       - '.github/workflows/deploy-diagnostic.yml'
@@ -22,6 +23,7 @@ on:
       - '.github/workflows/deploy-parts.yml'
       - '.github/workflows/deploy-tow.yml'
       - '.github/workflows/deploy-ops.yml'
+      - '.github/workflows/deploy-fleet.yml'
       - '.github/workflows/smoke-production.yml'
 
 permissions:
@@ -141,6 +143,7 @@ jobs:
               "/api/parts/me/orders"
               "/api/transport/me/dispatches"
               "/api/admin/cases"
+              "/api/mobility/me/allocations"
             )
             for path in "${protected_paths[@]}"; do
               echo "Checking unauthenticated rejection: $base$path"
@@ -149,7 +152,7 @@ jobs:
               test "$status" = "401"
             done
 
-            for role in customer diagnostic partner parts tow; do
+            for role in customer diagnostic partner parts tow fleet; do
               path="/api/admin/testing/$role-session"
               echo "Checking live role-session route: $base$path"
               status="$(curl --silent --show-error --output /dev/null \
@@ -191,13 +194,14 @@ jobs:
               "$base/api/admin/cases")"
             test "$admin_cases_status" = "200"
 
-            roles=(customer diagnostic partner parts tow)
+            roles=(customer diagnostic partner parts tow fleet)
             paths=(
               "/api/customers/me/cases"
               "/api/diagnostics/me/queue"
               "/api/partners/me/offers"
               "/api/parts/me/orders"
               "/api/transport/me/dispatches"
+              "/api/mobility/me/allocations"
             )
 
             for i in "${!roles[@]}"; do
@@ -246,6 +250,7 @@ jobs:
             "https://roviq-parts-net.pages.dev"
             "https://roviq-tow-net.pages.dev"
             "https://roviq-ops.pages.dev"
+            "https://roviq-fleet-net.pages.dev"
           )
           markers=(
             "/api/admin/testing/customer-session"
@@ -254,6 +259,7 @@ jobs:
             "/api/admin/testing/parts-session"
             "/api/admin/testing/tow-session"
             "/api/auth/login"
+            "/api/admin/testing/fleet-session"
           )
 
           for i in "${!urls[@]}"; do
