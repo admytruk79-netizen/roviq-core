@@ -4,7 +4,7 @@ import { api,ApiError } from '../lib/api';
 import { StatusBadge } from '../components/StatusBadge';
 import { formatDateTime } from '../lib/format';
 
-type CoreCase=Record<string,unknown>&{id:string;case_type:string;state:string;priority:string;version:number;updated_at:string};
+type CoreCase=Record<string,unknown>&{id:string;case_type:string;state:string;priority:string;version:number;updated_at:string;current_owner_actor_id:string|null};
 type Event={id:string;event_type:string;actor_id:string|null;occurred_at:string;payload:Record<string,unknown>;new_version:number};
 type Approval={id:string;approval_type:string;action:string;state:string;created_at:string;decided_at:string|null;requested_from_actor_id:string|null;reason?:string|null};
 type Saga={id:string;saga_type:string;state:string;current_step:string|null;updated_at:string;last_error:string|null};
@@ -14,6 +14,7 @@ type TradeMilestone={id:string;milestone_code:string;state:string;evidence:Recor
 type TradeDocument={id:string;document_type:string;status:string;external_reference:string|null;created_at:string};
 type TradeData={trade:{phase:string;trade_mode:string;origin_country:string;destination_country:string;origin_location:string|null;destination_location:string|null;subject:Record<string,unknown>};milestones:TradeMilestone[];documents:TradeDocument[]};
 type TradeActions={caseId:string;phase:string;version:number;transitions:Action[]};
+type ActorOption={id:string;actor_type:string;display_name:string;partner_subtype:string|null;capabilities:string[]};
 
 function pretty(value:string){return value.replaceAll('_',' ').replace(/\b\w/g,m=>m.toUpperCase());}
 function errorText(error:unknown){
@@ -32,6 +33,8 @@ export function CoreCaseWorkspace(){
   const [actions,setActions]=useState<Actions|null>(null);
   const [trade,setTrade]=useState<TradeData|null>(null);
   const [tradeActions,setTradeActions]=useState<TradeActions|null>(null);
+  const [actors,setActors]=useState<ActorOption[]>([]);
+  const [ownerActorId,setOwnerActorId]=useState('');
   const [error,setError]=useState<string|null>(null);
   const [notice,setNotice]=useState<string|null>(null);
   const [busy,setBusy]=useState<string|null>(null);
@@ -45,14 +48,15 @@ export function CoreCaseWorkspace(){
     async function load(){
       setError(null);
       try{
-        const [c,a,s,acts]=await Promise.all([
+        const [c,a,s,acts,actorRes]=await Promise.all([
           api.get<{case:CoreCase;events:Event[]}>(`/api/core/cases/${id}`),
           api.get<{approvals:Approval[]}>(`/api/core/cases/${id}/approvals`),
           api.get<{sagas:Saga[]}>(`/api/core/cases/${id}/sagas`),
-          api.get<Actions>(`/api/core/cases/${id}/actions`)
+          api.get<Actions>(`/api/core/cases/${id}/actions`),
+          api.get<{actors:ActorOption[]}>('/api/core/operations/actors?limit=200')
         ]);
         if(!live)return;
-        setData(c);setApprovals(a.approvals);setSagas(s.sagas);setActions(acts);
+        setData(c);setApprovals(a.approvals);setSagas(s.sagas);setActions(acts);setActors(actorRes.actors);setOwnerActorId(c.case.current_owner_actor_id??'');
         if(c.case.case_type==='trade'){
           const [t,ta]=await Promise.all([
             api.get<TradeData>(`/api/core/trade-cases/${id}`),
@@ -71,6 +75,15 @@ export function CoreCaseWorkspace(){
     for(const a of approvals)if(a.state==='approved')map.set(a.action,a);
     return map;
   },[approvals]);
+
+  async function assignOwner(){
+    if(!id||!actions||!ownerActorId)return;
+    setBusy('assign');setNotice(null);setError(null);
+    try{
+      await api.postWithHeaders(`/api/core/cases/${id}/assign`,{actorId:ownerActorId,expectedVersion:actions.version},{'idempotency-key':crypto.randomUUID()});
+      setNotice('Case owner updated.');setRefresh(v=>v+1);
+    }catch(e){setError(errorText(e));}finally{setBusy(null);}
+  }
 
   async function decide(approvalId:string,decision:'approved'|'rejected'){
     if(!id)return;setBusy(`approval:${approvalId}`);setNotice(null);setError(null);
@@ -141,6 +154,19 @@ export function CoreCaseWorkspace(){
       <div className="roviq-panel p-4"><p className="roviq-kicker">Priority</p><p className="mt-2 font-semibold">{pretty(c.priority)}</p></div>
       <div className="roviq-panel p-4"><p className="roviq-kicker">Approvals</p><p className="mt-2 font-semibold">{approvals.filter(a=>a.state==='pending').length} pending</p></div>
       <div className="roviq-panel p-4"><p className="roviq-kicker">Workflows</p><p className="mt-2 font-semibold">{sagas.filter(s=>!['completed','cancelled'].includes(s.state)).length} active</p></div>
+    </section>
+
+    <section className="roviq-panel p-4">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div><p className="roviq-kicker">Ownership</p><h2 className="text-lg font-semibold">Assign Case operator</h2><p className="roviq-muted text-sm">Assignment controls which actor workspace receives this Case. Core remains the source of truth.</p></div>
+        <div className="flex min-w-[18rem] flex-1 flex-wrap justify-end gap-2">
+          <select className="roviq-input max-w-md" value={ownerActorId} onChange={e=>setOwnerActorId(e.target.value)} aria-label="Case owner">
+            <option value="">Unassigned</option>
+            {actors.map(a=><option key={a.id} value={a.id}>{a.display_name} · {pretty(a.actor_type)}{a.partner_subtype?` · ${pretty(a.partner_subtype)}`:''}</option>)}
+          </select>
+          <button className="roviq-btn-secondary" disabled={!ownerActorId||busy!==null||ownerActorId===c.current_owner_actor_id} onClick={()=>void assignOwner()}>{busy==='assign'?'Assigning…':'Assign'}</button>
+        </div>
+      </div>
     </section>
 
     <section className="roviq-panel p-4">
