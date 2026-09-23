@@ -79,8 +79,8 @@ export async function advanceTradePhase(input:{
   const current=r.rows[0] as {phase:TradePhase};
   if(!tradePhaseAllowed(current.phase,input.to))throw new Error('trade_phase_not_allowed');
   const milestoneByTarget:Partial<Record<TradePhase,string>>={
-    verification:'SOURCE_VERIFIED',
-    approval:'COMMERCIAL_APPROVED',
+    commercial_quote:'SOURCE_VERIFIED',
+    compliance_documents:'COMMERCIAL_APPROVED',
     freight_booking:'COMPLIANCE_READY',
     in_transit:'FREIGHT_BOOKED',
     completed:'DESTINATION_HANDOFF'
