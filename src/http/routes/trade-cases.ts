@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { pool } from '../../db/pool.js';
 import { requireRole } from '../middleware/principal.js';
 import { withIdempotency } from '../../services/idempotency.js';
-import { addTradeDocument, advanceTradePhase, createTradeCase, loadTradeCase, setTradeMilestone } from '../../services/trade-case.js';
+import { addTradeDocument, advanceTradePhase, createTradeCase, loadTradeCase, setTradeMilestone, tradePhaseTransitions, type TradePhase } from '../../services/trade-case.js';
 
 function err(error:unknown,reply:FastifyReply){
   const m=error instanceof Error?error.message:'trade_operation_failed';
@@ -43,6 +43,25 @@ export async function tradeCaseRoutes(app:FastifyInstance){
     const {id}=req.params as {id:string};
     try{const trade=await loadTradeCase(req.principal,id);if(!trade)return reply.code(404).send({error:'case_not_found'});return trade;}
     catch(e){return err(e,reply);}
+  });
+
+  app.get('/api/core/trade-cases/:id/phase-actions',async(req,reply)=>{
+    const {id}=req.params as {id:string};
+    try{
+      const trade=await loadTradeCase(req.principal,id);
+      if(!trade)return reply.code(404).send({error:'case_not_found'});
+      const phase=trade.trade.phase as TradePhase;
+      return {
+        caseId:id,
+        phase,
+        version:Number(trade.case.version),
+        transitions:tradePhaseTransitions(phase).map(to=>({
+          to,
+          action:`trade.phase:${to}`,
+          approvalRecommended:to==='completed'
+        }))
+      };
+    }catch(e){return err(e,reply);}
   });
 
   app.post('/api/core/trade-cases/:id/phase',{preHandler:requireRole('admin','partner')},async(req,reply)=>{
