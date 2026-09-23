@@ -12,7 +12,7 @@ const createIdentityBody = z.object({
   actorId: z.string().uuid().nullable().optional()
 });
 
-type TestRole='customer'|'partner'|'tow'|'diagnostic'|'parts';
+type TestRole='customer'|'partner'|'tow'|'diagnostic'|'parts'|'fleet';
 
 async function ensurePartnerTestReadiness(actorId:string, domainId:string) {
   const client=await pool.connect();
@@ -125,6 +125,7 @@ async function adminTestSession(req:any, reply:any, role:TestRole) {
       : role === 'diagnostic' ? 'ROVIQ Admin Test Diagnostic'
       : role === 'parts' ? 'ROVIQ Admin Test Parts Vendor'
       : role === 'customer' ? 'ROVIQ Admin Test Customer'
+      : role === 'fleet' ? 'ROVIQ Admin Test Fleet / Mobility'
       : 'ROVIQ Admin Test Partner';
     actor = await pool.query(
       `insert into actors(domain_id,actor_type,status,attributes) values($1,$2,'active',$3) returning id`,
@@ -161,6 +162,7 @@ export async function authRoutes(app: FastifyInstance) {
   app.post('/api/admin/testing/tow-session', { preHandler: requireRole('admin') }, async (req, reply) => adminTestSession(req,reply,'tow'));
   app.post('/api/admin/testing/diagnostic-session', { preHandler: requireRole('admin') }, async (req, reply) => adminTestSession(req,reply,'diagnostic'));
   app.post('/api/admin/testing/parts-session', { preHandler: requireRole('admin') }, async (req, reply) => adminTestSession(req,reply,'parts'));
+  app.post('/api/admin/testing/fleet-session', { preHandler: requireRole('admin') }, async (req, reply) => adminTestSession(req,reply,'fleet'));
 
   app.post('/api/admin/identities', { preHandler: requireRole('admin') }, async (req, reply) => {
     const b = createIdentityBody.parse(req.body);

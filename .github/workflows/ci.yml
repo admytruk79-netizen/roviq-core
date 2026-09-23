@@ -47,7 +47,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        portal: [customer, ops, partner, diagnostic, tow, parts]
+        portal: [customer, ops, partner, diagnostic, tow, parts, fleet]
         include:
           - portal: customer
             directory: web
@@ -61,6 +61,8 @@ jobs:
             directory: tow
           - portal: parts
             directory: parts-portal
+          - portal: fleet
+            directory: fleet
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
