@@ -14,10 +14,14 @@ export const coreToolRegistry:readonly CoreToolDefinition[]=[
 ] as const;
 
 function definition(name:string){return coreToolRegistry.find(t=>t.name===name);}
+export function assertCoreToolAllowed(principal:Principal,toolName:string,args:Record<string,unknown>){
+  const def=definition(toolName);if(!def)throw new Error('tool_not_allowed');
+  if(!def.roles.includes(principal.role))throw new Error('tool_forbidden');
+  if(def.mutates&&args.confirmed!==true)throw new Error('confirmation_required');
+  return def;
+}
 export async function invokeCoreTool(input:{principal:Principal;toolName:string;args:Record<string,unknown>}){
-  const def=definition(input.toolName);if(!def)throw new Error('tool_not_allowed');
-  if(!def.roles.includes(input.principal.role))throw new Error('tool_forbidden');
-  if(def.mutates&&input.args.confirmed!==true)throw new Error('confirmation_required');
+  const def=assertCoreToolAllowed(input.principal,input.toolName,input.args);
   const caseId=typeof input.args.caseId==='string'?input.args.caseId:null;
   const audit=await pool.query(`insert into core_tool_invocations(case_id,tool_name,principal_role,principal_actor_id,request,outcome)
     values($1,$2,$3,$4,$5,'started') returning id,correlation_id`,
