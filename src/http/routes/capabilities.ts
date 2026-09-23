@@ -9,7 +9,7 @@ const body=z.object({
   operations:z.array(z.string()).default([]),geography:z.record(z.unknown()).default({}),metadata:z.record(z.unknown()).default({})
 });
 export async function capabilityRoutes(app:FastifyInstance){
-  app.get('/api/core/capabilities',async(req)=>{
+  app.get('/api/core/capabilities',{preHandler:requireRole('admin')},async(req)=>{
     const q=z.object({key:z.string().optional(),status:z.enum(['active','inactive','degraded']).default('active')}).parse(req.query??{});
     const params:unknown[]=[q.status];let sql='select id,capability_key,actor_id,organization_id,connector_key,status,operations,geography,metadata,health,updated_at from core_capabilities where status=$1';
     if(q.key){params.push(q.key);sql+=' and capability_key=$2';} sql+=' order by capability_key,updated_at desc limit 500';
