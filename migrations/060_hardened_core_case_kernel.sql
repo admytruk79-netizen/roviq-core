@@ -4,7 +4,7 @@
 create table if not exists core_cases (
   id uuid primary key default gen_random_uuid(),
   case_type text not null check (case_type in ('maintenance','transport','mobility','fleet','trade')),
-  state text not null default 'intake',
+  state text not null default 'intake' check(state in ('intake','triage','active','waiting_external','needs_review','blocked','retry_scheduled','degraded','failed','completed','cancelled','expired')),
   version bigint not null default 1 check (version > 0),
   market_id uuid references markets(id),
   location_id uuid references locations(id),
@@ -80,17 +80,10 @@ create table if not exists core_outbox (
   created_at timestamptz not null default now(),
   published_at timestamptz,
   attempts integer not null default 0,
-  last_error text
+  last_error text,
+  available_at timestamptz not null default now()
 );
+create index if not exists core_outbox_ready_idx on core_outbox(available_at,created_at) where published_at is null;
 create index if not exists core_outbox_pending_idx on core_outbox(created_at) where published_at is null;
 
-create table if not exists core_command_idempotency (
-  principal_id text not null,
-  idempotency_key text not null,
-  command_name text not null,
-  request_hash text not null,
-  response_status integer,
-  response_body jsonb,
-  created_at timestamptz not null default now(),
-  primary key(principal_id,idempotency_key,command_name)
-);
+-- Command idempotency reuses the established idempotency_keys table/service so all Core commands share one concurrency-safe implementation.
