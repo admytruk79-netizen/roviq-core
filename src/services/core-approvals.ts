@@ -40,3 +40,22 @@ export async function listCoreApprovals(principal:Principal,caseId:string,db:Que
   const c=await loadCoreCaseForPrincipal(principal,caseId,db);if(!c)throw new Error('case_not_found');
   const r=await db.query('select * from core_approvals where case_id=$1 order by created_at desc',[caseId]);return r.rows;
 }
+
+
+export async function validateCoreApprovalEvidence(input:{
+  caseId:string; approvalId?:string; action:string; expectedCaseVersion:number;
+},db:Queryable=pool){
+  if(!input.approvalId)return {valid:false as const,reason:'approval_missing'};
+  const r=await db.query('select * from core_approvals where id=$1 and case_id=$2',[input.approvalId,input.caseId]);
+  if(!r.rowCount)return {valid:false as const,reason:'approval_not_found'};
+  const a=r.rows[0];
+  if(a.state!=='approved')return {valid:false as const,reason:`approval_${a.state}`};
+  if(a.expires_at&&new Date(a.expires_at).getTime()<=Date.now())return {valid:false as const,reason:'approval_expired'};
+  if(a.action!==input.action)return {valid:false as const,reason:'approval_action_mismatch'};
+  if(Number(a.expected_case_version)!==input.expectedCaseVersion)return {valid:false as const,reason:'approval_stale'};
+  return {valid:true as const,approval:{
+    id:a.id,approvalType:a.approval_type,action:a.action,
+    requestedFromActorId:a.requested_from_actor_id,decidedByActorId:a.decided_by_actor_id,
+    expectedCaseVersion:Number(a.expected_case_version),decidedAt:a.decided_at
+  }};
+}

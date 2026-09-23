@@ -6,6 +6,7 @@ import { requireRole } from '../middleware/principal.js';
 import { withIdempotency } from '../../services/idempotency.js';
 import { loadCoreCaseForPrincipal } from '../../services/core-case-access.js';
 import { evaluateCorePolicy } from '../../services/core-policy.js';
+import { validateCoreApprovalEvidence } from '../../services/core-approvals.js';
 
 const caseType=z.enum(['maintenance','transport','mobility','fleet','trade']);
 const createBody=z.object({
@@ -16,7 +17,7 @@ const createBody=z.object({
 });
 const transitionBody=z.object({
   expectedVersion:z.number().int().positive(), requestedTransition:z.string().min(1).max(80),
-  evidence:z.record(z.unknown()).default({}), correlationId:z.string().uuid().optional()
+  evidence:z.record(z.unknown()).default({}), approvalId:z.string().uuid().optional(), correlationId:z.string().uuid().optional()
 });
 const allowed:Record<string,ReadonlySet<string>>={
   intake:new Set(['triage','waiting_external','cancelled']),
@@ -80,14 +81,20 @@ export async function caseKernelRoutes(app:FastifyInstance){
         if(Number(locked.version)!==body.expectedVersion)return {status:409,body:{error:'version_conflict',currentVersion:Number(locked.version),state:locked.state}};
         if(terminal.has(locked.state))return {status:409,body:{error:'terminal_case',state:locked.state}};
         if(!(allowed[locked.state]?.has(body.requestedTransition)))return {status:422,body:{error:'transition_not_allowed',from:locked.state,to:body.requestedTransition}};
-        const policy=await evaluateCorePolicy({action:'case.transition',principal:req.principal,caseRecord:locked,toState:body.requestedTransition,facts:{evidence:body.evidence}},client);
+        const approval=await validateCoreApprovalEvidence({
+          caseId:id,approvalId:body.approvalId,action:`case.transition:${body.requestedTransition}`,expectedCaseVersion:body.expectedVersion
+        },client);
+        const policy=await evaluateCorePolicy({
+          action:'case.transition',principal:req.principal,caseRecord:locked,toState:body.requestedTransition,
+          facts:{evidence:body.evidence,approval}
+        },client);
         if(policy.decision==='deny')return {status:403,body:{error:'policy_denied',reason:policy.reason,matchedRules:policy.matchedRules}};
         if(policy.decision==='require_review')return {status:409,body:{error:'policy_review_required',reason:policy.reason,matchedRules:policy.matchedRules}};
         const nextVersion=Number(locked.version)+1, correlationId=body.correlationId??randomUUID(), now=new Date();
         const done=body.requestedTransition==='completed'?now:null, cancelled=body.requestedTransition==='cancelled'?now:null;
         const u=await client.query('update core_cases set state=$2,version=$3,updated_at=$4,completed_at=coalesce($5,completed_at),cancelled_at=coalesce($6,cancelled_at) where id=$1 and version=$7 returning *',[id,body.requestedTransition,nextVersion,now,done,cancelled,body.expectedVersion]);
         if(!u.rowCount)return {status:409,body:{error:'version_conflict'}};
-        const payload={from:locked.state,to:body.requestedTransition,evidence:body.evidence};
+        const payload={from:locked.state,to:body.requestedTransition,evidence:body.evidence,approval:approval.valid?approval.approval:null};
         await client.query(`insert into core_case_events(case_id,actor_id,event_type,correlation_id,payload,payload_hash,previous_version,new_version)
           values($1,$2,'CASE_TRANSITIONED',$3,$4,$5,$6,$7)`,[id,req.principal.actorId??null,correlationId,payload,hash(payload),body.expectedVersion,nextVersion]);
         await client.query(`insert into core_outbox(aggregate_type,aggregate_id,event_type,payload,correlation_id) values('case',$1,'CASE_TRANSITIONED',$2,$3)`,[id,{caseId:id,...payload,version:nextVersion},correlationId]);
