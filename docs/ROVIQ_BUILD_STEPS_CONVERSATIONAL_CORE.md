@@ -55,9 +55,11 @@ Build:
 
 Important: authorization is checked for every tool/action, not only at login.
 
-### 3. Conversation/session context
+### 3. Conversation/session context — IN PROGRESS
 
 Persist a shared session so follow-ups such as “something closer”, “not coffee, food”, “accept that job”, or “what about the second one?” work without repeating the original request.
+
+Implemented in migration `060_conversation_sessions.sql` and `cloudflare/conversation-session.js`.
 
 Minimum session state:
 - conversation/session ID
@@ -234,3 +236,14 @@ Dispatcher chat examples:
 - “Show the current handoff status.”
 
 The chat classifier may identify a `dispatch` intent, but execution authority comes from Core permissions and case/organization scope, never from the classifier itself.
+
+
+## Build log — conversation persistence
+
+- Added migration 060 with `conversation_sessions` and `conversation_turns`.
+- Sessions reuse existing principal identity, actor, organization, vehicle and service-case references.
+- Session ownership is enforced: non-admin sessions bind to the actor; admin sessions bind to the authenticated principal identity.
+- Persisted context includes workspace, vehicle, service case, journey context, last intent/entities/results and presentation source.
+- `POST /api/drive/respond` now creates or resumes a session and returns session context to the client.
+- This is schema/code only on the feature branch. Migration has not been applied to production.
+- Next implementation block: Core conversational tool registry and endpoint-level authorization adapters.
