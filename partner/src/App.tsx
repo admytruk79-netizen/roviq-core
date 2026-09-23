@@ -11,6 +11,7 @@ import { ShopOsWaitlistControl } from './ShopOsWaitlistControl';
 import { ShopOsRecoveryControl } from './ShopOsRecoveryControl';
 import { ShopOsDeferredServiceControl } from './ShopOsDeferredServiceControl';
 import { ShopOsRepairOrderDetailControl } from './ShopOsRepairOrderDetailControl';
+import { CoreCaseQueue } from './CoreCaseQueue';
 
 function Portal() {
   const { principal } = useAuth();
@@ -37,6 +38,7 @@ function Portal() {
 
   return principal ? (
     <Dashboard>
+      <CoreCaseQueue />
       <section className="mt-8" aria-labelledby="shop-os-heading">
         <div className="mb-4">
           <p className="kicker">Operations workspace</p>

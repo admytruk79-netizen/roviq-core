@@ -44,6 +44,30 @@ export async function coreOperationsRoutes(app:FastifyInstance){
     }catch(e){if(e instanceof Error&&e.message==='forbidden')return reply.code(403).send({error:'forbidden'});throw e;}
   });
 
+  app.get('/api/core/operations/actors',{preHandler:requireRole('admin')},async(req,reply)=>{
+    try{
+      const q=z.object({actorType:z.string().max(80).optional(),limit:z.coerce.number().int().min(1).max(200).default(100)}).parse(req.query);
+      const scope=await adminScope(req.principal.actorId);
+      const params:unknown[]=[];const clauses:string[]=["a.status='active'","a.actor_type in ('partner','diagnostic','tow','parts','fleet')"];
+      if(q.actorType){params.push(q.actorType);clauses.push(`a.actor_type=${params.length}`);}
+      if(scope){
+        params.push(scope.organizationId);const orgIndex=params.length;
+        params.push(scope.locationId);const locIndex=params.length;
+        clauses.push(`a.organization_id=${orgIndex} and (${locIndex}::uuid is null or a.location_id=${locIndex})`);
+      }
+      params.push(q.limit);
+      const r=await pool.query(`select a.id,a.actor_type,a.status,a.partner_subtype,a.organization_id,a.location_id,a.attributes,
+        coalesce(a.attributes->>'displayName',a.attributes->>'name',a.legal_entity_id,a.actor_type) as display_name,
+        coalesce((select jsonb_agg(c.capability_code order by c.capability_code)
+          from actor_capabilities ac join capabilities c on c.id=ac.capability_id
+          where ac.actor_id=a.id and ac.active=true),'[]'::jsonb) as capabilities
+        from actors a where ${clauses.join(' and ')}
+        order by a.actor_type,display_name,a.created_at
+        limit ${params.length}`,params);
+      return {actors:r.rows};
+    }catch(e){if(e instanceof Error&&e.message==='forbidden')return reply.code(403).send({error:'forbidden'});throw e;}
+  });
+
   app.get('/api/core/operations/command-center',{preHandler:requireRole('admin')},async(req,reply)=>{
     try{
       const scope=await adminScope(req.principal.actorId);
