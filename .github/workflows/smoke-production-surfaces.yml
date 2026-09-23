@@ -40,7 +40,9 @@ jobs:
           - name: tow
             url: https://roviq-tow-net.pages.dev
           - name: ops
-            url: https://roviq-ops.pages.dev https://roviq-fleet-net.pages.dev
+            url: https://roviq-ops.pages.dev
+          - name: fleet
+            url: https://roviq-fleet-net.pages.dev
     steps:
       - name: Fetch surface
         shell: bash
