@@ -75,7 +75,7 @@ Minimum session state:
 
 The model receives only the context necessary for the current request.
 
-### 4. Core chat tool registry
+### 4. Core chat tool registry — IN PROGRESS
 
 Workers AI interprets language; it does not receive independent authority. It proposes a narrowly defined capability, Core authorizes it, deterministic application code executes it, and the result is returned to the conversation layer.
 
@@ -247,3 +247,15 @@ The chat classifier may identify a `dispatch` intent, but execution authority co
 - `POST /api/drive/respond` now creates or resumes a session and returns session context to the client.
 - This is schema/code only on the feature branch. Migration has not been applied to production.
 - Next implementation block: Core conversational tool registry and endpoint-level authorization adapters.
+
+
+## Build log — Core tool registry
+
+- Added `cloudflare/tool-registry.js` as an explicit allow-list between conversational intent and Core execution.
+- Enabled read-only adapters only where the existing Core endpoint was verified: case status, dispatcher case queue, dispatcher exceptions, and the current tow actor's assignments.
+- Dispatcher reads reuse existing `/api/admin/cases` and exception endpoints, preserving their existing organization/location scope enforcement.
+- Tow reads reuse `/api/transport/me/dispatches`, preserving actor scoping.
+- Shop and fleet registry entries remain deliberately disabled (501) because no verified aggregate endpoint was found; do not guess routes or expose a global queue.
+- Mutating chat tools remain disabled until confirmation, idempotency, audit and underlying endpoint authorization are bound explicitly.
+- `POST /api/drive/respond` now routes service/dispatch/tow/shop/fleet read intents through the registry and records the tool turn in the conversation session.
+- Next: add actor-scoped shop/fleet read endpoints in Core, then mixed-intent orchestration and confirmation-gated mutations.
