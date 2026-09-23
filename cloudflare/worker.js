@@ -3,6 +3,7 @@ import { handleLocalCoreRequest, isLocalCorePath } from './local-adapter.js';
 import { classifyDriveIntent, localSearchUrl } from './drive-router.js';
 import { resolveConversationActor, authorizeConversationCapability, conversationCapabilityForIntent } from './actor-context.js';
 import { loadOrCreateConversationSession, updateConversationSession, appendConversationTurn, sessionContext } from './conversation-session.js';
+import { executeConversationTool } from './tool-registry.js';
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -578,6 +579,32 @@ export default {
           const capability = conversationCapabilityForIntent(intent);
           const authz = authorizeConversationCapability(actorContext, capability);
           if (!authz.allowed) return json({ error: authz.error, capability: authz.capability, intent }, authz.status || 403);
+        }
+
+        const readToolByIntent = {
+          service: 'get_case_status',
+          dispatch: 'list_dispatch_queue',
+          tow: 'list_tow_assignments',
+          shop: 'list_shop_jobs',
+          fleet: 'list_fleet_vehicles'
+        };
+        const selectedReadTool = readToolByIntent[classification.intent];
+        if (selectedReadTool) {
+          const toolResult = await executeConversationTool(selectedReadTool, {
+            env, request, actorContext, session,
+            args: { ...(body.toolArgs || {}), caseId: body.caseId || session.service_case_id }
+          });
+          await appendConversationTurn(sql, session.id, 'tool', {
+            intent: classification.intent,
+            toolName: selectedReadTool,
+            toolResultRef: toolResult.error
+              ? { error: toolResult.error, status: toolResult.status }
+              : { status: toolResult.status }
+          });
+          if (toolResult.error) {
+            return json({ session: sessionContext(session), classification, tool: selectedReadTool, error: toolResult.error }, toolResult.status || 500);
+          }
+          return json({ session: sessionContext(session), classification, tool: selectedReadTool, result: toolResult.data });
         }
 
         if (classification.intent === 'local_discovery') {
