@@ -8,6 +8,8 @@ import { NewDemand } from './pages/NewDemand';
 import { CaseDetail } from './pages/CaseDetail';
 import { Local } from './pages/Local';
 import { NotFound } from './pages/NotFound';
+import { CoreCases } from './pages/CoreCases';
+import { CoreCaseDetail } from './pages/CoreCaseDetail';
 
 function App() {
   return (
@@ -19,6 +21,8 @@ function App() {
             <Route element={<Layout />}>
               <Route path="/" element={<Cases />} />
               <Route path="/cases/new" element={<NewDemand />} />
+              <Route path="/core-cases" element={<CoreCases />} />
+              <Route path="/core-cases/:id" element={<CoreCaseDetail />} />
               <Route path="/cases/:id" element={<CaseDetail />} />
               <Route path="/local" element={<Local />} />
               <Route path="*" element={<NotFound />} />
