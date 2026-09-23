@@ -33,6 +33,7 @@ import { triageEvaluationRoutes } from './routes/triage-evaluation.js';
 import { connectedVehicleRoutes } from './routes/connected-vehicles.js';
 import { caseKernelRoutes } from './routes/case-kernel.js';
 import { capabilityRoutes } from './routes/capabilities.js';
+import { connectorGatewayRoutes } from './routes/connector-gateway.js';
 
 type RoutePlugin = FastifyPluginAsync | ((app: FastifyInstance) => Promise<void>);
 
@@ -42,7 +43,7 @@ type RouteModule = {
 };
 
 const routeModules: RouteModule[] = [
-  { name: 'platform', plugins: [authRoutes, coreRoutes, meRoutes, caseKernelRoutes, capabilityRoutes] },
+  { name: 'platform', plugins: [authRoutes, coreRoutes, meRoutes, caseKernelRoutes, capabilityRoutes, connectorGatewayRoutes] },
   { name: 'case-lifecycle', plugins: [demandRoutes, caseRoutes, exceptionRoutes, servicePlanRoutes, quoteRoutes, caseAddonItemRoutes] },
   { name: 'coordination', plugins: [routingRoutes, triageRoutes, triageEvaluationRoutes, coherenceRoutes, connectedVehicleRoutes] },
   { name: 'service-operations', plugins: [diagnosticRoutes, fieldServiceRoutes, transportRoutes, mobilityRoutes, partsRoutes] },
