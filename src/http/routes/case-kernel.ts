@@ -7,6 +7,7 @@ import { withIdempotency } from '../../services/idempotency.js';
 import { loadCoreCaseForPrincipal } from '../../services/core-case-access.js';
 import { evaluateCorePolicy } from '../../services/core-policy.js';
 import { validateCoreApprovalEvidence } from '../../services/core-approvals.js';
+import { coreCaseIsTerminal, coreCaseTransitionAllowed, coreCaseTransitions } from '../../services/core-case-state.js';
 
 const caseType=z.enum(['maintenance','transport','mobility','fleet','trade']);
 const createBody=z.object({
@@ -19,18 +20,6 @@ const transitionBody=z.object({
   expectedVersion:z.number().int().positive(), requestedTransition:z.string().min(1).max(80),
   evidence:z.record(z.unknown()).default({}), approvalId:z.string().uuid().optional(), correlationId:z.string().uuid().optional()
 });
-const allowed:Record<string,ReadonlySet<string>>={
-  intake:new Set(['triage','waiting_external','cancelled']),
-  triage:new Set(['active','waiting_external','needs_review','cancelled']),
-  active:new Set(['waiting_external','needs_review','blocked','completed','cancelled']),
-  waiting_external:new Set(['active','needs_review','blocked','expired','cancelled']),
-  needs_review:new Set(['active','blocked','cancelled']),
-  blocked:new Set(['active','cancelled']),
-  retry_scheduled:new Set(['active','degraded','failed']),
-  degraded:new Set(['active','retry_scheduled','needs_review','failed']),
-  failed:new Set(['retry_scheduled','cancelled'])
-};
-const terminal=new Set(['completed','cancelled','expired']);
 function hash(value:unknown){return createHash('sha256').update(stableJson(value)).digest('hex');}
 function stableJson(value:unknown):string{
   if(Array.isArray(value))return `[${value.map(stableJson).join(',')}]`;
@@ -67,6 +56,25 @@ export async function caseKernelRoutes(app:FastifyInstance){
     }catch(e){if(e instanceof Error&&e.message==='forbidden')return reply.code(403).send({error:'forbidden'});throw e;}
   });
 
+  app.get('/api/core/cases/:id/actions',async(req,reply)=>{
+    const {id}=req.params as {id:string};
+    try{
+      const c=await loadCoreCaseForPrincipal(req.principal,id);
+      if(!c)return reply.code(404).send({error:'case_not_found'});
+      return {
+        caseId:id,
+        state:c.state,
+        version:Number(c.version),
+        terminal:coreCaseIsTerminal(c.state),
+        transitions:coreCaseTransitions(c.state).map(to=>({
+          to,
+          action:`case.transition:${to}`,
+          approvalRecommended:to==='completed'&&Boolean(c.constraints?.customerApprovalRequired)
+        }))
+      };
+    }catch(e){if(e instanceof Error&&e.message==='forbidden')return reply.code(403).send({error:'forbidden'});throw e;}
+  });
+
   app.post('/api/core/cases/:id/transition',{preHandler:requireRole('admin','partner','diagnostic','tow','parts','fleet')},async(req,reply)=>{
     const {id}=req.params as {id:string}; const body=transitionBody.parse(req.body);
     const key=typeof req.headers['idempotency-key']==='string'?req.headers['idempotency-key']:undefined;
@@ -79,8 +87,8 @@ export async function caseKernelRoutes(app:FastifyInstance){
         const q=await client.query('select * from core_cases where id=$1 for update',[id]);
         const locked=q.rows[0];
         if(Number(locked.version)!==body.expectedVersion)return {status:409,body:{error:'version_conflict',currentVersion:Number(locked.version),state:locked.state}};
-        if(terminal.has(locked.state))return {status:409,body:{error:'terminal_case',state:locked.state}};
-        if(!(allowed[locked.state]?.has(body.requestedTransition)))return {status:422,body:{error:'transition_not_allowed',from:locked.state,to:body.requestedTransition}};
+        if(coreCaseIsTerminal(locked.state))return {status:409,body:{error:'terminal_case',state:locked.state}};
+        if(!coreCaseTransitionAllowed(locked.state,body.requestedTransition))return {status:422,body:{error:'transition_not_allowed',from:locked.state,to:body.requestedTransition}};
         const approval=await validateCoreApprovalEvidence({
           caseId:id,approvalId:body.approvalId,action:`case.transition:${body.requestedTransition}`,expectedCaseVersion:body.expectedVersion
         },client);
