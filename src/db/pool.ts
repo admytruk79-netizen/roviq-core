@@ -29,15 +29,9 @@ export function isRetryableConnectionError(error: unknown): boolean {
   return /connection terminated unexpectedly|connection terminated|connection reset/i.test(error.message);
 }
 
-const originalQuery = pool.query.bind(pool);
-// @ts-expect-error -- overriding pg.Pool#query with a retrying wrapper; the runtime signature
-// (args forwarded as-is to the original) matches every overload callers actually use.
-pool.query = async function retryingQuery(...args: unknown[]) {
-  try {
-    return await originalQuery(...(args as Parameters<typeof originalQuery>));
-  } catch (error) {
-    if (!isRetryableConnectionError(error)) throw error;
-    console.warn('postgres_transient_error_retrying', { message: (error as Error).message });
-    return await originalQuery(...(args as Parameters<typeof originalQuery>));
-  }
-};
+// Do not transparently retry generic pool.query calls.
+// A connection error can arrive after PostgreSQL has committed a write but before the client
+// receives the acknowledgement. Reissuing an INSERT/UPDATE/DELETE in that situation can duplicate
+// or corrupt business state. Callers that perform read-only work may explicitly retry their own
+// SELECT operation using isRetryableConnectionError; writes and transactions must resolve through
+// their business idempotency/recovery semantics instead.
