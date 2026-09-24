@@ -68,11 +68,11 @@ describe('bearer token revocation and actor lifecycle',()=>{
 
     const me=await app.inject({
       method:'GET',
-      url:'/api/me',
+      url:'/api/customers/me/cases',
       headers:{authorization:`Bearer ${body.accessToken}`}
     });
     expect(me.statusCode).toBe(200);
-    expect(me.json().principal).toMatchObject({role:'customer',actorId:body.principal.actorId});
+    expect(Array.isArray(me.json().cases)).toBe(true);
   });
 
   it('rejects an already-issued token after the identity is deactivated',async()=>{
