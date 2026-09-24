@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { pool } from '../../db/pool.js';
@@ -135,8 +136,29 @@ async function adminTestSession(req:any, reply:any, role:TestRole) {
   }
   const actorId = actor.rows[0].id as string;
   if(role==='partner') await ensurePartnerTestReadiness(actorId,domain.rows[0].id as string);
+
+  // Production bearer validation re-checks the JWT subject against principal_identities.
+  // Use a real, revocable identity for admin-created portal handoffs rather than a synthetic
+  // subject string, otherwise the next protected request is rejected as inactive/revoked.
+  const testEmail=`${testContext}@testing.roviq.invalid`;
+  const temporarySecret=randomBytes(32).toString('hex');
+  const {salt,hash}=hashPassword(temporarySecret);
+  const identity=await pool.query(
+    `insert into principal_identities(actor_id,email,role,password_salt,password_hash,active)
+     values($1,$2,$3,$4,$5,true)
+     on conflict(email)
+     do update set
+       actor_id=excluded.actor_id,
+       role=excluded.role,
+       password_salt=excluded.password_salt,
+       password_hash=excluded.password_hash,
+       active=true
+     returning id`,
+    [actorId,testEmail,role,salt,hash]
+  );
+
   const principal = { role, actorId };
-  const accessToken = await issueAccessToken(`admin-${role}-test:${actorId}`, principal);
+  const accessToken = await issueAccessToken(identity.rows[0].id, principal);
   await audit(req.principal,`create_test_${role}_session`,'actor',actorId,'admin_testing_only');
   return { accessToken, tokenType:'Bearer', expiresIn:28800, principal, testing:true };
 }

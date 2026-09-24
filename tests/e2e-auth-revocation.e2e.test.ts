@@ -37,6 +37,48 @@ describe('bearer token revocation and actor lifecycle',()=>{
     return response.json().accessToken as string;
   }
 
+
+  it('issues admin-created portal handoff tokens from real revocable identities',async()=>{
+    const checks=[
+      ['customer','/api/customers/me/cases'],
+      ['diagnostic','/api/diagnostics/me/queue'],
+      ['partner','/api/partners/me/offers'],
+      ['parts','/api/parts/me/orders'],
+      ['tow','/api/transport/me/dispatches'],
+      ['fleet','/api/mobility/me/allocations']
+    ] as const;
+
+    for(const [role,path] of checks){
+      const session=await app.inject({
+        method:'POST',
+        url:`/api/admin/testing/${role}-session`,
+        headers:adminHeaders,
+        payload:{}
+      });
+      expect(session.statusCode).toBe(200);
+      const body=session.json();
+      expect(body.principal.role).toBe(role);
+      expect(body.principal.actorId).toBeTruthy();
+      expect(body.accessToken).toBeTruthy();
+
+      const protectedResponse=await app.inject({
+        method:'GET',
+        url:path,
+        headers:{authorization:`Bearer ${body.accessToken}`}
+      });
+      expect(protectedResponse.statusCode).toBe(200);
+
+      const identity=await pool.query(
+        `select id,active,role,actor_id,email
+           from principal_identities
+          where actor_id=$1 and role=$2 and email=$3`,
+        [body.principal.actorId,role,`admin_${role}_portal@testing.roviq.invalid`]
+      );
+      expect(identity.rowCount).toBe(1);
+      expect(identity.rows[0]).toMatchObject({active:true,role,actor_id:body.principal.actorId});
+    }
+  });
+
   it('rejects an already-issued token after the identity is deactivated',async()=>{
     const user=await makeIdentity('identity-revoked');
     const token=await login(user.email,user.password);
