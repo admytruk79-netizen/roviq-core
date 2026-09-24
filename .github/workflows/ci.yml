@@ -78,6 +78,8 @@ jobs:
         env:
           VITE_API_BASE_URL: https://roviq-core.admytruk79.workers.dev
         run: npm run build
+      - name: Record accessibility baseline and enforce performance budget
+        run: node scripts/check-portal-evidence.mjs ${{ matrix.directory }}
 
   system-acceptance:
     runs-on: ubuntu-latest
@@ -105,6 +107,7 @@ jobs:
       ALLOW_DEV_HEADERS: 'true'
       BOOTSTRAP_ADMIN_EMAIL: acceptance-admin@roviq.test
       BOOTSTRAP_ADMIN_PASSWORD: AcceptanceAdminPassword123!
+      PGPASSWORD: postgres
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -118,3 +121,68 @@ jobs:
         run: npm run db:migrate
       - name: Run full Core end-to-end acceptance suite
         run: npm run test:e2e
+      - name: Prove database backup and restore
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_MIGRATION_COUNT="$(psql "$DATABASE_URL" -Atqc "select count(*) from schema_migrations")"
+          test "$SOURCE_MIGRATION_COUNT" -gt 0
+          pg_dump "$DATABASE_URL" --format=custom --no-owner --no-acl --file=/tmp/roviq-acceptance.dump
+          test -s /tmp/roviq-acceptance.dump
+
+          dropdb --if-exists --host=localhost --username=postgres roviq_restore_test
+          createdb --host=localhost --username=postgres roviq_restore_test
+          pg_restore --host=localhost --username=postgres --dbname=roviq_restore_test --no-owner --no-acl /tmp/roviq-acceptance.dump
+
+          RESTORE_URL="postgresql://postgres:postgres@localhost:5432/roviq_restore_test"
+          RESTORED_MIGRATION_COUNT="$(psql "$RESTORE_URL" -Atqc "select count(*) from schema_migrations")"
+          echo "Source migrations: $SOURCE_MIGRATION_COUNT; restored migrations: $RESTORED_MIGRATION_COUNT"
+          test "$RESTORED_MIGRATION_COUNT" -eq "$SOURCE_MIGRATION_COUNT"
+
+          for table in service_cases payment_intents audit_log pilot_runs; do
+            TABLE_PRESENT="$(psql "$RESTORE_URL" -Atqc "select case when to_regclass('public.$table') is not null then 'yes' else 'no' end")"
+            test "$TABLE_PRESENT" = "yes"
+            echo "Restored table verified: $table"
+          done
+
+          echo "Backup/restore evidence: $(du -h /tmp/roviq-acceptance.dump | cut -f1) dump restored successfully with $RESTORED_MIGRATION_COUNT migrations."
+      - name: Prove active pilot survives database restart
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          insert into organizations(id,organization_type,display_name,status)
+          values('00000000-0000-4000-8000-000000000901','repair_partner','CI Restart Pilot','active')
+          on conflict(id) do nothing;
+          insert into locations(id,organization_id,name,country_code,region,city)
+          values('00000000-0000-4000-8000-000000000902','00000000-0000-4000-8000-000000000901','CI Restart Shop','US','OR','Portland')
+          on conflict(id) do nothing;
+          insert into pilot_runs(id,organization_id,location_id,status,readiness_snapshot,evidence,started_at)
+          values(
+            '00000000-0000-4000-8000-000000000903',
+            '00000000-0000-4000-8000-000000000901',
+            '00000000-0000-4000-8000-000000000902',
+            'active',
+            '{"ready":true,"source":"ci_restart_evidence"}'::jsonb,
+            '{}'::jsonb,
+            now()
+          )
+          on conflict(id) do update set status='active',updated_at=now();
+          SQL
+          PG_CONTAINER="$(docker ps --filter ancestor=postgres:16 --format '{{.ID}}' | head -n1)"
+          test -n "$PG_CONTAINER"
+          docker restart "$PG_CONTAINER" >/dev/null
+          for attempt in $(seq 1 30); do
+            if pg_isready --host=localhost --port=5432 --username=postgres --dbname=roviq_test >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          pg_isready --host=localhost --port=5432 --username=postgres --dbname=roviq_test
+          PILOT_STATUS="$(psql "$DATABASE_URL" -Atqc "select status from pilot_runs where id='00000000-0000-4000-8000-000000000903'")"
+          PILOT_EVIDENCE_SOURCE="$(psql "$DATABASE_URL" -Atqc "select readiness_snapshot->>'source' from pilot_runs where id='00000000-0000-4000-8000-000000000903'")"
+          echo "Pilot after restart: status=$PILOT_STATUS evidence_source=$PILOT_EVIDENCE_SOURCE"
+          test "$PILOT_STATUS" = "active"
+          test "$PILOT_EVIDENCE_SOURCE" = "ci_restart_evidence"
+          npm run db:migrate
+

@@ -4,6 +4,7 @@ import {
   deriveCustomerTimeConstraint,
   deriveMobilityConstraint,
   derivePartsConstraint,
+  deriveRepairAuthorizationConstraint,
   deriveTransportConstraint
 } from './case-constraint-projection.js';
 
@@ -42,6 +43,12 @@ describe('operational constraint projection',()=>{
     expect(deriveApprovalConstraint(['approved','approved']).status).toBe('satisfied');
     expect(deriveApprovalConstraint(['approved','pending']).status).toBe('required');
     expect(deriveApprovalConstraint(['approved','rejected']).status).toBe('blocked');
+  });
+
+  it('fails closed on unresolved or blocked warranty authorization and clears satisfied/waived requirements',()=>{
+    expect(deriveRepairAuthorizationConstraint(['required']).status).toBe('required');
+    expect(deriveRepairAuthorizationConstraint(['satisfied','waived','not_applicable']).status).toBe('satisfied');
+    expect(deriveRepairAuthorizationConstraint(['satisfied','blocked']).status).toBe('blocked');
   });
 
   it('requires a destination and accepted transport before downstream confirmation',()=>{

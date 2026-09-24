@@ -4,6 +4,7 @@ import { appendCaseEvent, createDeadline, finalizeExternalCaseTransition, transi
 import { audit, validIdentityId } from './audit.js';
 import { queueNotification, setCustomerSnapshot } from './operations.js';
 import { syncTransportOperationalConstraint } from './case-constraint-projection.js';
+import { handoffStatusForTransport, upsertNetworkHandoff } from './network-execution.js';
 
 export type TransportStatus = 'requested'|'assigned'|'accepted'|'en_route'|'arrived'|'vehicle_loaded'|'in_transit'|'delivered'|'declined'|'cancelled'|'failed';
 
@@ -118,6 +119,7 @@ export async function assignTransportDispatch(principal: Principal, dispatchId:s
     updated = await client.query(`update transport_dispatches set provider_actor_id=$1,status='assigned',assigned_at=now(),eta_at=coalesce($2,eta_at),updated_at=now() where id=$3 returning *`,[providerActorId,etaAt ?? null,dispatchId]);
     await client.query(`update service_cases set current_owner_role='tow',current_owner_actor_id=$1,updated_at=now() where id=$2`,[providerActorId,caseId]);
     await syncTransportOperationalConstraint(caseId,client);
+    await upsertNetworkHandoff({caseId,handoffType:'transport',participantActorId:providerActorId,referenceType:'transport_dispatch',referenceId:dispatchId,status:'assigned',metadata:{transportType:current.transport_type}},client);
     await client.query('commit');
     committed = true;
   } catch (e) {
@@ -183,6 +185,7 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
       await client.query(`update workflow_deadlines set state='resolved',resolved_at=now() where case_id=$1 and deadline_type like 'transport_%' and state='open'`,[caseId]);
     }
     await syncTransportOperationalConstraint(caseId,client);
+    await upsertNetworkHandoff({caseId,handoffType:'transport',participantActorId:current.provider_actor_id,referenceType:'transport_dispatch',referenceId:dispatchId,status:handoffStatusForTransport(status),metadata},client);
     await client.query(`insert into audit_log(principal_role,principal_actor_id,principal_identity_id,action,object_type,object_id,rule_basis,metadata) values($1,$2,$3,'update_transport_status','transport_dispatch',$4,$5,$6)`,[principal.role,principal.actorId??null,validIdentityId(principal.identityId),dispatchId,status==='declined'?`${current.status}->declined`:`${current.status}->${status}`,JSON.stringify(metadata)]);
     await client.query('commit');
     committed = true;

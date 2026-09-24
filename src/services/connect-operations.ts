@@ -191,3 +191,107 @@ export async function reportConnectionHealth(principal:Principal,connectionId:st
     })};
   }catch(error){await client.query('rollback');throw error;}finally{client.release();}
 }
+
+
+export async function getConnectOperationsSummary(principal:Principal){
+  const client=await pool.connect();
+  try{
+    const scope=await adminScope(principal,client);
+    const organizationId=scope?.organizationId??null;
+    const locationId=scope?.locationId??null;
+
+    const [connections,capacity,exceptions,deliveries]=await Promise.all([
+      client.query(`
+        select c.*
+          from partner_system_connections c
+         where ($1::uuid is null or c.organization_id=$1::uuid)
+           and ($2::uuid is null or c.location_id=$2::uuid)
+         order by c.updated_at desc,c.id`,
+        [organizationId,locationId]
+      ),
+      client.query(`
+        select
+          count(*) filter(where cw.sync_state in ('stale','degraded','failed'))::int as degraded_windows,
+          count(*) filter(where cw.capacity_state in ('blocked','unknown'))::int as blocked_windows,
+          count(*) filter(where cw.sync_state='current' and cw.capacity_state in ('available','limited'))::int as usable_windows
+        from capacity_windows cw
+        where ($1::uuid is null or cw.organization_id=$1::uuid)
+          and ($2::uuid is null or cw.location_id=$2::uuid)`,
+        [organizationId,locationId]
+      ),
+      client.query(`
+        select count(*)::int as open_exceptions
+          from case_exceptions ce
+          join service_cases sc on sc.id=ce.case_id
+          left join actors owner on owner.id=sc.current_owner_actor_id
+          left join actors selected on selected.id=sc.selected_actor_id
+         where ce.state='open'
+           and (
+             $1::uuid is null
+             or owner.organization_id=$1::uuid
+             or selected.organization_id=$1::uuid
+           )
+           and (
+             $2::uuid is null
+             or owner.location_id=$2::uuid
+             or selected.location_id=$2::uuid
+           )`,
+        [organizationId,locationId]
+      ),
+      client.query(`
+        select
+          count(*) filter(where d.state='retry')::int as retrying,
+          count(*) filter(where d.state='dead')::int as dead
+        from webhook_deliveries d
+        join webhook_subscriptions s on s.id=d.subscription_id
+        join actors a on a.id=s.actor_id
+        where ($1::uuid is null or a.organization_id=$1::uuid)
+          and ($2::uuid is null or a.location_id=$2::uuid)`,
+        [organizationId,locationId]
+      )
+    ]);
+
+    const byHealth:Record<string,number>={healthy:0,attention:0,degraded:0,paused:0,failed:0,revoked:0,planned:0};
+    const connectionDetails=connections.rows.map((row:any)=>{
+      const operational=deriveConnectHealth({
+        connectionStatus:row.connection_status,
+        credentialState:row.credential_state,
+        accessState:row.access_state,
+        lastSuccessAt:row.last_success_at,
+        mode:row.mode,
+        fallbackEnabled:row.fallback_enabled,
+        fallbackMode:row.fallback_mode
+      });
+      byHealth[operational.health]=(byHealth[operational.health]??0)+1;
+      return {
+        id:row.id,
+        organizationId:row.organization_id,
+        locationId:row.location_id,
+        mode:row.mode,
+        connectionStatus:row.connection_status,
+        operational,
+        lastSyncAt:row.last_sync_at,
+        lastSuccessAt:row.last_success_at,
+        lastFailureAt:row.last_failure_at,
+        lastError:row.last_error
+      };
+    });
+
+    return {
+      scope:{organizationId,locationId},
+      connections:{total:connections.rows.length,byHealth,items:connectionDetails},
+      capacity:{
+        degradedWindows:Number(capacity.rows[0]?.degraded_windows??0),
+        blockedWindows:Number(capacity.rows[0]?.blocked_windows??0),
+        usableWindows:Number(capacity.rows[0]?.usable_windows??0)
+      },
+      exceptions:{open:Number(exceptions.rows[0]?.open_exceptions??0)},
+      webhookDelivery:{
+        retrying:Number(deliveries.rows[0]?.retrying??0),
+        dead:Number(deliveries.rows[0]?.dead??0)
+      }
+    };
+  }finally{
+    client.release();
+  }
+}

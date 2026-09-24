@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { pool } from '../../db/pool.js';
 import { requireRole } from '../middleware/principal.js';
-import { processNotificationBatch, setChannelConfig, upsertNotificationTemplate } from '../../services/notifications.js';
+import { getNotificationDeliverySummary, processNotificationBatch, requeueFailedNotification, setChannelConfig, upsertNotificationTemplate } from '../../services/notifications.js';
 import { getAdminActorScope } from '../../services/admin-case-scope.js';
 
 const notificationScopePredicate=`(
@@ -42,6 +42,14 @@ export async function notificationRoutes(app:FastifyInstance) {
     return { processed:await processNotificationBatch(req.principal,body.workerId,body.limit) };
   });
 
+  app.get('/api/admin/notifications/summary', { preHandler:requireRole('admin') }, async (req) => {
+    const scope=await getAdminActorScope(req.principal,pool);
+    return await getNotificationDeliverySummary({
+      organizationId:scope?.organizationId??null,
+      locationId:scope?.locationId??null
+    });
+  });
+
   app.get('/api/admin/notifications/outbox', { preHandler:requireRole('admin') }, async (req) => {
     const q = z.object({ state:z.string().optional(), limit:z.coerce.number().int().positive().max(500).default(100) }).parse(req.query ?? {});
     const scope=await getAdminActorScope(req.principal,pool);
@@ -66,6 +74,25 @@ export async function notificationRoutes(app:FastifyInstance) {
     if (!n.rowCount) return reply.code(404).send({ error:'notification_not_found' });
     const r = await pool.query('select * from notification_delivery_attempts where notification_id=$1 order by attempt_number asc',[id]);
     return { attempts:r.rows };
+  });
+
+  app.post('/api/admin/notifications/:id/retry', { preHandler:requireRole('admin') }, async (req,reply) => {
+    const { id }=z.object({id:z.string().uuid()}).parse(req.params);
+    const scope=await getAdminActorScope(req.principal,pool);
+    if(scope){
+      const allowed=await pool.query(
+        `select n.id from notification_outbox n where n.id=$3 and ${notificationScopePredicate}`,
+        [scope.organizationId,scope.locationId,id]
+      );
+      if(!allowed.rowCount) return reply.code(404).send({error:'notification_not_found'});
+    }
+    try{
+      return {notification:await requeueFailedNotification(req.principal,id)};
+    }catch(error){
+      if(error instanceof Error&&error.message==='notification_not_found') return reply.code(404).send({error:error.message});
+      if(error instanceof Error&&error.message==='notification_not_failed') return reply.code(409).send({error:error.message});
+      throw error;
+    }
   });
 
   app.post('/api/admin/notifications/templates', { preHandler:requireRole('admin') }, async (req,reply) => {

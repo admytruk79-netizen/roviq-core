@@ -5,10 +5,12 @@ import rateLimit from '@fastify/rate-limit';
 import { registerAuthorizationHook } from './http/auth-hook.js';
 import { registerErrorHandler } from './http/error-handler.js';
 import { registerApplicationRoutes, registerPublicRoutes } from './http/register-routes.js';
+import { registerRequestContext } from './http/request-context.js';
 
 export async function buildApp() {
   const app = Fastify({ logger: false, disableRequestLogging: true });
 
+  registerRequestContext(app);
   registerErrorHandler(app);
   await app.register(cors, { origin: false });
   await app.register(helmet);

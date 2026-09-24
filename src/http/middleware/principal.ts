@@ -13,6 +13,30 @@ function adminKeyMatches(supplied: unknown, expected: string) {
 }
 
 const roles = new Set<RoviqRole>(['admin','customer','partner','diagnostic','tow','parts','fleet']);
+const UUID_RE=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+
+async function validateBearerPrincipal(input:{identityId:string;role:RoviqRole;actorId?:string}){
+  if(!UUID_RE.test(input.identityId)){
+    if(env.ALLOW_DEV_HEADERS) return true;
+    return false;
+  }
+  const result=await pool.query(
+    `select pi.role,pi.actor_id,pi.active,a.status as actor_status
+       from principal_identities pi
+       left join actors a on a.id=pi.actor_id
+      where pi.id=$1
+      limit 1`,
+    [input.identityId]
+  );
+  if(!result.rowCount) return false;
+  const row=result.rows[0];
+  if(row.active!==true) return false;
+  if(row.role!==input.role) return false;
+  if((row.actor_id??undefined)!==(input.actorId??undefined)) return false;
+  if(input.role!=='admin'&&row.actor_status!=='active') return false;
+  return true;
+}
 
 declare module 'fastify' {
   interface FastifyRequest { principal: Principal }
@@ -24,6 +48,7 @@ export async function principalMiddleware(req: FastifyRequest, reply: FastifyRep
     try {
       const verified = await verifyAccessToken(authorization.slice(7));
       if (!roles.has(verified.role)) return reply.code(401).send({ error:'invalid_token_role' });
+      if(!await validateBearerPrincipal({identityId:verified.identityId,role:verified.role,actorId:verified.actorId})) return reply.code(401).send({error:'inactive_or_revoked_identity'});
       req.principal = { role:verified.role, actorId:verified.actorId, identityId:verified.identityId };
       return;
     } catch {

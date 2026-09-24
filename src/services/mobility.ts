@@ -4,6 +4,7 @@ import { appendCaseEvent, createDeadline } from './orchestration.js';
 import { audit } from './audit.js';
 import { queueNotification, setCustomerSnapshot } from './operations.js';
 import { syncMobilityOperationalConstraint } from './case-constraint-projection.js';
+import { handoffStatusForMobility, upsertNetworkHandoff } from './network-execution.js';
 
 async function lockServiceCase(caseId:string,client:{query:(text:string,params?:unknown[])=>Promise<any>}){
   const result=await client.query('select id from service_cases where id=$1 for update',[caseId]);
@@ -14,6 +15,10 @@ export async function createMobilityResource(principal: Principal, input: {
   actorId: string; resourceType: string; externalReference?: string; label?: string;
   locationId?: string; attributes?: Record<string,unknown>; availableFrom?: string; availableUntil?: string;
 }) {
+  const actor=await pool.query(`select id,actor_type,status from actors where id=$1`,[input.actorId]);
+  if(!actor.rowCount) throw new Error('provider_not_found');
+  if(actor.rows[0].status!=='active') throw new Error('provider_not_available');
+  if(!['fleet','partner','dealership','shop'].includes(actor.rows[0].actor_type)) throw new Error('provider_not_mobility_capable');
   const r = await pool.query(
     `insert into mobility_resources(actor_id,resource_type,external_reference,label,location_id,attributes,available_from,available_until)
      values($1,$2,$3,$4,$5,$6,$7,$8) returning *`,
@@ -59,7 +64,11 @@ export async function assignMobility(principal: Principal, allocationId:string, 
     const a = await client.query('select * from mobility_allocations where id=$1 for update',[allocationId]);
     if (!a.rowCount) { await client.query('rollback'); return null; }
     if(a.rows[0].case_id!==caseId) throw new Error('mobility_case_changed');
-    if (!['requested','reserved'].includes(a.rows[0].state)) throw new Error('invalid_allocation_state');
+    if (!['requested','reserved','declined','failed'].includes(a.rows[0].state)) throw new Error('invalid_allocation_state');
+    const provider=await client.query(`select id,actor_type,status from actors where id=$1`,[input.providerActorId]);
+    if(!provider.rowCount) throw new Error('provider_not_found');
+    if(provider.rows[0].status!=='active') throw new Error('provider_not_available');
+    if(!['fleet','partner','dealership','shop'].includes(provider.rows[0].actor_type)) throw new Error('provider_not_mobility_capable');
     if (input.resourceId) {
       const resource = await client.query('select * from mobility_resources where id=$1 for update',[input.resourceId]);
       if (!resource.rowCount) throw new Error('resource_not_found');
@@ -72,6 +81,7 @@ export async function assignMobility(principal: Principal, allocationId:string, 
       [input.providerActorId,input.resourceId ?? null,input.returnDueAt ?? null,allocationId]
     );
     await syncMobilityOperationalConstraint(caseId,client);
+    await upsertNetworkHandoff({caseId,handoffType:'mobility',participantActorId:input.providerActorId,referenceType:'mobility_allocation',referenceId:allocationId,status:'assigned',metadata:{resourceId:input.resourceId??null}},client);
     await client.query('commit');
     const row = updated.rows[0];
     await appendCaseEvent(row.case_id,'MOBILITY_ASSIGNED',principal,{ allocationId, providerActorId:input.providerActorId, resourceId:input.resourceId ?? null });
@@ -112,6 +122,7 @@ export async function updateMobilityState(principal: Principal, allocationId:str
       await client.query("update mobility_resources set status='available',updated_at=now() where id=$1",[current.resource_id]);
     }
     await syncMobilityOperationalConstraint(caseId,client);
+    await upsertNetworkHandoff({caseId,handoffType:'mobility',participantActorId:current.provider_actor_id,referenceType:'mobility_allocation',referenceId:allocationId,status:handoffStatusForMobility(state)},client);
     await client.query('commit');
     const row = updated.rows[0];
     await appendCaseEvent(row.case_id,`MOBILITY_${state.toUpperCase()}`,principal,{ allocationId });

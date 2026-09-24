@@ -31,6 +31,8 @@ import { shopOsFloorRoutes } from './routes/shop-os-floor.js';
 import { localRoutes } from './routes/local.js';
 import { triageEvaluationRoutes } from './routes/triage-evaluation.js';
 import { connectedVehicleRoutes } from './routes/connected-vehicles.js';
+import { networkOrchestrationRoutes } from './routes/network-orchestration.js';
+import { pilotRoutes } from './routes/pilot.js';
 import { caseKernelRoutes } from './routes/case-kernel.js';
 import { capabilityRoutes } from './routes/capabilities.js';
 import { connectorGatewayRoutes } from './routes/connector-gateway.js';
@@ -51,11 +53,11 @@ type RouteModule = {
 const routeModules: RouteModule[] = [
   { name: 'platform', plugins: [authRoutes, coreRoutes, meRoutes, caseKernelRoutes, capabilityRoutes, connectorGatewayRoutes, sagaRoutes, policyRoutes, coreApprovalToolRoutes, tradeCaseRoutes, coreOperationsRoutes, coreActorSurfaceRoutes] },
   { name: 'case-lifecycle', plugins: [demandRoutes, caseRoutes, exceptionRoutes, servicePlanRoutes, quoteRoutes, caseAddonItemRoutes] },
-  { name: 'coordination', plugins: [routingRoutes, triageRoutes, triageEvaluationRoutes, coherenceRoutes, connectedVehicleRoutes] },
+  { name: 'coordination', plugins: [routingRoutes, triageRoutes, triageEvaluationRoutes, coherenceRoutes, connectedVehicleRoutes, networkOrchestrationRoutes] },
   { name: 'service-operations', plugins: [diagnosticRoutes, fieldServiceRoutes, transportRoutes, mobilityRoutes, partsRoutes] },
   { name: 'shop-os', plugins: [shopOsRoutes, shopOsDeferredAppointmentChoiceRoutes, shopOsFloorRoutes] },
   { name: 'financial-and-communications', plugins: [paymentWebhookRoutes, paymentRoutes, commerceRoutes, notificationRoutes] },
-  { name: 'integration-and-observability', plugins: [integrationRoutes, analyticsRoutes, localRoutes] },
+  { name: 'integration-and-observability', plugins: [integrationRoutes, analyticsRoutes, localRoutes, pilotRoutes] },
   { name: 'actor-surfaces', plugins: [partnerRoutes, adminRoutes] }
 ];
 

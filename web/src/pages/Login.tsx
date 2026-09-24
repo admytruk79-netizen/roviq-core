@@ -38,8 +38,8 @@ export function Login() {
             <div><label className="mb-2 block text-sm font-medium" htmlFor="email">Email</label><input id="email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="roviq-input" placeholder="you@example.com" /></div>
             <div><label className="mb-2 block text-sm font-medium" htmlFor="password">Password</label><div className="relative"><input id="password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} className="roviq-input pr-20" placeholder="••••••••••••" /><button type="button" onClick={() => setShowPassword((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-[var(--roviq-copper-soft)]" aria-label={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? 'Hide' : 'Show'}</button></div></div>
           </div>
-          {error && <p className="mt-4 rounded-lg border border-red-400/20 bg-red-500/10 px-3 py-2 text-sm text-red-300">{error}</p>}
-          <button type="submit" disabled={loading} className="roviq-btn-primary mt-6 w-full">{loading ? 'Signing in…' : 'Sign in'}</button>
+          {error && <p role="alert" aria-live="assertive" className="mt-4 rounded-lg border border-red-400/20 bg-red-500/10 px-3 py-2 text-sm text-red-300">{error}</p>}
+          <button type="submit" disabled={loading} aria-busy={loading} className="roviq-btn-primary mt-6 w-full">{loading ? 'Signing in…' : 'Sign in'}</button>
           <p className="roviq-muted mt-5 text-center text-xs">Secure access to your ROVIQ Service Plan and case timeline.</p>
         </form>
       </section>
