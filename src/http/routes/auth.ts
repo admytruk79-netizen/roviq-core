@@ -136,7 +136,26 @@ async function adminTestSession(req:any, reply:any, role:TestRole) {
   const actorId = actor.rows[0].id as string;
   if(role==='partner') await ensurePartnerTestReadiness(actorId,domain.rows[0].id as string);
   const principal = { role, actorId };
-  const accessToken = await issueAccessToken(`admin-${role}-test:${actorId}`, principal);
+  const testEmail=`admin-testing+${role}-${actorId}@roviq.invalid`;
+  let identity=await pool.query(
+    `select id,active from principal_identities where lower(email)=lower($1) limit 1`,
+    [testEmail]
+  );
+  if(!identity.rowCount){
+    const credentials=hashPassword(`admin-testing-${role}-${actorId}-${Date.now()}-${Math.random()}`);
+    identity=await pool.query(
+      `insert into principal_identities(actor_id,email,role,password_salt,password_hash,active)
+       values($1,$2,$3,$4,$5,true)
+       returning id,active`,
+      [actorId,testEmail,role,credentials.salt,credentials.hash]
+    );
+  }else if(identity.rows[0].active!==true){
+    identity=await pool.query(
+      `update principal_identities set active=true where id=$1 returning id,active`,
+      [identity.rows[0].id]
+    );
+  }
+  const accessToken = await issueAccessToken(identity.rows[0].id, principal);
   await audit(req.principal,`create_test_${role}_session`,'actor',actorId,'admin_testing_only');
   return { accessToken, tokenType:'Bearer', expiresIn:28800, principal, testing:true };
 }
