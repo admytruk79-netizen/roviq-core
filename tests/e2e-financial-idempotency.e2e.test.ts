@@ -137,6 +137,85 @@ describe('financial provider replay and concurrency invariants',()=>{
 
 
 
+
+  it('reclaims a stale in-progress Stripe event after a crashed worker',async()=>{
+    const providerIntentId=`pi-stale-claim-${Date.now()}-${Math.random()}`;
+    const payment=await createPaymentIntent(admin,{
+      caseId,
+      amount:64,
+      currency:'USD',
+      provider:'stripe',
+      providerIntentId
+    });
+    const providerEventId=`evt-stale-claim-${Date.now()}-${Math.random()}`;
+    await pool.query(
+      `insert into payment_provider_events(
+         provider,provider_event_id,event_type,processing_state,related_payment_intent_id,payload,claimed_at
+       ) values('stripe',$1,'payment_intent.succeeded','processing',$2,'{}'::jsonb,now()-interval '10 minutes')`,
+      [providerEventId,payment.id]
+    );
+
+    const event={
+      id:providerEventId,
+      type:'payment_intent.succeeded',
+      data:{object:{
+        id:providerIntentId,
+        amount:6400,
+        amount_received:6400,
+        currency:'usd'
+      }}
+    } as any;
+
+    const recovered=await applyStripeWebhook(event);
+    expect(recovered.id).toBe(payment.id);
+    expect(recovered.state).toBe('captured');
+
+    const providerEvent=await pool.query(
+      `select processing_state,claimed_at,error_message
+         from payment_provider_events
+        where provider='stripe' and provider_event_id=$1`,
+      [providerEventId]
+    );
+    expect(providerEvent.rows[0].processing_state).toBe('processed');
+    expect(providerEvent.rows[0].claimed_at).toBeNull();
+    expect(providerEvent.rows[0].error_message).toBeNull();
+
+    const ledger=await pool.query(
+      `select count(*)::int as n from ledger_entries
+        where payment_intent_id=$1 and entry_type='payment_capture'`,
+      [payment.id]
+    );
+    expect(Number(ledger.rows[0].n)).toBe(1);
+  });
+
+  it('does not let a concurrent duplicate steal a fresh Stripe event claim',async()=>{
+    const providerIntentId=`pi-fresh-claim-${Date.now()}-${Math.random()}`;
+    const payment=await createPaymentIntent(admin,{
+      caseId,
+      amount:65,
+      currency:'USD',
+      provider:'stripe',
+      providerIntentId
+    });
+    const providerEventId=`evt-fresh-claim-${Date.now()}-${Math.random()}`;
+    await pool.query(
+      `insert into payment_provider_events(
+         provider,provider_event_id,event_type,processing_state,related_payment_intent_id,payload,claimed_at
+       ) values('stripe',$1,'payment_intent.succeeded','processing',$2,'{}'::jsonb,now())`,
+      [providerEventId,payment.id]
+    );
+
+    const duplicate=await applyStripeWebhook({
+      id:providerEventId,
+      type:'payment_intent.succeeded',
+      data:{object:{id:providerIntentId,amount:6500,amount_received:6500,currency:'usd'}}
+    } as any);
+    expect(duplicate).toBeNull();
+
+    const current=await pool.query(`select state from payment_intents where id=$1`,[payment.id]);
+    expect(current.rows[0].state).not.toBe('captured');
+  });
+
   it('replays a previously failed Stripe event after the local payment becomes linkable',async()=>{
     const providerIntentId=`pi-late-link-${Date.now()}-${Math.random()}`;
     const providerEventId=`evt-late-link-${Date.now()}-${Math.random()}`;
@@ -239,6 +318,53 @@ describe('financial provider replay and concurrency invariants',()=>{
     expect(Number(providerEvents.rows[0].n)).toBe(1);
   });
 
+
+
+  it('posts one dispute-loss ledger entry when distinct Stripe events close the same dispute concurrently',async()=>{
+    const providerIntentId=`pi-dispute-concurrent-${Date.now()}-${Math.random()}`;
+    const payment=await createPaymentIntent(admin,{
+      caseId,amount:73,currency:'USD',provider:'stripe',providerIntentId
+    });
+    await updatePaymentState(admin,payment.id,'captured',{providerEventId:`evt-dispute-concurrent-capture-${Date.now()}-${Math.random()}`});
+    const disputeId=`dp-concurrent-${Date.now()}-${Math.random()}`;
+
+    const makeEvent=(id:string)=>({
+      id,
+      type:'charge.dispute.closed',
+      data:{object:{
+        id:disputeId,payment_intent:providerIntentId,amount:7300,currency:'usd',
+        status:'lost',reason:'fraudulent'
+      }}
+    } as any);
+
+    const [a,b]=await Promise.all([
+      applyStripeWebhook(makeEvent(`evt-dispute-concurrent-a-${Date.now()}-${Math.random()}`)),
+      applyStripeWebhook(makeEvent(`evt-dispute-concurrent-b-${Date.now()}-${Math.random()}`))
+    ]);
+    expect(a.status).toBe('lost');
+    expect(b.status).toBe('lost');
+
+    const ledger=await pool.query(
+      `select count(*)::int as n,coalesce(sum(amount),0)::numeric as amount
+         from ledger_entries
+        where payment_intent_id=$1
+          and entry_type='payment_dispute_loss'
+          and external_reference=$2`,
+      [payment.id,disputeId]
+    );
+    expect(Number(ledger.rows[0].n)).toBe(1);
+    expect(Number(ledger.rows[0].amount)).toBe(-73);
+
+    const providerEvents=await pool.query(
+      `select processing_state,count(*)::int as n
+         from payment_provider_events
+        where provider='stripe'
+          and payload->'data'->'object'->>'id'=$1
+        group by processing_state`,
+      [disputeId]
+    );
+    expect(providerEvents.rows).toEqual([expect.objectContaining({processing_state:'processed',n:2})]);
+  });
 
   it('reuses the same settlement payout for a matching provider request key',async()=>{
     const payment=await createPaymentIntent(admin,{caseId,amount:140,currency:'USD'});
