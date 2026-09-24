@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { pool } from '../../db/pool.js';
 import { requireRole } from '../middleware/principal.js';
+import { normalizeInventoryPayload } from '../../services/inventory-feed-adapter.js';
+import { syncInventoryFeed } from '../../services/inventory-sync.js';
 
 const querySchema=z.object({
   q:z.string().trim().max(120).optional(),
@@ -62,5 +64,12 @@ export async function inventoryRoutes(app:FastifyInstance){
         status='active',last_seen_at=now(),updated_at=now()
       returning *`,[b.sourceKey,b.sourceVehicleId,b.vin??null,b.year??null,b.make,b.model,b.trim??null,b.mileage??null,b.exteriorColor??null,b.drivetrain??null,b.fuelType??null,b.bodyStyle??null,JSON.stringify(b.imageUrls),b.sourcePriceCents??null,b.marginCents,b.sourceDealerName??null,b.sourceDealerUrl??null,JSON.stringify(b.sourcePayload)]);
     return reply.code(201).send({vehicle:r.rows[0]});
+  });
+  app.post('/api/admin/inventory/sync',{preHandler:requireRole('admin')},async(req,reply)=>{
+    const body=z.object({sourceKey:z.string().min(1),marginCents:z.number().int().nonnegative().default(0),payload:z.unknown()}).parse(req.body);
+    const vehicles=normalizeInventoryPayload(body.payload);
+    if(!vehicles.length) return reply.code(400).send({error:'inventory_feed_empty_or_unrecognized'});
+    const result=await syncInventoryFeed(body.sourceKey,vehicles,body.marginCents);
+    return reply.code(202).send(result);
   });
 }
