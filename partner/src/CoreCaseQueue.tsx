@@ -5,6 +5,7 @@ type CoreCase={id:string;case_type:string;state:string;priority:string;version:n
 type Approval={id:string;approval_type:string;action:string;state:string;created_at:string};
 type Action={to:string;action:string;approvalRecommended:boolean};
 type Actions={version:number;transitions:Action[]};
+type AssignmentOffer={id:string;case_id:string;case_type:string;case_state:string;priority:string;expires_at:string;reason:string|null};
 
 function human(v:string){return v.replaceAll('_',' ').replace(/\b\w/g,m=>m.toUpperCase())}
 function tone(state:string){if(['failed','blocked','cancelled'].includes(state))return'border-red-400/20 bg-red-500/10 text-red-200';if(['completed','active','approved'].includes(state))return'border-[rgba(140,255,31,.2)] bg-[rgba(140,255,31,.07)] text-[var(--green)]';if(['needs_review','waiting_external','pending'].includes(state))return'border-amber-400/20 bg-amber-500/10 text-amber-200';return'border-white/10 bg-white/[.04] text-white/75'}
@@ -13,12 +14,13 @@ export function CoreCaseQueue(){
   const[cases,setCases]=useState<CoreCase[]>([]);
   const[selected,setSelected]=useState<string|null>(null);
   const[approvals,setApprovals]=useState<Approval[]>([]);
+  const[offers,setOffers]=useState<AssignmentOffer[]>([]);
   const[actions,setActions]=useState<Actions|null>(null);
   const[error,setError]=useState<string|null>(null);
   const[busy,setBusy]=useState<string|null>(null);
   const[refresh,setRefresh]=useState(0);
 
-  useEffect(()=>{let live=true;(async()=>{try{setError(null);const r=await api.get<{cases:CoreCase[]}>('/api/core/me/cases');if(!live)return;setCases(r.cases);setSelected(cur=>cur&&r.cases.some(c=>c.id===cur)?cur:r.cases[0]?.id??null)}catch(e){if(live)setError(e instanceof Error?e.message:'Unable to load Core cases')}})();return()=>{live=false}},[refresh]);
+  useEffect(()=>{let live=true;(async()=>{try{setError(null);const[r,o]=await Promise.all([api.get<{cases:CoreCase[]}>('/api/core/me/cases'),api.get<{offers:AssignmentOffer[]}>('/api/core/me/assignment-offers')]);if(!live)return;setCases(r.cases);setOffers(o.offers);setSelected(cur=>cur&&r.cases.some(c=>c.id===cur)?cur:r.cases[0]?.id??null)}catch(e){if(live)setError(e instanceof Error?e.message:'Unable to load Core cases')}})();return()=>{live=false}},[refresh]);
 
   useEffect(()=>{if(!selected){setApprovals([]);setActions(null);return}let live=true;Promise.all([
     api.get<{approvals:Approval[]}>(`/api/core/cases/${selected}/approvals`),
@@ -27,6 +29,14 @@ export function CoreCaseQueue(){
 
   const selectedCase=cases.find(c=>c.id===selected)??null;
   const approved=useMemo(()=>new Map(approvals.filter(a=>a.state==='approved').map(a=>[a.action,a])),[approvals]);
+
+  async function respondOffer(offerId:string,decision:'accepted'|'declined'){
+    setBusy(`offer:${offerId}`);setError(null);
+    try{
+      await api.postWithHeaders(`/api/core/assignment-offers/${offerId}/respond`,{decision},{'idempotency-key':crypto.randomUUID()});
+      setRefresh(v=>v+1);
+    }catch(e){setError(e instanceof Error?e.message:'Unable to respond to assignment offer')}finally{setBusy(null)}
+  }
 
   async function transition(action:Action){
     if(!selected||!actions)return;
@@ -44,6 +54,7 @@ export function CoreCaseQueue(){
   return <section className="mt-8" aria-labelledby="core-cases-heading">
     <div className="mb-4 flex flex-wrap items-end justify-between gap-3"><div><p className="kicker">ROVIQ Core</p><h2 id="core-cases-heading" className="mt-1 text-2xl font-bold">Coordinated Cases</h2><p className="muted mt-1 max-w-2xl text-sm">Cases currently assigned to your operation through the universal ROVIQ workflow.</p></div><button className="secondary" onClick={()=>setRefresh(v=>v+1)}>Refresh</button></div>
     {error&&<div className="mb-4 rounded-xl border border-red-400/25 bg-red-500/10 px-4 py-3 text-sm text-red-100">{human(error)}</div>}
+    {offers.length>0&&<div className="mb-5 panel overflow-hidden"><div className="border-b border-white/10 p-4"><p className="kicker">New assignment offers</p></div><div className="divide-y divide-white/10">{offers.map(o=><div key={o.id} className="p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="font-semibold">{human(o.case_type)} · Case {o.case_id.slice(0,8)}</p><p className="muted mt-1 text-xs">{human(o.priority)} priority · expires {new Date(o.expires_at).toLocaleString()}</p></div><div className="flex gap-2"><button className="primary" disabled={busy!==null} onClick={()=>void respondOffer(o.id,'accepted')}>{busy===`offer:${o.id}`?'Saving…':'Accept'}</button><button className="secondary" disabled={busy!==null} onClick={()=>void respondOffer(o.id,'declined')}>Decline</button></div></div></div>)}</div></div>}
     <div className="grid gap-5 xl:grid-cols-[.9fr_1.4fr]">
       <div className="panel overflow-hidden">
         <div className="border-b border-white/10 p-4"><span className="kicker">{cases.length} assigned</span></div>
