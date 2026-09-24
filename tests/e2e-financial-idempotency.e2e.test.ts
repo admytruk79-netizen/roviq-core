@@ -189,6 +189,102 @@ describe('financial provider replay and concurrency invariants',()=>{
     expect(Number(ledger.rows[0].n)).toBe(1);
   });
 
+
+  it('reclaims a stale processing Stripe event after a worker crash',async()=>{
+    const providerIntentId=`pi-stale-claim-${Date.now()}-${Math.random()}`;
+    const providerEventId=`evt-stale-claim-${Date.now()}-${Math.random()}`;
+    const payment=await createPaymentIntent(admin,{
+      caseId,
+      amount:64,
+      currency:'USD',
+      provider:'stripe',
+      providerIntentId
+    });
+    const event={
+      id:providerEventId,
+      type:'payment_intent.succeeded',
+      data:{object:{
+        id:providerIntentId,
+        amount:6400,
+        amount_received:6400,
+        currency:'usd'
+      }}
+    } as any;
+
+    await pool.query(
+      `insert into payment_provider_events(
+         provider,provider_event_id,event_type,processing_state,processing_started_at,attempt_count,payload
+       ) values('stripe',$1,$2,'processing',now()-interval '6 minutes',1,$3)`,
+      [providerEventId,event.type,JSON.stringify(event)]
+    );
+
+    const replayed=await applyStripeWebhook(event);
+    expect(replayed.id).toBe(payment.id);
+    expect(replayed.state).toBe('captured');
+
+    const providerEvent=await pool.query(
+      `select processing_state,processing_started_at,attempt_count,related_payment_intent_id,error_message
+         from payment_provider_events
+        where provider='stripe' and provider_event_id=$1`,
+      [providerEventId]
+    );
+    expect(providerEvent.rows[0].processing_state).toBe('processed');
+    expect(providerEvent.rows[0].processing_started_at).toBeNull();
+    expect(Number(providerEvent.rows[0].attempt_count)).toBe(2);
+    expect(providerEvent.rows[0].related_payment_intent_id).toBe(payment.id);
+    expect(providerEvent.rows[0].error_message).toBeNull();
+
+    const ledger=await pool.query(
+      `select count(*)::int as n from ledger_entries
+        where payment_intent_id=$1 and entry_type='payment_capture'`,
+      [payment.id]
+    );
+    expect(Number(ledger.rows[0].n)).toBe(1);
+  });
+
+  it('serializes concurrent Stripe dispute-loss events to one chargeback ledger posting',async()=>{
+    const providerIntentId=`pi-dispute-race-${Date.now()}-${Math.random()}`;
+    const payment=await createPaymentIntent(admin,{
+      caseId,amount:90,currency:'USD',provider:'stripe',providerIntentId
+    });
+    await updatePaymentState(admin,payment.id,'captured',{
+      providerEventId:`evt-dispute-race-capture-${Date.now()}-${Math.random()}`
+    });
+    const disputeId=`dp-race-${Date.now()}-${Math.random()}`;
+    const eventA={
+      id:`evt-dispute-race-a-${Date.now()}-${Math.random()}`,
+      type:'charge.dispute.closed',
+      data:{object:{
+        id:disputeId,payment_intent:providerIntentId,amount:9000,currency:'usd',
+        status:'lost',reason:'fraudulent'
+      }}
+    } as any;
+    const eventB={...eventA,id:`evt-dispute-race-b-${Date.now()}-${Math.random()}`};
+
+    const results=await Promise.all([applyStripeWebhook(eventA),applyStripeWebhook(eventB)]);
+    expect(results.every(Boolean)).toBe(true);
+
+    const ledger=await pool.query(
+      `select count(*)::int as n,coalesce(sum(amount),0)::numeric as amount
+         from ledger_entries
+        where payment_intent_id=$1
+          and entry_type='payment_dispute_loss'
+          and external_reference=$2`,
+      [payment.id,disputeId]
+    );
+    expect(Number(ledger.rows[0].n)).toBe(1);
+    expect(Number(ledger.rows[0].amount)).toBe(-90);
+
+    const providerEvents=await pool.query(
+      `select processing_state,count(*)::int as n
+         from payment_provider_events
+        where provider='stripe' and provider_event_id in ($1,$2)
+        group by processing_state`,
+      [eventA.id,eventB.id]
+    );
+    expect(providerEvents.rows).toEqual([expect.objectContaining({processing_state:'processed',n:2})]);
+  });
+
   it('persists Stripe disputes idempotently and posts a loss once',async()=>{
     const providerIntentId=`pi-dispute-${Date.now()}-${Math.random()}`;
     const payment=await createPaymentIntent(admin,{
