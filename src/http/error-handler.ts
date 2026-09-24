@@ -13,7 +13,7 @@ const badRequestErrors = new Set([
 ]);
 
 export function registerErrorHandler(app: FastifyInstance) {
-  app.setErrorHandler((err, _req, reply) => {
+  app.setErrorHandler((err, req, reply) => {
     if (err instanceof ZodError) {
       return reply.code(400).send({ error:'validation_error', details:err.issues });
     }
@@ -37,7 +37,14 @@ export function registerErrorHandler(app: FastifyInstance) {
       return reply.code(409).send({ error:'scheduling_conflict' });
     }
 
-    console.error('roviq_core_error', err);
-    return reply.code(500).send({ error:'internal_error' });
+    console.error('roviq_core_error',{
+      correlationId:req.correlationId??req.id,
+      method:req.method,
+      url:req.url,
+      message:err instanceof Error?err.message:String(err),
+      name:err instanceof Error?err.name:'unknown_error',
+      code:(err as {code?:string}).code??null
+    });
+    return reply.code(500).send({ error:'internal_error', requestId:req.correlationId??req.id });
   });
 }

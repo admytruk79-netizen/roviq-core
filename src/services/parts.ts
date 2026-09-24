@@ -7,6 +7,7 @@ import { queueNotification, setCustomerSnapshot } from './operations.js';
 import { assertCaseAccess } from './case-access.js';
 import { rankCoordinationCandidates, type CoordinationCandidate } from './coordination-engine.js';
 import { loadActiveRoutingPolicy } from './routing-repository.js';
+import { handoffStatusForParts, upsertNetworkHandoff } from './network-execution.js';
 
 type PartItemInput = { sku:string; partNumber?:string; description?:string; quantity:number; attributes?:Record<string,unknown> };
 
@@ -109,17 +110,40 @@ export async function createPartsOrder(principal: Principal, input:{ caseId:stri
 }
 
 export async function assignSupplier(principal: Principal, orderId:string, supplierActorId:string) {
-  const supplier = await pool.query(`select id,actor_type,status from actors where id=$1`,[supplierActorId]);
-  if (!supplier.rowCount || supplier.rows[0].status !== 'active') throw new Error('supplier_not_available');
-  if (!['parts','partner','dealership'].includes(supplier.rows[0].actor_type)) throw new Error('invalid_supplier_type');
-  const r = await pool.query(
-    `update parts_orders set supplier_actor_id=$1,status='supplier_assigned',updated_at=now()
-     where id=$2 and status in ('requested','supplier_assigned') returning *`,[supplierActorId,orderId]
-  );
-  if (!r.rowCount) throw new Error('order_not_assignable');
-  await appendCaseEvent(r.rows[0].case_id,'PARTS_SUPPLIER_ASSIGNED',principal,{ orderId,supplierActorId });
-  await queueNotification({ caseId:r.rows[0].case_id, channel:'push', recipientType:'actor', recipientId:supplierActorId, templateKey:'parts_order_assigned', payload:{ orderId } });
-  await audit(principal,'assign_parts_supplier','parts_order',orderId,'supplier_assigned',{ supplierActorId });
+  const client=await pool.connect();
+  let row:any;
+  try{
+    await client.query('begin');
+    const supplier=await client.query(`select id,actor_type,status from actors where id=$1`,[supplierActorId]);
+    if(!supplier.rowCount||supplier.rows[0].status!=='active') throw new Error('supplier_not_available');
+    if(!['parts','partner','dealership'].includes(supplier.rows[0].actor_type)) throw new Error('invalid_supplier_type');
+    const order=await client.query(`select * from parts_orders where id=$1 for update`,[orderId]);
+    if(!order.rowCount) throw new Error('order_not_found');
+    if(!['requested','supplier_assigned','failed'].includes(order.rows[0].status)) throw new Error('order_not_assignable');
+    const updated=await client.query(
+      `update parts_orders
+          set supplier_actor_id=$1,status='supplier_assigned',updated_at=now()
+        where id=$2 returning *`,
+      [supplierActorId,orderId]
+    );
+    row=updated.rows[0];
+    await upsertNetworkHandoff({
+      caseId:row.case_id,
+      handoffType:'parts',
+      participantActorId:supplierActorId,
+      referenceType:'parts_order',
+      referenceId:orderId,
+      status:'assigned',
+      metadata:{partsStatus:'supplier_assigned'}
+    },client);
+    await client.query('commit');
+  }catch(error){
+    await client.query('rollback').catch(()=>{});
+    throw error;
+  }finally{client.release();}
+  await appendCaseEvent(row.case_id,'PARTS_SUPPLIER_ASSIGNED',principal,{orderId,supplierActorId});
+  await queueNotification({caseId:row.case_id,channel:'push',recipientType:'actor',recipientId:supplierActorId,templateKey:'parts_order_assigned',payload:{orderId}});
+  await audit(principal,'assign_parts_supplier','parts_order',orderId,'supplier_assigned',{supplierActorId});
   return getPartsOrder(orderId);
 }
 
@@ -227,6 +251,7 @@ export async function reserveOrderInventory(principal: Principal, orderId:string
       );
     }
     await client.query(`update parts_orders set status='reserved',updated_at=now() where id=$1`,[orderId]);
+    await upsertNetworkHandoff({caseId:order.case_id,handoffType:'parts',participantActorId:order.supplier_actor_id,referenceType:'parts_order',referenceId:orderId,status:'in_progress',metadata:{partsStatus:'reserved'}},client);
     await client.query('commit');
     await appendCaseEvent(order.case_id,'PARTS_RESERVED',principal,{ orderId });
     await audit(principal,'reserve_parts','parts_order',orderId,'inventory_reserved');
@@ -238,66 +263,110 @@ export async function reserveOrderInventory(principal: Principal, orderId:string
 }
 
 export async function markPartsOrderStatus(principal: Principal, orderId:string, status:'ordered'|'shipped'|'delivered'|'cancelled'|'failed', metadata:Record<string,unknown>={}) {
-  const current = await pool.query('select * from parts_orders where id=$1',[orderId]);
-  if (!current.rowCount) throw new Error('order_not_found');
-  const order = current.rows[0];
-  if (principal.role !== 'admin' && principal.actorId !== order.supplier_actor_id) throw new Error('forbidden');
   const allowed:Record<string,string[]> = {
     reserved:['ordered','cancelled','failed'], ordered:['shipped','delivered','cancelled','failed'], shipped:['delivered','failed']
   };
-  if (!allowed[order.status]?.includes(status)) throw new Error('invalid_parts_transition');
   const client = await pool.connect();
+  let order:any;
+  let updated:any;
   try {
     await client.query('begin');
-    if (status === 'cancelled' || status === 'failed') {
-      const items = await client.query(`select * from parts_order_items where order_id=$1 and status in ('reserved','ordered','shipped')`,[orderId]);
-      for (const item of items.rows) {
-        if (item.inventory_id) await client.query('update parts_inventory set quantity_reserved=greatest(quantity_reserved-$1,0),updated_at=now() where id=$2',[item.quantity,item.inventory_id]);
+    const discovered=await client.query('select case_id from parts_orders where id=$1',[orderId]);
+    if(!discovered.rowCount) throw new Error('order_not_found');
+    const caseId=discovered.rows[0].case_id as string;
+    await client.query('select id from service_cases where id=$1 for update',[caseId]);
+    const current=await client.query('select * from parts_orders where id=$1 for update',[orderId]);
+    if(!current.rowCount) throw new Error('order_not_found');
+    order=current.rows[0];
+    if(order.case_id!==caseId) throw new Error('parts_case_changed');
+    if(principal.role!=='admin'&&principal.actorId!==order.supplier_actor_id) throw new Error('forbidden');
+    if(!allowed[order.status]?.includes(status)) throw new Error('invalid_parts_transition');
+
+    if(status==='cancelled'||status==='failed'){
+      const items=await client.query(`select * from parts_order_items where order_id=$1 and status in ('reserved','ordered','shipped') order by id for update`,[orderId]);
+      for(const item of items.rows){
+        if(item.inventory_id) await client.query(
+          'update parts_inventory set quantity_reserved=greatest(quantity_reserved-$1,0),updated_at=now() where id=$2',
+          [item.quantity,item.inventory_id]
+        );
       }
-      await client.query(`update parts_order_items set status=$1,updated_at=now() where order_id=$2 and status not in ('delivered','cancelled','failed')`,[status,orderId]);
-    } else if (status === 'delivered') {
-      const items = await client.query(`select * from parts_order_items where order_id=$1`,[orderId]);
-      for (const item of items.rows) {
-        if (item.inventory_id) {
-          await client.query(
-            `update parts_inventory set quantity_on_hand=greatest(quantity_on_hand-$1,0),quantity_reserved=greatest(quantity_reserved-$1,0),updated_at=now() where id=$2`,
+      await client.query(
+        `update parts_order_items set status=$1,updated_at=now()
+          where order_id=$2 and status not in ('delivered','cancelled','failed')`,
+        [status,orderId]
+      );
+    }else if(status==='delivered'){
+      const items=await client.query(`select * from parts_order_items where order_id=$1 order by id for update`,[orderId]);
+      for(const item of items.rows){
+        if(item.inventory_id){
+          const inventory=await client.query(
+            `update parts_inventory
+                set quantity_on_hand=quantity_on_hand-$1,
+                    quantity_reserved=quantity_reserved-$1,
+                    updated_at=now()
+              where id=$2
+                and quantity_on_hand >= $1
+                and quantity_reserved >= $1
+              returning id`,
             [item.quantity,item.inventory_id]
           );
+          if(!inventory.rowCount) throw new Error('inventory_reservation_mismatch');
         }
       }
       await client.query(`update parts_order_items set status='delivered',updated_at=now() where order_id=$1`,[orderId]);
-    } else {
-      await client.query(`update parts_order_items set status=$1,updated_at=now() where order_id=$2 and status not in ('delivered','cancelled','failed')`,[status,orderId]);
+    }else{
+      await client.query(
+        `update parts_order_items set status=$1,updated_at=now()
+          where order_id=$2 and status not in ('delivered','cancelled','failed')`,
+        [status,orderId]
+      );
     }
-    const r = await client.query(
-      `update parts_orders set status=$1,tracking_reference=coalesce($2,tracking_reference),external_order_reference=coalesce($3,external_order_reference),
-       updated_at=now(),delivered_at=case when $1='delivered' then now() else delivered_at end,cancelled_at=case when $1='cancelled' then now() else cancelled_at end
-       where id=$4 returning *`,
-      [status,metadata.trackingReference ?? null,metadata.externalOrderReference ?? null,orderId]
-    );
-    await client.query('commit');
-    await appendCaseEvent(order.case_id,`PARTS_${status.toUpperCase()}`,principal,{ orderId,...metadata });
-    if (status === 'delivered') {
-      const linkedFieldService=order.attributes?.source==='field_service_required_parts'&&typeof order.attributes?.fieldServiceDecisionId==='string';
-      if(linkedFieldService){
-        const resumed=await resumeLinkedFieldService(principal,{...order,...r.rows[0],id:orderId});
-        if(!resumed)await setCustomerSnapshot(order.case_id,'field_service_parts_ready_review','Required parts have arrived.','ROVIQ is reviewing field-service eligibility');
-      }else{
-        const c = await pool.query('select state from service_cases where id=$1',[order.case_id]);
-        if (c.rowCount && c.rows[0].state === 'parts_pending') await transitionCase(principal,order.case_id,'repair_in_progress',{ orderId });
-        await setCustomerSnapshot(order.case_id,'repair_resumed','Required parts have arrived and repair can continue.','Repair in progress');
-      }
-    } else if (status === 'failed') {
-      await createDeadline(order.case_id,'parts_recovery',new Date(Date.now()+15*60*1000).toISOString(),'reassign_parts_supplier',{ orderId });
-    }
-    await audit(principal,'update_parts_order','parts_order',orderId,`parts_${status}`,metadata);
-    return r.rows[0];
-  } catch (e) {
-    await client.query('rollback').catch(()=>{});
-    throw e;
-  } finally { client.release(); }
-}
 
+    const result=await client.query(
+      `update parts_orders
+          set status=$1,
+              tracking_reference=coalesce($2,tracking_reference),
+              external_order_reference=coalesce($3,external_order_reference),
+              updated_at=now(),
+              delivered_at=case when $1='delivered' then now() else delivered_at end,
+              cancelled_at=case when $1='cancelled' then now() else cancelled_at end
+        where id=$4
+        returning *`,
+      [status,metadata.trackingReference??null,metadata.externalOrderReference??null,orderId]
+    );
+    updated=result.rows[0];
+    await upsertNetworkHandoff({
+      caseId:order.case_id,
+      handoffType:'parts',
+      participantActorId:order.supplier_actor_id,
+      referenceType:'parts_order',
+      referenceId:orderId,
+      status:handoffStatusForParts(status),
+      metadata
+    },client);
+    await client.query('commit');
+  }catch(error){
+    await client.query('rollback').catch(()=>{});
+    throw error;
+  }finally{client.release();}
+
+  await appendCaseEvent(order.case_id,`PARTS_${status.toUpperCase()}`,principal,{orderId,...metadata});
+  if(status==='delivered'){
+    const linkedFieldService=order.attributes?.source==='field_service_required_parts'&&typeof order.attributes?.fieldServiceDecisionId==='string';
+    if(linkedFieldService){
+      const resumed=await resumeLinkedFieldService(principal,{...order,...updated,id:orderId});
+      if(!resumed) await setCustomerSnapshot(order.case_id,'field_service_parts_ready_review','Required parts have arrived.','ROVIQ is reviewing field-service eligibility');
+    }else{
+      const caseState=await pool.query('select state from service_cases where id=$1',[order.case_id]);
+      if(caseState.rowCount&&caseState.rows[0].state==='parts_pending') await transitionCase(principal,order.case_id,'repair_in_progress',{orderId});
+      await setCustomerSnapshot(order.case_id,'repair_resumed','Required parts have arrived and repair can continue.','Repair in progress');
+    }
+  }else if(status==='failed'){
+    await createDeadline(order.case_id,'parts_recovery',new Date(Date.now()+15*60*1000).toISOString(),'reassign_parts_supplier',{orderId});
+  }
+  await audit(principal,'update_parts_order','parts_order',orderId,`parts_${status}`,metadata);
+  return updated;
+}
 export async function upsertInventory(principal: Principal, input:{ supplierActorId?:string; sku:string; partNumber?:string; description?:string; quantityOnHand:number; unitPrice?:number; currency?:string; locationId?:string; attributes?:Record<string,unknown> }) {
   const supplierActorId = principal.role === 'admin' ? input.supplierActorId : principal.actorId;
   if (!supplierActorId) throw new Error('supplier_actor_required');

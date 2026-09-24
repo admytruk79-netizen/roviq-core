@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { pool } from '../../db/pool.js';
@@ -6,6 +5,8 @@ import { audit } from '../../services/audit.js';
 import { appendCaseEvent } from '../../services/case-events.js';
 import { loadCaseForPrincipal } from '../../services/case-access.js';
 import { requireRole } from '../middleware/principal.js';
+import { healthEventDedupKey } from '../../services/connected-vehicle-identity.js';
+import { syncRepairAuthorizationOperationalConstraint } from '../../services/case-constraint-projection.js';
 
 async function loadOwnedVehicle(principal:any, vehicleId:string) {
   const result = await pool.query(
@@ -24,22 +25,6 @@ async function loadOwnedVehicle(principal:any, vehicleId:string) {
     throw error;
   }
   return vehicle;
-}
-
-function healthEventDedupKey(input:{
-  sourceId:string; vehicleId:string; sourceEventId?:string;
-  eventType:string; occurredAt:string; dtcCodes:string[];
-  normalizedSignals:Record<string,unknown>;
-}) {
-  if (input.sourceEventId) return `source:${input.sourceEventId}`;
-  return createHash('sha256').update(JSON.stringify({
-    sourceId:input.sourceId,
-    vehicleId:input.vehicleId,
-    eventType:input.eventType,
-    occurredAt:input.occurredAt,
-    dtcCodes:[...input.dtcCodes].sort(),
-    normalizedSignals:input.normalizedSignals
-  })).digest('hex');
 }
 
 export async function connectedVehicleRoutes(app:FastifyInstance) {
@@ -77,7 +62,7 @@ export async function connectedVehicleRoutes(app:FastifyInstance) {
     const body=z.object({
       vehicleId:z.string().uuid(),
       sourceId:z.string().uuid(),
-      externalDeviceId:z.string().min(1).max(250).optional(),
+      externalDeviceId:z.string().min(1).max(250),
       consentVersion:z.string().min(1).max(80),
       scopes:z.array(z.string().min(1).max(120)).min(1).default(['vehicle_health']),
       retentionDays:z.number().int().positive().max(3650).optional(),
@@ -112,7 +97,7 @@ export async function connectedVehicleRoutes(app:FastifyInstance) {
          on conflict(source_id,external_device_id)
          do update set vehicle_id=excluded.vehicle_id,consent_id=excluded.consent_id,enrollment_status='active',updated_at=now(),metadata=excluded.metadata
          returning *`,
-        [body.vehicleId,body.sourceId,consent.rows[0].id,body.externalDeviceId??null,JSON.stringify(body.metadata??{})]
+        [body.vehicleId,body.sourceId,consent.rows[0].id,body.externalDeviceId,JSON.stringify(body.metadata??{})]
       );
       await client.query('commit');
       await audit(req.principal,'enroll_connected_vehicle','device_enrollment',enrollment.rows[0].id,'connected_vehicle_enrolled',{
@@ -164,7 +149,7 @@ export async function connectedVehicleRoutes(app:FastifyInstance) {
 
     if(body.enrollmentId){
       const enrollment=await pool.query(
-        `select de.*,cvc.status as consent_status,cvc.retention_until
+        `select de.*,cvc.status as consent_status,cvc.retention_until,cvc.scopes
          from device_enrollments de
          join connected_vehicle_consents cvc on cvc.id=de.consent_id
          where de.id=$1 and de.vehicle_id=$2 and de.source_id=$3`,
@@ -175,6 +160,8 @@ export async function connectedVehicleRoutes(app:FastifyInstance) {
       if(row.enrollment_status!=='active') return reply.code(409).send({error:'enrollment_not_active'});
       if(row.consent_status!=='active') return reply.code(409).send({error:'connected_consent_not_active'});
       if(row.retention_until&&new Date(row.retention_until).getTime()<=Date.now()) return reply.code(409).send({error:'connected_consent_expired'});
+      const consentScopes=Array.isArray(row.scopes)?row.scopes:[];
+      if(!consentScopes.includes('vehicle_health')) return reply.code(403).send({error:'vehicle_health_scope_required'});
     }else if(['roviq_reader','oem_telematics','vehicle_api','integration'].includes(source.rows[0].source_type)){
       return reply.code(400).send({error:'enrollment_required'});
     }
@@ -271,6 +258,76 @@ export async function connectedVehicleRoutes(app:FastifyInstance) {
       vehicleId,coverageType:body.coverageType,coverageStatus:body.coverageStatus,source
     });
     return reply.code(201).send({coverage:result.rows[0]});
+  });
+
+  app.post('/api/admin/connected/cases/:caseId/repair-authorization-constraints',{preHandler:requireRole('admin')},async(req,reply)=>{
+    const {caseId}=z.object({caseId:z.string().uuid()}).parse(req.params);
+    const serviceCase=await loadCaseForPrincipal(req.principal,caseId);
+    if(!serviceCase) return reply.code(404).send({error:'case_not_found'});
+    const body=z.object({
+      warrantyCoverageId:z.string().uuid().nullable().optional(),
+      constraintType:z.enum(['authorized_provider','covered_component','preauthorization','oem_procedure','payment_responsibility','other']),
+      status:z.enum(['required','satisfied','waived','not_applicable','blocked']).default('required'),
+      details:z.record(z.unknown()).default({}),
+      source:z.string().min(1).max(120).default('admin')
+    }).parse(req.body);
+
+    if(body.warrantyCoverageId){
+      const coverage=await pool.query(`select id,vehicle_id from warranty_coverages where id=$1`,[body.warrantyCoverageId]);
+      if(!coverage.rowCount) return reply.code(404).send({error:'warranty_coverage_not_found'});
+      if(!serviceCase.vehicle_id) return reply.code(409).send({error:'case_vehicle_required'});
+      if(coverage.rows[0].vehicle_id!==serviceCase.vehicle_id) return reply.code(409).send({error:'warranty_vehicle_mismatch'});
+    }
+
+    const result=await pool.query(
+      `insert into repair_authorization_constraints(
+        service_case_id,warranty_coverage_id,constraint_type,status,details,source
+       ) values($1,$2,$3,$4,$5,$6) returning *`,
+      [caseId,body.warrantyCoverageId??null,body.constraintType,body.status,JSON.stringify(body.details),body.source]
+    );
+    await syncRepairAuthorizationOperationalConstraint(caseId,pool);
+    await appendCaseEvent(caseId,'REPAIR_AUTHORIZATION_CONSTRAINT_SET',req.principal,{
+      repairAuthorizationConstraintId:result.rows[0].id,
+      warrantyCoverageId:body.warrantyCoverageId??null,
+      constraintType:body.constraintType,
+      status:body.status
+    });
+    await audit(req.principal,'set_repair_authorization_constraint','repair_authorization_constraint',result.rows[0].id,'repair_authorization_constraint_set',{
+      caseId,warrantyCoverageId:body.warrantyCoverageId??null,constraintType:body.constraintType,status:body.status
+    });
+    return reply.code(201).send({constraint:result.rows[0]});
+  });
+
+  app.patch('/api/admin/connected/repair-authorization-constraints/:constraintId',{preHandler:requireRole('admin')},async(req,reply)=>{
+    const {constraintId}=z.object({constraintId:z.string().uuid()}).parse(req.params);
+    const existing=await pool.query(`select * from repair_authorization_constraints where id=$1`,[constraintId]);
+    if(!existing.rowCount) return reply.code(404).send({error:'repair_authorization_constraint_not_found'});
+    const caseId=existing.rows[0].service_case_id as string|null;
+    if(!caseId) return reply.code(409).send({error:'repair_authorization_case_required'});
+    const serviceCase=await loadCaseForPrincipal(req.principal,caseId);
+    if(!serviceCase) return reply.code(404).send({error:'case_not_found'});
+    const body=z.object({
+      status:z.enum(['required','satisfied','waived','not_applicable','blocked']).optional(),
+      details:z.record(z.unknown()).optional()
+    }).refine((value)=>value.status!==undefined||value.details!==undefined,{message:'no_updates'}).parse(req.body);
+
+    const result=await pool.query(
+      `update repair_authorization_constraints
+          set status=coalesce($2,status),
+              details=case when $3::jsonb is null then details else $3::jsonb end,
+              updated_at=now()
+        where id=$1 returning *`,
+      [constraintId,body.status??null,body.details===undefined?null:JSON.stringify(body.details)]
+    );
+    await syncRepairAuthorizationOperationalConstraint(caseId,pool);
+    await appendCaseEvent(caseId,'REPAIR_AUTHORIZATION_CONSTRAINT_UPDATED',req.principal,{
+      repairAuthorizationConstraintId:constraintId,
+      status:result.rows[0].status
+    });
+    await audit(req.principal,'update_repair_authorization_constraint','repair_authorization_constraint',constraintId,'repair_authorization_constraint_updated',{
+      caseId,status:result.rows[0].status
+    });
+    return {constraint:result.rows[0]};
   });
 
   app.get('/api/connected/vehicles/:vehicleId/warranty-coverages',{preHandler:requireRole('customer','admin')},async(req)=>{

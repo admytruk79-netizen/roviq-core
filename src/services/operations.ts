@@ -74,3 +74,99 @@ export async function addLedgerEntry(input:{ caseId?:string; transactionId?:stri
   );
   return r.rows[0];
 }
+
+
+export async function getOperationalHealthSummary(){
+  const [
+    migration,
+    deadlines,
+    exceptions,
+    notifications,
+    webhooks,
+    connections,
+    fulfillment
+  ]=await Promise.all([
+    pool.query(`select filename,applied_at,duration_ms from schema_migrations order by filename desc limit 1`),
+    pool.query(`
+      select
+        count(*) filter(where state='open')::int as open,
+        count(*) filter(where state='open' and due_at<=now())::int as overdue
+      from workflow_deadlines`),
+    pool.query(`
+      select
+        count(*) filter(where state='open')::int as open,
+        count(*) filter(where state='open' and severity='critical')::int as critical,
+        count(*) filter(where state='open' and severity='warning')::int as warning
+      from case_exceptions`),
+    pool.query(`
+      select
+        count(*) filter(where state='pending' and coalesce(attempt_count,0)>0)::int as retrying,
+        count(*) filter(where state='dead')::int as dead
+      from notification_outbox`),
+    pool.query(`
+      select
+        count(*) filter(where state='retry')::int as retrying,
+        count(*) filter(where state='dead')::int as dead
+      from webhook_deliveries`),
+    pool.query(`
+      select
+        count(*) filter(where connection_status in ('degraded','failed'))::int as degraded,
+        count(*) filter(where connection_status='paused')::int as paused
+      from partner_system_connections`),
+    pool.query(`
+      select
+        count(*) filter(where status='blocked')::int as blocked,
+        count(*) filter(where recovery_required_at is not null and status not in ('completed','cancelled','superseded'))::int as recovery_required
+      from fulfillment_plans`)
+  ]);
+
+  const snapshot={
+    database:{reachable:true,latestMigration:migration.rows[0]??null},
+    workflow:{
+      openDeadlines:Number(deadlines.rows[0]?.open??0),
+      overdueDeadlines:Number(deadlines.rows[0]?.overdue??0)
+    },
+    exceptions:{
+      open:Number(exceptions.rows[0]?.open??0),
+      critical:Number(exceptions.rows[0]?.critical??0),
+      warning:Number(exceptions.rows[0]?.warning??0)
+    },
+    notifications:{
+      retrying:Number(notifications.rows[0]?.retrying??0),
+      dead:Number(notifications.rows[0]?.dead??0)
+    },
+    webhooks:{
+      retrying:Number(webhooks.rows[0]?.retrying??0),
+      dead:Number(webhooks.rows[0]?.dead??0)
+    },
+    integrations:{
+      degraded:Number(connections.rows[0]?.degraded??0),
+      paused:Number(connections.rows[0]?.paused??0)
+    },
+    fulfillment:{
+      blocked:Number(fulfillment.rows[0]?.blocked??0),
+      recoveryRequired:Number(fulfillment.rows[0]?.recovery_required??0)
+    }
+  };
+  const criticalSignals=[
+    snapshot.exceptions.critical,
+    snapshot.notifications.dead,
+    snapshot.webhooks.dead,
+    snapshot.integrations.degraded,
+    snapshot.fulfillment.recoveryRequired
+  ].reduce((sum,value)=>sum+value,0);
+  const warningSignals=
+    snapshot.workflow.overdueDeadlines+
+    snapshot.exceptions.warning+
+    snapshot.notifications.retrying+
+    snapshot.webhooks.retrying+
+    snapshot.integrations.paused+
+    snapshot.fulfillment.blocked;
+  return {
+    generatedAt:new Date().toISOString(),
+    status:criticalSignals>0?'degraded':warningSignals>0?'attention':'healthy',
+    criticalSignals,
+    warningSignals,
+    ...snapshot
+  };
+}

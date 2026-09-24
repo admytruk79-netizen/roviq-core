@@ -4,7 +4,7 @@ import { createShopOsAppointment } from '../src/services/shop-os-appointment-cre
 
 const admin={role:'admin'} as const;
 
-type ConstraintType='customer_time'|'resource'|'capability'|'parts'|'mobility'|'approval'|'transport'|'other';
+type ConstraintType='customer_time'|'resource'|'capability'|'parts'|'mobility'|'approval'|'authorization'|'transport'|'provider'|'other';
 type ConstraintStatus='required'|'satisfied'|'waived'|'blocked'|'unknown';
 
 async function setupNativeShop(){
@@ -60,13 +60,14 @@ describe('Shop OS fail-closed operational constraint gate',()=>{
     ['transport','blocked'],
     ['approval','required'],
     ['approval','blocked'],
+    ['authorization','required'],
+    ['authorization','blocked'],
     ['provider','required'],
     ['capability','required']
   ] as const)('rejects confirmed booking when %s is %s',async(type,status)=>{
     const {orgId,resourceId}=await setupNativeShop();
     const caseId=await createCase(orgId);
-    const canonicalType=(type==='provider'?'other':type) as ConstraintType;
-    await addConstraint(caseId,canonicalType,status,`${type}-readiness`);
+    await addConstraint(caseId,type,status,`${type}-readiness`);
     const {startsAt,endsAt}=slot(20);
 
     await expect(createShopOsAppointment(admin,{
