@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.js';
 import { pool } from '../src/db/pool.js';
+import { verifyAccessToken } from '../src/services/auth.js';
 
 const ADMIN_KEY=process.env.ADMIN_API_KEY!;
 const adminHeaders={'x-roviq-role':'admin','x-admin-api-key':ADMIN_KEY};
@@ -36,6 +37,43 @@ describe('bearer token revocation and actor lifecycle',()=>{
     expect(response.statusCode).toBe(200);
     return response.json().accessToken as string;
   }
+
+
+  it('backs admin-created portal handoff tokens with an active revalidatable identity',async()=>{
+    const response=await app.inject({
+      method:'POST',
+      url:'/api/admin/testing/customer-session',
+      headers:adminHeaders
+    });
+    expect(response.statusCode).toBe(200);
+    const body=response.json();
+    const verified=await verifyAccessToken(body.accessToken);
+    expect(verified.role).toBe('customer');
+    expect(verified.actorId).toBe(body.principal.actorId);
+    expect(verified.identityId).toMatch(/^[0-9a-f-]{36}$/i);
+
+    const identity=await pool.query(
+      `select pi.active,pi.role,pi.actor_id,a.status as actor_status
+         from principal_identities pi
+         join actors a on a.id=pi.actor_id
+        where pi.id=$1`,
+      [verified.identityId]
+    );
+    expect(identity.rows[0]).toMatchObject({
+      active:true,
+      role:'customer',
+      actor_id:body.principal.actorId,
+      actor_status:'active'
+    });
+
+    const me=await app.inject({
+      method:'GET',
+      url:'/api/customers/me/cases',
+      headers:{authorization:`Bearer ${body.accessToken}`}
+    });
+    expect(me.statusCode).toBe(200);
+    expect(Array.isArray(me.json().cases)).toBe(true);
+  });
 
   it('rejects an already-issued token after the identity is deactivated',async()=>{
     const user=await makeIdentity('identity-revoked');
