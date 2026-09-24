@@ -15,6 +15,7 @@ type TradeDocument={id:string;document_type:string;status:string;external_refere
 type TradeData={trade:{phase:string;trade_mode:string;origin_country:string;destination_country:string;origin_location:string|null;destination_location:string|null;subject:Record<string,unknown>};milestones:TradeMilestone[];documents:TradeDocument[]};
 type TradeActions={caseId:string;phase:string;version:number;transitions:Action[]};
 type ActorOption={id:string;actor_type:string;display_name:string;partner_subtype:string|null;capabilities:string[]};
+type AssignmentOffer={id:string;state:string;offered_to_actor_id:string;offered_to_name:string;offered_to_actor_type:string;expires_at:string;created_at:string;reason:string|null};
 
 function pretty(value:string){return value.replaceAll('_',' ').replace(/\b\w/g,m=>m.toUpperCase());}
 function errorText(error:unknown){
@@ -35,6 +36,7 @@ export function CoreCaseWorkspace(){
   const [tradeActions,setTradeActions]=useState<TradeActions|null>(null);
   const [actors,setActors]=useState<ActorOption[]>([]);
   const [ownerActorId,setOwnerActorId]=useState('');
+  const [assignmentOffers,setAssignmentOffers]=useState<AssignmentOffer[]>([]);
   const [error,setError]=useState<string|null>(null);
   const [notice,setNotice]=useState<string|null>(null);
   const [busy,setBusy]=useState<string|null>(null);
@@ -48,15 +50,16 @@ export function CoreCaseWorkspace(){
     async function load(){
       setError(null);
       try{
-        const [c,a,s,acts,actorRes]=await Promise.all([
+        const [c,a,s,acts,actorRes,offerRes]=await Promise.all([
           api.get<{case:CoreCase;events:Event[]}>(`/api/core/cases/${id}`),
           api.get<{approvals:Approval[]}>(`/api/core/cases/${id}/approvals`),
           api.get<{sagas:Saga[]}>(`/api/core/cases/${id}/sagas`),
           api.get<Actions>(`/api/core/cases/${id}/actions`),
-          api.get<{actors:ActorOption[]}>('/api/core/operations/actors?limit=200')
+          api.get<{actors:ActorOption[]}>('/api/core/operations/actors?limit=200'),
+          api.get<{offers:AssignmentOffer[]}>(`/api/core/cases/${id}/assignment-offers`)
         ]);
         if(!live)return;
-        setData(c);setApprovals(a.approvals);setSagas(s.sagas);setActions(acts);setActors(actorRes.actors);setOwnerActorId(c.case.current_owner_actor_id??'');
+        setData(c);setApprovals(a.approvals);setSagas(s.sagas);setActions(acts);setActors(actorRes.actors);setAssignmentOffers(offerRes.offers);setOwnerActorId(c.case.current_owner_actor_id??'');
         if(c.case.case_type==='trade'){
           const [t,ta]=await Promise.all([
             api.get<TradeData>(`/api/core/trade-cases/${id}`),
@@ -75,6 +78,18 @@ export function CoreCaseWorkspace(){
     for(const a of approvals)if(a.state==='approved')map.set(a.action,a);
     return map;
   },[approvals]);
+
+  async function offerOwner(){
+    if(!id||!actions||!ownerActorId)return;
+    setBusy('offer-owner');setNotice(null);setError(null);
+    try{
+      await api.postWithHeaders(`/api/core/cases/${id}/assignment-offers`,{
+        actorId:ownerActorId,expectedVersion:actions.version,expiresInMinutes:15,
+        reason:'Dispatcher assignment offer',metadata:{source:'ops_case_workspace'}
+      },{'idempotency-key':crypto.randomUUID()});
+      setNotice('Assignment offer sent. The actor must accept before ownership changes.');setRefresh(v=>v+1);
+    }catch(e){setError(errorText(e));}finally{setBusy(null);}
+  }
 
   async function assignOwner(){
     if(!id||!actions||!ownerActorId)return;
@@ -164,7 +179,18 @@ export function CoreCaseWorkspace(){
             <option value="">Unassigned</option>
             {actors.map(a=><option key={a.id} value={a.id}>{a.display_name} · {pretty(a.actor_type)}{a.partner_subtype?` · ${pretty(a.partner_subtype)}`:''}</option>)}
           </select>
-          <button className="roviq-btn-secondary" disabled={!ownerActorId||busy!==null||ownerActorId===c.current_owner_actor_id} onClick={()=>void assignOwner()}>{busy==='assign'?'Assigning…':'Assign'}</button>
+          <button className="roviq-btn-secondary" disabled={!ownerActorId||busy!==null||ownerActorId===c.current_owner_actor_id} onClick={()=>void offerOwner()}>{busy==='offer-owner'?'Sending…':'Offer assignment'}</button>
+          <button className="roviq-btn-secondary" disabled={!ownerActorId||busy!==null||ownerActorId===c.current_owner_actor_id} onClick={()=>void assignOwner()}>{busy==='assign'?'Assigning…':'Force assign'}</button>
+        </div>
+      </div>
+      <div className="mt-4 border-t border-slate-200 pt-4">
+        <p className="roviq-kicker">Assignment history</p>
+        <div className="mt-2 grid gap-2">
+          {assignmentOffers.length===0&&<p className="roviq-muted text-sm">No assignment offers yet.</p>}
+          {assignmentOffers.slice(0,5).map(o=><div key={o.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 p-3">
+            <div><strong className="text-sm">{o.offered_to_name}</strong><p className="roviq-muted text-xs">{pretty(o.offered_to_actor_type)} · expires {formatDateTime(o.expires_at)}</p></div>
+            <StatusBadge state={o.state}/>
+          </div>)}
         </div>
       </div>
     </section>
