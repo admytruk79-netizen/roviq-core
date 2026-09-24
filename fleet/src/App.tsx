@@ -4,6 +4,7 @@ type Principal={role:string;actorId?:string|null};
 type Allocation={id:string;case_id:string;allocation_type:string;state:string;resource_id:string|null;return_due_at:string|null;notes:string|null;updated_at:string};
 type CoreCase={id:string;case_type:string;state:string;priority:string;version:number;updated_at:string;pending_approvals:number;active_workflows:number};
 type Approval={id:string;approval_type:string;action:string;state:string};
+type AssignmentOffer={id:string;case_id:string;case_type:string;case_state:string;priority:string;expires_at:string;reason:string|null};
 type Action={to:string;action:string;approvalRecommended:boolean};
 type Actions={version:number;transitions:Action[]};
 
@@ -22,7 +23,7 @@ function badge(state:string){return <span className={`badge badge-${state}`}>{hu
 export default function App(){
  const[principal,setPrincipal]=useState<Principal|null>(()=>{try{return JSON.parse(localStorage.getItem(PRINCIPAL)??'null')}catch{return null}});
  const[email,setEmail]=useState(''),[password,setPassword]=useState(''),[show,setShow]=useState(false),[loginBusy,setLoginBusy]=useState(false);
- const[allocations,setAllocations]=useState<Allocation[]>([]),[cases,setCases]=useState<CoreCase[]>([]);
+ const[allocations,setAllocations]=useState<Allocation[]>([]),[cases,setCases]=useState<CoreCase[]>([]),[offers,setOffers]=useState<AssignmentOffer[]>([]);
  const[selected,setSelected]=useState<string|null>(null),[actions,setActions]=useState<Actions|null>(null),[approvals,setApprovals]=useState<Approval[]>([]);
  const[error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(''),[refresh,setRefresh]=useState(0);
 
@@ -35,8 +36,8 @@ export default function App(){
  }catch(e){localStorage.removeItem(TOKEN);localStorage.removeItem(PRINCIPAL);setError(e instanceof Error?e.message:'Unable to sign in')}finally{setLoginBusy(false)}}
 
  useEffect(()=>{if(!principal)return;let live=true;(async()=>{try{
-   setError('');const[a,c]=await Promise.all([req<{allocations:Allocation[]}>('/api/mobility/me/allocations'),req<{cases:CoreCase[]}>('/api/core/me/cases')]);
-   if(!live)return;setAllocations(a.allocations);setCases(c.cases);setSelected(cur=>cur&&c.cases.some(x=>x.id===cur)?cur:c.cases[0]?.id??null);
+   setError('');const[a,c,o]=await Promise.all([req<{allocations:Allocation[]}>('/api/mobility/me/allocations'),req<{cases:CoreCase[]}>('/api/core/me/cases'),req<{offers:AssignmentOffer[]}>('/api/core/me/assignment-offers')]);
+   if(!live)return;setAllocations(a.allocations);setCases(c.cases);setOffers(o.offers);setSelected(cur=>cur&&c.cases.some(x=>x.id===cur)?cur:c.cases[0]?.id??null);
  }catch(e){if(live)setError(e instanceof Error?e.message:'Unable to load fleet workspace')}})();return()=>{live=false}},[principal,refresh]);
 
  useEffect(()=>{if(!selected){setActions(null);setApprovals([]);return}let live=true;Promise.all([
@@ -47,6 +48,10 @@ export default function App(){
  const selectedCase=cases.find(c=>c.id===selected)??null;
  const approved=useMemo(()=>new Map(approvals.filter(a=>a.state==='approved').map(a=>[a.action,a])),[approvals]);
 
+ async function respondOffer(id:string,decision:'accepted'|'declined'){setBusy(`offer:${id}`);setError('');setNotice('');try{
+   await req(`/api/core/assignment-offers/${id}/respond`,{method:'POST',headers:{'idempotency-key':crypto.randomUUID()},body:JSON.stringify({decision})});
+   setNotice(`Assignment ${human(decision)}.`);setRefresh(v=>v+1)
+ }catch(e){setError(e instanceof Error?e.message:'Unable to respond to assignment offer')}finally{setBusy('')}}
  async function allocationState(id:string,state:'active'|'return_pending'|'completed'|'declined'|'cancelled'|'failed'){
    setBusy(`allocation:${id}`);setError('');setNotice('');try{await req(`/api/mobility/${id}/state`,{method:'POST',body:JSON.stringify({state})});setNotice(`Allocation marked ${human(state)}.`);setRefresh(v=>v+1)}catch(e){setError(e instanceof Error?e.message:'Unable to update allocation')}finally{setBusy('')}
  }
@@ -62,6 +67,8 @@ export default function App(){
  return <div className="shell"><header><Brand/><div><span>Fleet & Mobility</span><button className="secondary" onClick={()=>setRefresh(v=>v+1)}>Refresh</button><button className="secondary" onClick={logout}>Sign out</button></div></header><main>
    <section className="hero"><div><span className="eyebrow">ROVIQ Core</span><h1>Fleet & Mobility Workspace</h1><p>One operational surface for assigned mobility work and universal Core Cases.</p></div><div className="metric"><b>{allocations.length}</b><span>active allocations</span></div></section>
    {error&&<div className="error">{human(error)}</div>}{notice&&<div className="notice">{notice}</div>}
+
+   {offers.length>0&&<section className="section"><div className="section-head"><div><span className="eyebrow">Dispatch</span><h2>New assignment offers</h2><p>Accepting transfers Case ownership into this Fleet workspace.</p></div></div><div className="grid">{offers.map(o=><article className="panel card" key={o.id}><div className="card-top"><div><span className="eyebrow">{human(o.case_type)}</span><h3>Case {o.case_id.slice(0,8)}</h3><p>{human(o.priority)} priority · expires {new Date(o.expires_at).toLocaleString()}</p></div>{badge('pending')}</div><div className="actions"><button className="primary" disabled={Boolean(busy)} onClick={()=>void respondOffer(o.id,'accepted')}>Accept assignment</button><button className="secondary" disabled={Boolean(busy)} onClick={()=>void respondOffer(o.id,'declined')}>Decline</button></div></article>)}</div></section>}
 
    <section className="section"><div className="section-head"><div><span className="eyebrow">Mobility</span><h2>Active allocations</h2></div></div>
    {allocations.length===0?<div className="panel empty"><h3>No active mobility allocations</h3><p>Assignments will appear here when Core allocates a loaner, rental, shuttle or other mobility service.</p></div>:<div className="grid">{allocations.map(a=><article className="panel card" key={a.id}><div className="card-top"><div><span className="eyebrow">{human(a.allocation_type)}</span><h3>Allocation {a.id.slice(0,8)}</h3><p>Case {a.case_id.slice(0,8)}</p></div>{badge(a.state)}</div><div className="actions">{a.state==='assigned'&&<><button className="primary" disabled={Boolean(busy)} onClick={()=>void allocationState(a.id,'active')}>Accept & activate</button><button className="secondary" disabled={Boolean(busy)} onClick={()=>void allocationState(a.id,'declined')}>Decline</button></>}{a.state==='active'&&<button className="primary" disabled={Boolean(busy)} onClick={()=>void allocationState(a.id,'return_pending')}>Begin return</button>}{a.state==='return_pending'&&<button className="primary" disabled={Boolean(busy)} onClick={()=>void allocationState(a.id,'completed')}>Complete return</button>}{['assigned','active','return_pending'].includes(a.state)&&<button className="secondary danger" disabled={Boolean(busy)} onClick={()=>void allocationState(a.id,'failed')}>Report issue</button>}</div></article>)}</div>}</section>
