@@ -60,9 +60,10 @@ export function verifyStripeWebhook(rawBody:string,signatureHeader:string,now=Da
 }
 
 type LocalPayment={id:string;currency:string;caseId:string};
+type Queryable={query:(text:string,params?:unknown[])=>Promise<any>};
 
-async function localPayment(stripePaymentIntentId:string):Promise<LocalPayment>{
-  const result=await pool.query(`select id,currency,case_id from payment_intents where provider='stripe' and provider_intent_id=$1`,[stripePaymentIntentId]);
+async function localPayment(stripePaymentIntentId:string,db:Queryable=pool):Promise<LocalPayment>{
+  const result=await db.query(`select id,currency,case_id from payment_intents where provider='stripe' and provider_intent_id=$1`,[stripePaymentIntentId]);
   if(!result.rowCount) throw new Error('payment_not_found');
   return {id:String(result.rows[0].id),currency:String(result.rows[0].currency).toUpperCase(),caseId:String(result.rows[0].case_id)};
 }
@@ -90,37 +91,51 @@ function requireMatchingCurrency(localCurrency:string,stripeCurrency:string|unde
 
 async function beginProviderEvent(event:StripeEvent){
   const inserted=await pool.query(
-    `insert into payment_provider_events(provider,provider_event_id,event_type,payload)
-     values('stripe',$1,$2,$3)
+    `insert into payment_provider_events(
+       provider,provider_event_id,event_type,payload,processing_state,processing_started_at,attempt_count
+     ) values('stripe',$1,$2,$3,'processing',now(),1)
      on conflict(provider,provider_event_id) do nothing
      returning id`,
     [event.id,event.type,JSON.stringify(event)]
   );
   if(inserted.rowCount) return true;
 
-  const retry=await pool.query(
+  const claimed=await pool.query(
     `update payment_provider_events
-        set processing_state='received',
+        set processing_state='processing',
+            processing_started_at=now(),
+            attempt_count=attempt_count+1,
             event_type=$2,
             payload=$3,
             error_message=null,
             processed_at=null
       where provider='stripe'
         and provider_event_id=$1
-        and processing_state='failed'
+        and (
+          processing_state='failed'
+          or processing_state='received'
+          or (processing_state='processing' and processing_started_at < now()-interval '5 minutes')
+        )
       returning id`,
     [event.id,event.type,JSON.stringify(event)]
   );
-  return Boolean(retry.rowCount);
+  return Boolean(claimed.rowCount);
 }
 
-async function finishProviderEvent(eventId:string,state:'processed'|'ignored'|'failed',paymentIntentId:string|null,errorMessage:string|null=null){
-  await pool.query(
+async function finishProviderEvent(
+  eventId:string,
+  state:'processed'|'ignored'|'failed',
+  paymentIntentId:string|null,
+  errorMessage:string|null=null,
+  db:Queryable=pool
+){
+  await db.query(
     `update payment_provider_events
         set processing_state=$2,
             related_payment_intent_id=coalesce($3,related_payment_intent_id),
             error_message=$4,
-            processed_at=now()
+            processed_at=now(),
+            processing_started_at=null
       where provider='stripe' and provider_event_id=$1`,
     [eventId,state,paymentIntentId,errorMessage]
   );
@@ -135,9 +150,9 @@ function disputeState(status:string|undefined){
   return 'needs_response';
 }
 
-async function applyStripeDispute(event:StripeEvent,object:StripeObject){
+async function applyStripeDispute(event:StripeEvent,object:StripeObject,db:Queryable){
   if(!object.id||typeof object.payment_intent!=='string'||object.amount===undefined) throw new Error('stripe_webhook_payload_invalid');
-  const payment=await localPayment(object.payment_intent);
+  const payment=await localPayment(object.payment_intent,db);
   const currency=requireMatchingCurrency(payment.currency,object.currency);
   const amountMinor=Number(object.amount);
   if(!Number.isSafeInteger(amountMinor)||amountMinor<=0) throw new Error('stripe_webhook_payload_invalid');
@@ -146,7 +161,7 @@ async function applyStripeDispute(event:StripeEvent,object:StripeObject){
   const dueAt=object.evidence_details?.due_by
     ? new Date(object.evidence_details.due_by*1000).toISOString()
     : null;
-  const dispute=await pool.query(
+  const dispute=await db.query(
     `insert into payment_disputes(
        payment_intent_id,provider,external_reference,status,amount_minor,currency,reason,evidence_due_at,metadata,resolved_at
      ) values($1,'stripe',$2,$3,$4,$5,$6,$7,$8,case when $3 in ('won','lost','warning_closed') then now() else null end)
@@ -159,18 +174,19 @@ async function applyStripeDispute(event:StripeEvent,object:StripeObject){
   );
 
   if(state==='lost'){
-    await pool.query(
+    await db.query(
       `insert into ledger_entries(case_id,payment_intent_id,entry_type,account_code,amount,currency,state,external_reference,metadata)
-       select $1,$2,'payment_dispute_loss','chargeback_loss',$3,$4,'posted',$5,$6
-       where not exists(
-         select 1 from ledger_entries
-          where payment_intent_id=$2 and entry_type='payment_dispute_loss' and external_reference=$5
-       )`,
+       values($1,$2,'payment_dispute_loss','chargeback_loss',$3,$4,'posted',$5,$6)
+       on conflict(payment_intent_id,external_reference)
+       where entry_type='payment_dispute_loss'
+         and payment_intent_id is not null
+         and external_reference is not null
+       do nothing`,
       [payment.caseId,payment.id,-Math.abs(amount),currency,object.id,JSON.stringify({provider:'stripe',reason:object.reason??null})]
     );
   }
 
-  await pool.query(
+  await db.query(
     `insert into events(aggregate_type,aggregate_id,event_type,actor_role,payload)
      values('service_case',$1,$2,'admin',$3)`,
     [
@@ -221,10 +237,20 @@ export async function applyStripeWebhook(event:StripeEvent){
     return result;
   }
   if(['charge.dispute.created','charge.dispute.updated','charge.dispute.closed'].includes(event.type)){
-    const dispute=await applyStripeDispute(event,object);
-    relatedPaymentId=dispute.payment_intent_id;
-    await finishProviderEvent(event.id,'processed',relatedPaymentId);
-    return dispute;
+    const client=await pool.connect();
+    try{
+      await client.query('begin');
+      const dispute=await applyStripeDispute(event,object,client);
+      relatedPaymentId=dispute.payment_intent_id;
+      await finishProviderEvent(event.id,'processed',relatedPaymentId,null,client);
+      await client.query('commit');
+      return dispute;
+    }catch(error){
+      await client.query('rollback').catch(()=>{});
+      throw error;
+    }finally{
+      client.release();
+    }
   }
   await finishProviderEvent(event.id,'ignored',relatedPaymentId,'event_type_not_actionable');
   return null;
