@@ -15,6 +15,7 @@ export function normalizeInventoryPayload(payload:unknown):InventoryFeedVehicle[
       mileage:num(r.mileage??r.odometer),exteriorColor:text(r.exteriorColor??r.exterior_color??r.color),
       drivetrain:text(r.drivetrain),fuelType:text(r.fuelType??r.fuel_type),bodyStyle:text(r.bodyStyle??r.body_style),
       images:arr(r.images??r.imageUrls??r.image_urls),priceCents:price,
+      marginCents:num(r.marginCents??r.margin_cents),
       dealerName:text(r.dealerName??r.dealer_name),dealerUrl:text(r.dealerUrl??r.dealer_url),raw:r
     };
   }).filter((v:InventoryFeedVehicle)=>Boolean(v.id&&v.make&&v.model));

@@ -14,24 +14,26 @@ const querySchema=z.object({
   limit:z.coerce.number().int().min(1).max(100).default(48),
   offset:z.coerce.number().int().min(0).default(0)
 });
+const publicFilters=`status='active' and last_seen_at >= now() - interval '24 hours'
+  and ($1::text is null or concat_ws(' ',year::text,make,model,trim) ilike '%'||$1||'%')
+  and ($2::text is null or make ilike $2)
+  and ($3::text is null or model ilike $3)
+  and ($4::int is null or year >= $4)
+  and ($5::int is null or year <= $5)`;
 
 export async function inventoryRoutes(app:FastifyInstance){
   app.get('/api/inventory',async(req)=>{
     const q=querySchema.parse(req.query??{});
+    const filters=[q.q??null,q.make??null,q.model??null,q.minYear??null,q.maxYear??null];
     const r=await pool.query(`
       select id,vin,year,make,model,trim,mileage,exterior_color,drivetrain,fuel_type,body_style,
              image_urls,public_price_cents,last_seen_at
       from vehicle_inventory
-      where status='active'
-        and ($1::text is null or concat_ws(' ',year::text,make,model,trim) ilike '%'||$1||'%')
-        and ($2::text is null or make ilike $2)
-        and ($3::text is null or model ilike $3)
-        and ($4::int is null or year >= $4)
-        and ($5::int is null or year <= $5)
+      where ${publicFilters}
       order by year desc,make,model
       limit $6 offset $7`,
-      [q.q??null,q.make??null,q.model??null,q.minYear??null,q.maxYear??null,q.limit,q.offset]);
-    const count=await pool.query(`select count(*)::int as count from vehicle_inventory where status='active'`);
+      [...filters,q.limit,q.offset]);
+    const count=await pool.query(`select count(*)::int as count from vehicle_inventory where ${publicFilters}`,filters);
     return {inventory:r.rows,total:count.rows[0].count,pricingNotice:'Contact me to get the full price.'};
   });
 
@@ -66,10 +68,10 @@ export async function inventoryRoutes(app:FastifyInstance){
     return reply.code(201).send({vehicle:r.rows[0]});
   });
   app.post('/api/admin/inventory/sync',{preHandler:requireRole('admin')},async(req,reply)=>{
-    const body=z.object({sourceKey:z.string().min(1),marginCents:z.number().int().nonnegative().default(0),payload:z.unknown()}).parse(req.body);
+    const body=z.object({sourceKey:z.string().min(1),marginCents:z.number().int().nonnegative().default(0),completeSnapshot:z.boolean().default(false),payload:z.unknown()}).parse(req.body);
     const vehicles=normalizeInventoryPayload(body.payload);
     if(!vehicles.length) return reply.code(400).send({error:'inventory_feed_empty_or_unrecognized'});
-    const result=await syncInventoryFeed(body.sourceKey,vehicles,body.marginCents);
+    const result=await syncInventoryFeed(body.sourceKey,vehicles,body.marginCents,body.completeSnapshot);
     return reply.code(202).send(result);
   });
 }

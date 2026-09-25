@@ -6,6 +6,6 @@ import { defineConfig } from 'vitest/config';
 // `npm run test:e2e`, since CI has no database available.
 export default defineConfig({
   test: {
-    exclude: ['**/node_modules/**', '**/*.e2e.test.ts']
+    exclude: ['**/node_modules/**', '**/dist/**', '**/*.e2e.test.ts']
   }
 });
