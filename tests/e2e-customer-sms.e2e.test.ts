@@ -88,7 +88,15 @@ describe('customer SMS notifications end-to-end', () => {
     const pendingOutboxRes = await app.inject({ method: 'GET', url: '/api/admin/notifications/outbox?state=pending', headers: adminHeaders() });
     const queued = JSON.parse(pendingOutboxRes.body).notifications.find((n: { case_id: string; channel: string }) => n.case_id === caseId && n.channel === 'sms');
     expect(queued).toBeTruthy();
-    expect(unconfiguredProcessed.find((p: { id: string }) => p.id === queued.id)).toMatchObject({ state: 'retry' });
+    // The outbox is shared with other acceptance files. A full batch can contain
+    // older notifications, so keep draining until this case has been attempted.
+    let attempt = unconfiguredProcessed.find((p: { id: string }) => p.id === queued.id);
+    for (let batch = 0; !attempt && batch < 10; batch++) {
+      const next = await app.inject({ method: 'POST', url: '/api/admin/notifications/process', headers: adminHeaders(), payload: { limit: 200 } });
+      expect(next.statusCode).toBe(200);
+      attempt = JSON.parse(next.body).processed.find((p: { id: string }) => p.id === queued.id);
+    }
+    expect(attempt).toMatchObject({ state: 'retry' });
     const unconfiguredAttemptsRes = await app.inject({ method: 'GET', url: `/api/admin/notifications/${queued.id}/attempts`, headers: adminHeaders() });
     expect(JSON.parse(unconfiguredAttemptsRes.body).attempts[0]).toMatchObject({ error_code: 'twilio_not_configured' });
 
