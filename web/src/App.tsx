@@ -7,6 +7,7 @@ import { Cases } from './pages/Cases';
 import { NewDemand } from './pages/NewDemand';
 import { CaseDetail } from './pages/CaseDetail';
 import { Local } from './pages/Local';
+import { Inventory } from './pages/Inventory';
 import { NotFound } from './pages/NotFound';
 import { CoreCases } from './pages/CoreCases';
 import { CoreCaseDetail } from './pages/CoreCaseDetail';
@@ -17,6 +18,9 @@ function App() {
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route element={<Layout />}>
+            <Route path="/inventory" element={<Inventory />} />
+          </Route>
           <Route element={<ProtectedRoute />}>
             <Route element={<Layout />}>
               <Route path="/" element={<Cases />} />

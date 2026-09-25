@@ -16,11 +16,24 @@ describe('public inventory search',()=>{
       expect(response.statusCode).toBe(200);
       expect(response.json()).toMatchObject({total:1,inventory:[{id:'match'}]});
       expect(query).toHaveBeenCalledTimes(2);
-      expect(query.mock.calls[0][1]).toEqual(['F-250','Ford',null,null,null,5,10]);
-      expect(query.mock.calls[1][1]).toEqual(['F-250','Ford',null,null,null]);
+      expect(query.mock.calls[0][1]).toEqual(['F-250','Ford',null,null,null,null,null,5,10]);
+      expect(query.mock.calls[1][1]).toEqual(['F-250','Ford',null,null,null,null,null]);
       expect(query.mock.calls[0][0].split('where ')[1].split('order by')[0].trim())
         .toBe(query.mock.calls[1][0].split('where ')[1].trim());
       expect(query.mock.calls[0][0]).toContain("last_seen_at >= now() - interval '24 hours'");
+    }finally{await app.close();query.mockClear()}
+  });
+
+  it('applies mileage, price and sort filters and rejects unknown sorts',async()=>{
+    const app=Fastify();
+    await app.register(inventoryRoutes);
+    try{
+      const response=await app.inject('/api/inventory?maxMileage=50000&maxPriceCents=6000000&sort=price_asc');
+      expect(response.statusCode).toBe(200);
+      expect(query.mock.calls[0][1]).toEqual([null,null,null,null,null,50000,6000000,48,0]);
+      expect(query.mock.calls[0][0]).toContain('order by public_price_cents asc nulls last');
+      expect((await app.inject('/api/inventory?sort=drop%20table')).statusCode).not.toBe(200);
+      expect(query).toHaveBeenCalledTimes(2);
     }finally{await app.close();query.mockClear()}
   });
 });

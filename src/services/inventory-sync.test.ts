@@ -34,6 +34,13 @@ describe('inventory feed integrity',()=>{
     const insert=queries.find(q=>q.sql.includes('insert into vehicle_inventory'));
     expect(insert?.params?.[13]).toBe(3000000);
     expect(insert?.params?.[14]).toBe(350000);
+    expect(insert?.params?.[18]).toBe(850);
+  });
+
+  it('stores the requested markup and rejects an invalid one',async()=>{
+    await syncInventoryFeed('dealer-a',[vehicle('marked-up')],0,false,1000);
+    expect(queries.find(q=>q.sql.includes('insert into vehicle_inventory'))?.params?.[18]).toBe(1000);
+    await expect(syncInventoryFeed('dealer-a',[vehicle('bad')],0,false,-5)).rejects.toThrow('inventory_feed_invalid_markup');
   });
 
   it('rejects a duplicate or empty snapshot before opening a transaction',async()=>{

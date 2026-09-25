@@ -4,6 +4,7 @@ import { pool } from '../../db/pool.js';
 import { requireRole } from '../middleware/principal.js';
 import { normalizeInventoryPayload } from '../../services/inventory-feed-adapter.js';
 import { syncInventoryFeed } from '../../services/inventory-sync.js';
+import { lastInventoryScrape, runInventoryScrapeLocked } from '../../services/inventory-scrape.js';
 
 const querySchema=z.object({
   q:z.string().trim().max(120).optional(),
@@ -11,6 +12,9 @@ const querySchema=z.object({
   model:z.string().trim().max(80).optional(),
   minYear:z.coerce.number().int().min(1980).max(2100).optional(),
   maxYear:z.coerce.number().int().min(1980).max(2100).optional(),
+  maxMileage:z.coerce.number().int().min(0).max(1_000_000).optional(),
+  maxPriceCents:z.coerce.number().int().min(0).optional(),
+  sort:z.enum(['recommended','price_asc','price_desc','miles_asc','year_desc']).default('recommended'),
   limit:z.coerce.number().int().min(1).max(100).default(48),
   offset:z.coerce.number().int().min(0).default(0)
 });
@@ -19,22 +23,32 @@ const publicFilters=`status='active' and last_seen_at >= now() - interval '24 ho
   and ($2::text is null or make ilike $2)
   and ($3::text is null or model ilike $3)
   and ($4::int is null or year >= $4)
-  and ($5::int is null or year <= $5)`;
+  and ($5::int is null or year <= $5)
+  and ($6::int is null or mileage <= $6)
+  and ($7::bigint is null or public_price_cents <= $7)`;
+// Sort keys map to fixed SQL so user input never reaches the ORDER BY clause.
+const publicSorts={
+  recommended:'year desc,mileage asc nulls last,make,model',
+  price_asc:'public_price_cents asc nulls last,year desc',
+  price_desc:'public_price_cents desc nulls last,year desc',
+  miles_asc:'mileage asc nulls last,year desc',
+  year_desc:'year desc nulls last,mileage asc nulls last'
+} as const;
 
 export async function inventoryRoutes(app:FastifyInstance){
-  app.get('/api/inventory',async(req)=>{
+  app.get('/api/inventory',{config:{public:true}},async(req)=>{
     const q=querySchema.parse(req.query??{});
-    const filters=[q.q??null,q.make??null,q.model??null,q.minYear??null,q.maxYear??null];
+    const filters=[q.q??null,q.make??null,q.model??null,q.minYear??null,q.maxYear??null,q.maxMileage??null,q.maxPriceCents??null];
     const r=await pool.query(`
       select id,vin,year,make,model,trim,mileage,exterior_color,drivetrain,fuel_type,body_style,
-             image_urls,public_price_cents,last_seen_at
+             image_urls,public_price_cents::int as public_price_cents,public_price_cents::int as price_cents,last_seen_at
       from vehicle_inventory
       where ${publicFilters}
-      order by year desc,make,model
-      limit $6 offset $7`,
+      order by ${publicSorts[q.sort]},id
+      limit $8 offset $9`,
       [...filters,q.limit,q.offset]);
     const count=await pool.query(`select count(*)::int as count from vehicle_inventory where ${publicFilters}`,filters);
-    return {inventory:r.rows,total:count.rows[0].count,pricingNotice:'Contact me to get the full price.'};
+    return {inventory:r.rows,total:count.rows[0].count,updatedAt:new Date().toISOString(),pricingNotice:'Prices update live from dealer inventory. Taxes, title and registration are extra.'};
   });
 
   app.get('/api/admin/inventory',{preHandler:requireRole('admin')},async(req)=>{
@@ -68,10 +82,17 @@ export async function inventoryRoutes(app:FastifyInstance){
     return reply.code(201).send({vehicle:r.rows[0]});
   });
   app.post('/api/admin/inventory/sync',{preHandler:requireRole('admin')},async(req,reply)=>{
-    const body=z.object({sourceKey:z.string().min(1),marginCents:z.number().int().nonnegative().default(0),completeSnapshot:z.boolean().default(false),payload:z.unknown()}).parse(req.body);
+    const body=z.object({sourceKey:z.string().min(1),marginCents:z.number().int().nonnegative().default(0),markupBps:z.number().int().min(0).max(10000).optional(),completeSnapshot:z.boolean().default(false),payload:z.unknown()}).parse(req.body);
     const vehicles=normalizeInventoryPayload(body.payload);
     if(!vehicles.length) return reply.code(400).send({error:'inventory_feed_empty_or_unrecognized'});
-    const result=await syncInventoryFeed(body.sourceKey,vehicles,body.marginCents,body.completeSnapshot);
+    const result=await syncInventoryFeed(body.sourceKey,vehicles,body.marginCents,body.completeSnapshot,body.markupBps);
     return reply.code(202).send(result);
   });
+
+  app.post('/api/admin/inventory/scrape',{preHandler:requireRole('admin')},async(_req,reply)=>{
+    const run=await runInventoryScrapeLocked();
+    if(!run) return reply.code(409).send({error:'inventory_scrape_in_progress'});
+    return reply.code(200).send(run);
+  });
+  app.get('/api/admin/inventory/scrape',{preHandler:requireRole('admin')},async()=>({lastRun:lastInventoryScrape()??null}));
 }
