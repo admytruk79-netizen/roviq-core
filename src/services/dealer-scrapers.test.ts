@@ -13,9 +13,12 @@ describe('target truck filter',()=>{
     expect(isTargetTruck(truck({make:'Chevrolet',model:'Silverado 1500',trim:'LT',bodyStyle:'Crew Cab Pickup'}))).toBe(true);
     expect(isTargetTruck(truck({make:'Chevrolet',model:'Silverado 2500HD',trim:'LTZ Crew Cab'}))).toBe(true);
     expect(isTargetTruck(truck({make:'GMC',model:'Sierra 1500',trim:'AT4 Crew Cab'}))).toBe(true);
+    expect(isTargetTruck(truck({make:'GMC',model:'Sierra 2500HD',trim:'Denali',bodyStyle:'Crew Cab Pickup',mileage:50000}))).toBe(true);
+    expect(isTargetTruck(truck({make:'GMC',model:'Sierra 1500',trim:'Elevation Double Cab'}))).toBe(false);
   });
   it('rejects high mileage, unknown mileage, other cabs, other models and new trucks',()=>{
-    expect(isTargetTruck(truck({mileage:50000}))).toBe(false);
+    expect(isTargetTruck(truck({mileage:50000}))).toBe(true);
+    expect(isTargetTruck(truck({mileage:50001}))).toBe(false);
     expect(isTargetTruck(truck({mileage:undefined}))).toBe(false);
     expect(isTargetTruck(truck({trim:'XL SuperCab'}))).toBe(false);
     expect(isTargetTruck(truck({trim:'XL Regular Cab'}))).toBe(false);

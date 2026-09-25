@@ -240,5 +240,5 @@ export function isUsed(v:InventoryFeedVehicle){
 }
 
 export function isTargetTruck(v:InventoryFeedVehicle){
-  return v.mileage!==undefined&&v.mileage<MAX_MILEAGE&&isUsed(v)&&Boolean(targetModel(v))&&isCrewCab(v);
+  return v.mileage!==undefined&&v.mileage<=MAX_MILEAGE&&isUsed(v)&&Boolean(targetModel(v))&&isCrewCab(v);
 }
