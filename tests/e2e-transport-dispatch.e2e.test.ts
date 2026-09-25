@@ -193,6 +193,14 @@ describe('transport dispatch end-to-end lifecycle', () => {
     } finally {
       heldClients.forEach((c) => c.release());
     }
+    const handoff = await pool.query(`select status,participant_actor_id from network_handoffs
+      where service_case_id=$1 and handoff_type='transport' and reference_id=$2`,[caseId,dispatchId]);
+    expect(handoff.rows[0]).toMatchObject({status:'planned',participant_actor_id:null});
+    const reassigned = await app.inject({method:'POST',url:`/api/admin/transport/${dispatchId}/assign`,headers:adminHeaders(),payload:{providerActorId:strangerTowActorId}});
+    expect(reassigned.statusCode).toBe(200);
+    const assignedHandoff = await pool.query(`select status,participant_actor_id from network_handoffs
+      where service_case_id=$1 and handoff_type='transport' and reference_id=$2`,[caseId,dispatchId]);
+    expect(assignedHandoff.rows[0]).toMatchObject({status:'assigned',participant_actor_id:strangerTowActorId});
   }, 15000);
 
   it('does not clear case ownership when a superseded dispatch declines after a newer one took over', async () => {

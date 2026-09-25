@@ -186,6 +186,12 @@ export async function updateTransportStatus(principal: Principal, dispatchId:str
     }
     await syncTransportOperationalConstraint(caseId,client);
     await upsertNetworkHandoff({caseId,handoffType:'transport',participantActorId:current.provider_actor_id,referenceType:'transport_dispatch',referenceId:dispatchId,status:handoffStatusForTransport(status),metadata},client);
+    if (status === 'declined') {
+      // The decline is recorded for recovery, but this dispatch is available for reassignment.
+      // Keep the handoff aligned with the requested dispatch and release the old provider.
+      await client.query(`update network_handoffs set status='planned',participant_actor_id=null,updated_at=now()
+        where service_case_id=$1 and handoff_type='transport' and reference_type='transport_dispatch' and reference_id=$2`,[caseId,dispatchId]);
+    }
     await client.query(`insert into audit_log(principal_role,principal_actor_id,principal_identity_id,action,object_type,object_id,rule_basis,metadata) values($1,$2,$3,'update_transport_status','transport_dispatch',$4,$5,$6)`,[principal.role,principal.actorId??null,validIdentityId(principal.identityId),dispatchId,status==='declined'?`${current.status}->declined`:`${current.status}->${status}`,JSON.stringify(metadata)]);
     await client.query('commit');
     committed = true;
