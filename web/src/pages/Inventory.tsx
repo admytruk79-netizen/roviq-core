@@ -63,6 +63,15 @@ const MILE_CAPS = [
 
 const title = (v: Vehicle) => [v.year, v.make, v.model].filter(Boolean).join(' ');
 const dollars = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+// Ocean freight to a European port, quoted separately from the truck price.
+const SHIPPING_LOW = 5000;
+const SHIPPING_HIGH = 7000;
+const shippingRange = `${dollars.format(SHIPPING_LOW)}–${dollars.format(SHIPPING_HIGH)}`;
+const deliveredRange = (v: Vehicle) => {
+  if (v.price_cents == null) return null;
+  const base = Math.round(v.price_cents / 100);
+  return `${dollars.format(base + SHIPPING_LOW)}–${dollars.format(base + SHIPPING_HIGH)}`;
+};
 const price = (v: Vehicle) => (v.price_cents != null ? dollars.format(Math.round(v.price_cents / 100)) : 'Call for price');
 const miles = (v: Vehicle) => (v.condition === 'new' && (v.mileage ?? 0) < 500 ? 'New' : v.mileage != null ? `${v.mileage.toLocaleString()} mi` : 'Mileage on request');
 
@@ -141,6 +150,7 @@ function TruckCard({ v, changed, index, onOpen }: { v: Vehicle; changed: boolean
           <div>
             <span className="block text-[11px] font-extrabold uppercase tracking-[0.14em] text-[var(--roviq-muted)]">Price</span>
             <span className="roviq-price-sheen text-2xl font-extrabold">{price(v)}</span>
+            <span className="block text-[11px] text-[var(--roviq-muted)]">+ {shippingRange} shipping to Europe</span>
           </div>
           <span className="text-sm font-bold text-[var(--roviq-copper-soft)]">View details →</span>
         </div>
@@ -212,7 +222,11 @@ function TruckDialog({ v, onClose }: { v: Vehicle | null; onClose: () => void })
           <div className="rounded-xl border border-[var(--roviq-line)] bg-white/[0.03] p-4">
             <span className="block text-[11px] font-extrabold uppercase tracking-[0.14em] text-[var(--roviq-muted)]">Price</span>
             <span className="text-3xl font-extrabold text-white">{price(v)}</span>
-            <p className="mt-1 text-xs text-[var(--roviq-muted)]">Plus tax, title and registration.</p>
+            <p className="mt-1 text-xs text-[var(--roviq-muted)]">Truck price, all ROVIQ fees included.</p>
+            <div className="mt-3 grid gap-1 border-t border-[var(--roviq-line)] pt-3 text-sm">
+              <div className="flex justify-between gap-3"><span className="text-[var(--roviq-muted)]">Shipping to a European port</span><span className="font-semibold text-white">{shippingRange}</span></div>
+              {deliveredRange(v) && <div className="flex justify-between gap-3"><span className="text-[var(--roviq-muted)]">Estimated delivered</span><span className="font-bold text-white">{deliveredRange(v)}</span></div>}
+            </div>
           </div>
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
             {specs.filter(([, value]) => value).map(([label, value]) => (
