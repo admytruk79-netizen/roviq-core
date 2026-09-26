@@ -1,8 +1,8 @@
 import { pool } from '../db/pool.js';
-import { DEFAULT_DEALER_SOURCES, matchesSource, scrapeDealer, sourceCondition, type DealerSource, type Fetcher } from './dealer-scrapers.js';
+import { DEFAULT_DEALER_SOURCES, matchesSource, rejectionReason, scrapeDealer, sourceCondition, type DealerSource, type Fetcher } from './dealer-scrapers.js';
 import { DEFAULT_MARKUP_BPS, retireSourceInventory, syncInventoryFeed } from './inventory-sync.js';
 
-export type DealerScrapeResult={sourceKey:string;dealer:string;ok:boolean;scraped:number;matched:number;removed?:number;error?:string};
+export type DealerScrapeResult={sourceKey:string;dealer:string;ok:boolean;scraped:number;matched:number;removed?:number;rejected?:Record<string,number>;error?:string};
 export type InventoryScrapeRun={startedAt:string;finishedAt:string;markupBps:number;results:DealerScrapeResult[]};
 
 let lastRun:InventoryScrapeRun|undefined;
@@ -38,12 +38,14 @@ export async function runInventoryScrape(opts:{sources?:DealerSource[];markupBps
       const condition=sourceCondition(source);
       const matches=scraped.filter(v=>v.id&&v.make&&v.model&&matchesSource(v,source)&&!seen.has(v.id)&&seen.add(v.id))
         .map(v=>({...v,condition}));
+      const rejected:Record<string,number>={};
+      for(const v of scraped){const reason=rejectionReason(v,source);if(reason) rejected[reason]=(rejected[reason]??0)+1}
       if(matches.length){
         await syncInventoryFeed(source.key,matches,0,true,markupBps);
-        results.push({sourceKey:source.key,dealer:source.name,ok:true,scraped:scraped.length,matched:matches.length});
+        results.push({sourceKey:source.key,dealer:source.name,ok:true,scraped:scraped.length,matched:matches.length,rejected});
       }else{
         const removed=await retireSourceInventory(source.key);
-        results.push({sourceKey:source.key,dealer:source.name,ok:true,scraped:scraped.length,matched:0,removed});
+        results.push({sourceKey:source.key,dealer:source.name,ok:true,scraped:scraped.length,matched:0,removed,rejected});
       }
     }catch(e){
       results.push({sourceKey:source.key,dealer:source.name,ok:false,scraped:0,matched:0,error:String((e as Error)?.message??e)});

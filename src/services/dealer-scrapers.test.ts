@@ -1,5 +1,5 @@
 import {describe,expect,it} from 'vitest';
-import {extractAlgoliaConfig,extractDealerComSite,isTargetNewTruck,isTargetTruck,matchesSource,jsonLdVehicles,mapDealerComVehicle,mapDealerInspireHit,scrapeDealer,type DealerSource} from './dealer-scrapers.js';
+import {rejectionReason,extractAlgoliaConfig,extractDealerComSite,isTargetNewTruck,isTargetTruck,matchesSource,jsonLdVehicles,mapDealerComVehicle,mapDealerInspireHit,scrapeDealer,type DealerSource} from './dealer-scrapers.js';
 
 const carr:DealerSource={key:'carr',name:'Carr Chevrolet',baseUrl:'https://www.carrchevrolet.com',platform:'dealer.com'};
 const damerow:DealerSource={key:'damerow',name:'Damerow Ford',baseUrl:'https://www.damerowford.com',platform:'dealer-inspire'};
@@ -126,5 +126,24 @@ describe('Dealer.com fallbacks',()=>{
   it('reads the site id from common page markup',()=>{
     expect(extractDealerComSite('<div data-site-id="carrchev"></div>')).toEqual({siteId:'carrchev',pageId:undefined});
     expect(extractDealerComSite('<html></html>')).toBeUndefined();
+  });
+});
+
+describe('Dealer.com paging and rejection reasons',()=>{
+  it('keeps paging when the site caps the page size below what was asked',async()=>{
+    const item=(n:number)=>({uuid:`c${n}`,type:'used',make:'Ford',model:'F-150',trim:'XLT SuperCrew',odometer:'20,000',pricing:{retailPrice:'$40,000'}});
+    const starts:number[]=[];
+    const fetcher=async(url:string)=>{const start=Number(new URL(url).searchParams.get('start'));starts.push(start);
+      return json({pageInfo:{totalCount:130},inventory:Array.from({length:Math.min(48,130-start)},(_,i)=>item(start+i))})};
+    const vehicles=await scrapeDealer(carr,fetcher);
+    expect(starts).toEqual([0,48,96]);
+    expect(vehicles).toHaveLength(130);
+  });
+  it('explains why a vehicle was skipped',()=>{
+    expect(rejectionReason(truck({model:'Equinox'}),carr)).toBe('model');
+    expect(rejectionReason(truck({trim:'XL SuperCab'}),carr)).toBe('cab');
+    expect(rejectionReason(truck({mileage:80000}),carr)).toBe('mileage_over');
+    expect(rejectionReason(truck({}),carr)).toBeUndefined();
+    expect(rejectionReason(truck({}),{...carr,condition:'new'})).toBe('used');
   });
 });

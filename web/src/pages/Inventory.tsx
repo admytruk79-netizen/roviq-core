@@ -104,14 +104,15 @@ function Pill({ children }: { children: React.ReactNode }) {
   return <span className="rounded-full border border-[var(--roviq-line)] bg-white/[0.04] px-2.5 py-1 text-xs font-semibold text-[var(--roviq-porcelain)]">{children}</span>;
 }
 
-function TruckCard({ v, changed, onOpen }: { v: Vehicle; changed: boolean; onOpen: () => void }) {
+function TruckCard({ v, changed, index, onOpen }: { v: Vehicle; changed: boolean; index: number; onOpen: () => void }) {
   const cab = cabLabel(v);
   const drive = driveLabel(v);
   return (
     <button
       type="button"
       onClick={onOpen}
-      className="group flex flex-col overflow-hidden rounded-2xl border border-[var(--roviq-line)] bg-[var(--roviq-panel)] text-left shadow-[0_18px_50px_rgba(0,0,0,.18)] transition hover:-translate-y-0.5 hover:border-[var(--roviq-copper)]/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--roviq-copper-soft)]"
+      style={{ animationDelay: `${Math.min(index, 11) * 60}ms` }}
+      className={`roviq-truck-card ${changed ? 'is-changed' : ''} group flex flex-col overflow-hidden rounded-2xl border border-[var(--roviq-line)] bg-[var(--roviq-panel)] text-left shadow-[0_18px_50px_rgba(0,0,0,.18)] transition hover:-translate-y-0.5 hover:border-[var(--roviq-copper)]/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--roviq-copper-soft)]`}
     >
       <div className="relative">
         <Photo src={v.image_urls[0]} alt={title(v)} className="aspect-[16/10] w-full transition duration-300 group-hover:scale-[1.02]" />
@@ -139,7 +140,7 @@ function TruckCard({ v, changed, onOpen }: { v: Vehicle; changed: boolean; onOpe
         <div className="mt-auto flex items-end justify-between border-t border-[var(--roviq-line)] pt-3">
           <div>
             <span className="block text-[11px] font-extrabold uppercase tracking-[0.14em] text-[var(--roviq-muted)]">Price</span>
-            <span className="text-2xl font-extrabold text-white">{price(v)}</span>
+            <span className="roviq-price-sheen text-2xl font-extrabold">{price(v)}</span>
           </div>
           <span className="text-sm font-bold text-[var(--roviq-copper-soft)]">View details →</span>
         </div>
@@ -330,7 +331,7 @@ export function Inventory() {
 
   return (
     <section className="space-y-6">
-      <div className="roviq-customer-hero">
+      <div className="roviq-customer-hero roviq-rise">
         <div>
           <span className="inline-flex items-center gap-2 text-xs font-extrabold uppercase tracking-[0.18em] text-[var(--roviq-copper-soft)]">
             <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--roviq-success)] opacity-75" /><span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--roviq-success)]" /></span>
@@ -341,7 +342,7 @@ export function Inventory() {
         </div>
       </div>
 
-      <div className="sticky top-0 z-20 -mx-4 space-y-3 border-b border-[var(--roviq-line)] bg-[var(--roviq-bg)]/90 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
+      <div className="relative z-10 sm:sticky sm:top-[65px] sm:z-20 -mx-4 space-y-3 border-b border-[var(--roviq-line)] bg-[var(--roviq-bg)]/90 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
         <div className="flex flex-col gap-2 sm:flex-row">
           <label className="relative flex-1">
             <span className="sr-only">Search trucks</span>
@@ -409,14 +410,17 @@ export function Inventory() {
       {error && <p role="alert" className="roviq-error text-sm">{error}</p>}
 
       {loading && !data ? <SkeletonGrid /> : data && data.inventory.length === 0 ? (
-        <div className="roviq-panel roviq-empty-state rounded-2xl border border-[var(--roviq-line)]">
+        <div className="roviq-panel roviq-empty-state roviq-rise rounded-2xl border border-[var(--roviq-line)]">
+          <div className="mx-auto mb-2 flex h-12 w-40 items-center justify-center overflow-hidden text-[var(--roviq-copper-soft)]" aria-hidden="true">
+            <svg className="roviq-drive" width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M3 16V9a1 1 0 0 1 1-1h9l3 4h3a2 2 0 0 1 2 2v2" /><circle cx="7" cy="17" r="2" /><circle cx="17" cy="17" r="2" /><path d="M9 17h6" /></svg>
+          </div>
           <h2 className="text-lg font-bold text-white">No trucks match right now</h2>
           <p className="text-sm text-[var(--roviq-muted)]">New trucks are checked every few minutes. {filtered ? 'Try widening your filters.' : 'Check back soon.'}</p>
           {filtered && <button type="button" onClick={clearAll} className="roviq-btn-primary text-sm">Clear filters</button>}
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {data?.inventory.map(v => <TruckCard key={v.id} v={v} changed={changed.has(v.id)} onOpen={() => setSelected(v)} />)}
+          {data?.inventory.map((v, i) => <TruckCard key={v.id} v={v} index={i} changed={changed.has(v.id)} onOpen={() => setSelected(v)} />)}
         </div>
       )}
 
