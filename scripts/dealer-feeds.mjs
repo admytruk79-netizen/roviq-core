@@ -122,31 +122,39 @@ export function toFeedVehicle(listing, feed) {
 }
 
 // Dealer.com sites (Carr Chevrolet) embed each listing page's vehicles as JSON
-// in DDC.WidgetData; we read that object literally, never the page text.
-export function readDealerComVehicles(html) {
-  const at = html.indexOf('DDC.WidgetData["inventory-data-bus1"]');
-  if (at < 0) return [];
-  const start = html.indexOf('{', at);
-  let depth = 0, inString = false, end = -1;
-  for (let i = start; i < html.length; i++) {
-    const c = html[i];
-    if (inString) { if (c === '\\') i++; else if (c === '"') inString = false; continue; }
-    if (c === '"') inString = true;
-    else if (c === '{') depth++;
-    else if (c === '}' && --depth === 0) { end = i; break; }
+// objects inside page scripts. We find every object that carries a VIN and
+// parse it as data, never the visible page text.
+function objectRanges(text) {
+  const ranges = [];
+  let depth = 0, quote = null, start = -1;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quote) { if (c === '\\') i++; else if (c === quote) quote = null; continue; }
+    if (c === '"' || (c === "'" && depth === 0)) quote = c;
+    else if (c === '{') { if (depth++ === 0) start = i; }
+    else if (c === '}' && depth > 0 && --depth === 0) ranges.push([start, i + 1]);
   }
-  if (end < 0) return [];
-  let data;
-  try { data = JSON.parse(html.slice(start, end + 1)); } catch { return []; }
-  const out = [];
+  return ranges;
+}
+
+export function readDealerComVehicles(html) {
+  const out = new Map();
   const walk = node => {
     if (Array.isArray(node)) return node.forEach(walk);
     if (!node || typeof node !== 'object') return;
-    if (typeof node.vin === 'string' && node.vin.length === 17 && node.make) { out.push(node); return; }
+    if (typeof node.vin === 'string' && node.vin.length === 17 && node.make && node.model) { if (!out.has(node.vin)) out.set(node.vin, node); return; }
     Object.values(node).forEach(walk);
   };
-  walk(data);
-  return out;
+  const visit = (text, depth) => {
+    for (const [a, b] of objectRanges(text)) {
+      const chunk = text.slice(a, b);
+      if (!chunk.includes('"vin":"')) continue;
+      try { walk(JSON.parse(chunk)); }
+      catch { if (depth < 6) visit(chunk.slice(1, -1), depth + 1); }
+    }
+  };
+  for (const m of html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)) if (m[1].includes('"vin":"')) visit(m[1], 0);
+  return [...out.values()];
 }
 
 const money = v => Number(String(v ?? '').replace(/[^0-9.]/g, '')) || 0;
@@ -247,10 +255,10 @@ async function fetchDealerOnFeed(feed, fetcher) {
     const ids = readDealerOnIds(await page.text());
     if (!ids) throw new Error('dealeron_ids_not_found');
     for (let pt = 1; pt <= 10; pt++) {
-      const api = new URL(`/api/vhcliaa/vehicle-pages/cosmos/srp/vehicles/${ids.dealerId}/${ids.pageId}`, origin);
-      api.searchParams.set('pt', String(pt)); api.searchParams.set('pn', '96'); api.searchParams.set('model', model);
-      api.searchParams.set('host', new URL(origin).host);
-      const res = await fetcher(api.href, { headers: { 'user-agent': PAGE_USER_AGENT, accept: 'application/json' } });
+      // The card service rejects form-encoded "+" for spaces; send %20 like the site does.
+      const api = `${origin}/api/vhcliaa/vehicle-pages/cosmos/srp/vehicles/${ids.dealerId}/${ids.pageId}` +
+        `?pt=${pt}&pn=96&model=${encodeURIComponent(model)}&host=${new URL(origin).host}`;
+      const res = await fetcher(api, { headers: { 'user-agent': PAGE_USER_AGENT, accept: 'application/json' } });
       if (!res.ok) throw new Error(`dealeron_cards_${res.status}`);
       const body = await res.json();
       for (const c of body?.DisplayCards || []) if (c?.VehicleCard?.VehicleVin) seen.set(c.VehicleCard.VehicleVin, c.VehicleCard);

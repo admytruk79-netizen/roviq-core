@@ -109,6 +109,11 @@ describe('Carr Chevrolet (dealer.com) feed', () => {
     expect(readDealerComVehicles('<html></html>')).toEqual([]);
   });
 
+  it('finds vehicle objects inside non-JSON script code', () => {
+    const js = `<script>window.DDC = window.DDC || {}; DDC.load(function (x) { var cfg = { mode: 'x', n: 1 }; return init({"pageData":{"inventory":${JSON.stringify([vehicle(), vehicle({ vin: '3GCUKCEDXTG495866' })])}}}, cfg); });</script>`;
+    expect(readDealerComVehicles(js).map(v => v.vin)).toEqual(['3GCUKCEDXTG495865', '3GCUKCEDXTG495866']);
+  });
+
   it('keeps crew cabs at the dealer advertised price, not conditional rebates', () => {
     expect(dealerComToFeedVehicle(vehicle(), carr)).toMatchObject({
       vin: '3GCUKCEDXTG495865', condition: 'new', year: 2026, model: 'Silverado 1500', trim: 'Custom Trail Boss Crew Cab',
@@ -185,6 +190,7 @@ describe('DealerOn GMC feeds (Beaverton, Carr Vancouver)', () => {
     const r = await fetchFeed(gmc, fetcher);
     expect(r.vehicles.map(v => v.vin)).toEqual(['3GTUUDED4TG344911', '3GTUUDED4TG344912']);
     expect(urls.some(u => u.includes('/api/vhcliaa/vehicle-pages/cosmos/srp/vehicles/27824/2918791') && u.includes('pt=2'))).toBe(true);
+    expect(urls.find(u => u.includes('/api/'))).toContain('model=Sierra%201500');
   });
 });
 
