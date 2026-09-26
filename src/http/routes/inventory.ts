@@ -12,6 +12,7 @@ const querySchema=z.object({
   model:z.string().trim().max(80).optional(),
   minYear:z.coerce.number().int().min(1980).max(2100).optional(),
   maxYear:z.coerce.number().int().min(1980).max(2100).optional(),
+  condition:z.enum(['new','used']).optional(),
   maxMileage:z.coerce.number().int().min(0).max(1_000_000).optional(),
   maxPriceCents:z.coerce.number().int().min(0).optional(),
   sort:z.enum(['recommended','price_asc','price_desc','miles_asc','year_desc']).default('recommended'),
@@ -25,7 +26,8 @@ const publicFilters=`status='active' and last_seen_at >= now() - interval '24 ho
   and ($4::int is null or year >= $4)
   and ($5::int is null or year <= $5)
   and ($6::int is null or mileage <= $6)
-  and ($7::bigint is null or public_price_cents <= $7)`;
+  and ($7::bigint is null or public_price_cents <= $7)
+  and ($8::text is null or condition = $8)`;
 // Sort keys map to fixed SQL so user input never reaches the ORDER BY clause.
 const publicSorts={
   recommended:'year desc,mileage asc nulls last,make,model',
@@ -38,17 +40,17 @@ const publicSorts={
 export async function inventoryRoutes(app:FastifyInstance){
   app.get('/api/inventory',{config:{public:true}},async(req)=>{
     const q=querySchema.parse(req.query??{});
-    const filters=[q.q??null,q.make??null,q.model??null,q.minYear??null,q.maxYear??null,q.maxMileage??null,q.maxPriceCents??null];
+    const filters=[q.q??null,q.make??null,q.model??null,q.minYear??null,q.maxYear??null,q.maxMileage??null,q.maxPriceCents??null,q.condition??null];
     const r=await pool.query(`
-      select id,vin,year,make,model,trim,mileage,exterior_color,drivetrain,fuel_type,body_style,
+      select id,condition,vin,year,make,model,trim,mileage,exterior_color,drivetrain,fuel_type,body_style,
              image_urls,public_price_cents::int as public_price_cents,public_price_cents::int as price_cents,last_seen_at
       from vehicle_inventory
       where ${publicFilters}
       order by ${publicSorts[q.sort]},id
-      limit $8 offset $9`,
+      limit $9 offset $10`,
       [...filters,q.limit,q.offset]);
     const count=await pool.query(`select count(*)::int as count from vehicle_inventory where ${publicFilters}`,filters);
-    return {inventory:r.rows,total:count.rows[0].count,updatedAt:new Date().toISOString(),pricingNotice:'Prices update live from dealer inventory. Taxes, title and registration are extra.'};
+    return {inventory:r.rows,total:count.rows[0].count,updatedAt:new Date().toISOString(),pricingNotice:'Prices update live from dealer inventory. Taxes, title, registration and dealer fees are extra.'};
   });
 
   app.get('/api/admin/inventory',{preHandler:requireRole('admin')},async(req)=>{

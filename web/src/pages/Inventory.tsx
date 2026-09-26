@@ -4,6 +4,7 @@ import { api } from '../lib/api';
 
 type Vehicle = {
   id: string;
+  condition: 'new' | 'used' | null;
   vin: string | null;
   year: number | null;
   make: string;
@@ -24,6 +25,11 @@ const REFRESH_MS = 60_000;
 const CONTACT_EMAIL = import.meta.env.VITE_INVENTORY_CONTACT_EMAIL as string | undefined;
 const CONTACT_PHONE = import.meta.env.VITE_INVENTORY_CONTACT_PHONE as string | undefined;
 
+const CONDITIONS = [
+  { value: '', label: 'New & used' },
+  { value: 'new', label: 'New' },
+  { value: 'used', label: 'Used' }
+];
 const MODELS = [
   { label: 'All trucks', q: '' },
   { label: 'F-150', q: 'F-150' },
@@ -58,7 +64,7 @@ const MILE_CAPS = [
 const title = (v: Vehicle) => [v.year, v.make, v.model].filter(Boolean).join(' ');
 const dollars = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const price = (v: Vehicle) => (v.price_cents != null ? dollars.format(Math.round(v.price_cents / 100)) : 'Call for price');
-const miles = (v: Vehicle) => (v.mileage != null ? `${v.mileage.toLocaleString()} mi` : 'Mileage on request');
+const miles = (v: Vehicle) => (v.condition === 'new' && (v.mileage ?? 0) < 500 ? 'New' : v.mileage != null ? `${v.mileage.toLocaleString()} mi` : 'Mileage on request');
 
 function cabLabel(v: Vehicle) {
   const text = `${v.model} ${v.trim ?? ''} ${v.body_style ?? ''}`;
@@ -112,6 +118,9 @@ function TruckCard({ v, changed, onOpen }: { v: Vehicle; changed: boolean; onOpe
         {v.image_urls.length > 1 && (
           <span className="absolute bottom-2 right-2 rounded-md bg-black/65 px-2 py-0.5 text-xs font-semibold text-white">{v.image_urls.length} photos</span>
         )}
+        {v.condition === 'new' && (
+          <span className="absolute right-2 top-2 rounded-md bg-[var(--roviq-success)] px-2 py-0.5 text-xs font-extrabold uppercase tracking-wide text-white">New</span>
+        )}
         {changed && (
           <span className="absolute left-2 top-2 rounded-md bg-[var(--roviq-copper)] px-2 py-0.5 text-xs font-bold text-white">Price updated</span>
         )}
@@ -122,7 +131,7 @@ function TruckCard({ v, changed, onOpen }: { v: Vehicle; changed: boolean; onOpe
           {v.trim && <p className="mt-0.5 line-clamp-1 text-sm text-[var(--roviq-muted)]">{v.trim}</p>}
         </div>
         <div className="flex flex-wrap gap-1.5">
-          <Pill>{miles(v)}</Pill>
+          {miles(v) !== 'New' && <Pill>{miles(v)}</Pill>}
           {cab && <Pill>{cab}</Pill>}
           {drive && <Pill>{drive}</Pill>}
           {v.exterior_color && <Pill>{v.exterior_color}</Pill>}
@@ -252,7 +261,8 @@ export function Inventory() {
   const model = params.get('model') ?? '';
   const sort = params.get('sort') ?? 'recommended';
   const maxPrice = params.get('maxPrice') ?? '';
-  const maxMiles = params.get('maxMiles') ?? '';
+  const condition = params.get('condition') ?? '';
+  const maxMiles = condition === 'new' ? '' : params.get('maxMiles') ?? '';
   const [search, setSearch] = useState(params.get('q') ?? '');
   const [query, setQuery] = useState(search);
   const [data, setData] = useState<InventoryResponse | null>(null);
@@ -282,9 +292,10 @@ export function Inventory() {
     if (model) p.set('model', `%${model}%`);
     if (query) p.set('q', query);
     if (maxPrice) p.set('maxPriceCents', maxPrice);
+    if (condition) p.set('condition', condition);
     if (maxMiles) p.set('maxMileage', maxMiles);
     return `/api/inventory?${p}`;
-  }, [model, query, sort, maxPrice, maxMiles]);
+  }, [model, query, sort, maxPrice, maxMiles, condition]);
 
   const load = useCallback(async () => {
     try {
@@ -314,7 +325,7 @@ export function Inventory() {
     return () => { clearInterval(timer); clearInterval(tick); document.removeEventListener('visibilitychange', onVisible); };
   }, [load]);
 
-  const filtered = Boolean(model || query || maxPrice || maxMiles);
+  const filtered = Boolean(model || query || maxPrice || maxMiles || condition);
   const clearAll = () => { setSearch(''); setQuery(''); setParams(new URLSearchParams(sort !== 'recommended' ? { sort } : {}), { replace: true }); };
 
   return (
@@ -325,8 +336,8 @@ export function Inventory() {
             <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--roviq-success)] opacity-75" /><span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--roviq-success)]" /></span>
             Live inventory
           </span>
-          <h1 className="text-white">Low-mileage crew cab trucks</h1>
-          <p className="text-[var(--roviq-muted)]">Used Ford F-150 SuperCrew and F-250, Chevy Silverado and GMC Sierra 1500/2500 crew cabs with 50,000 miles or less.</p>
+          <h1 className="text-white">Crew cab trucks, new and used</h1>
+          <p className="text-[var(--roviq-muted)]">New Ford F-150 SuperCrew and F-250 crew cabs in every trim, plus used F-150, F-250, Chevy Silverado and GMC Sierra 1500/2500 crew cabs with 50,000 miles or less.</p>
         </div>
       </div>
 
@@ -354,11 +365,24 @@ export function Inventory() {
               </select>
             </label>
             <label><span className="sr-only">Maximum mileage</span>
-              <select value={maxMiles} onChange={e => update('maxMiles', e.target.value)} className={`${selectClass} w-full`}>
+              <select value={maxMiles} disabled={condition === 'new'} onChange={e => update('maxMiles', e.target.value)} className={`${selectClass} w-full`}>
                 {MILE_CAPS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
               </select>
             </label>
           </div>
+        </div>
+        <div className="inline-flex rounded-xl border border-[var(--roviq-line)] p-1" role="group" aria-label="New or used">
+          {CONDITIONS.map(c => (
+            <button
+              key={c.label}
+              type="button"
+              onClick={() => update('condition', c.value)}
+              aria-pressed={condition === c.value}
+              className={`rounded-lg px-4 py-1.5 text-sm font-bold transition ${condition === c.value ? 'bg-[var(--roviq-copper)] text-white' : 'text-[var(--roviq-porcelain)] hover:bg-white/10'}`}
+            >
+              {c.label}
+            </button>
+          ))}
         </div>
         <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1" role="group" aria-label="Filter by model">
           {MODELS.map(m => (
