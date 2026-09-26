@@ -4,6 +4,7 @@ export type InventoryFeedVehicle={
   id:string;vin?:string;year?:number;make:string;model:string;trim?:string;mileage?:number;
   exteriorColor?:string;drivetrain?:string;fuelType?:string;bodyStyle?:string;images?:string[];
   priceCents?:number;marginCents?:number;dealerName?:string;dealerUrl?:string;raw?:Record<string,unknown>;
+  condition?:'new'|'used';
 };
 
 export const DEFAULT_MARKUP_BPS=850;
@@ -21,15 +22,15 @@ export async function syncInventoryFeed(sourceKey:string,vehicles:InventoryFeedV
     for(const v of valid){
       seen.push(v.id);
       await client.query(`
-        insert into vehicle_inventory(source_key,source_vehicle_id,vin,year,make,model,trim,mileage,exterior_color,drivetrain,fuel_type,body_style,image_urls,source_price_cents,margin_cents,source_dealer_name,source_dealer_url,source_payload,markup_bps,last_seen_at)
-        values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,now())
+        insert into vehicle_inventory(source_key,source_vehicle_id,vin,year,make,model,trim,mileage,exterior_color,drivetrain,fuel_type,body_style,image_urls,source_price_cents,margin_cents,source_dealer_name,source_dealer_url,source_payload,markup_bps,condition,last_seen_at)
+        values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,now())
         on conflict(source_key,source_vehicle_id) do update set
           vin=excluded.vin,year=excluded.year,make=excluded.make,model=excluded.model,trim=excluded.trim,mileage=excluded.mileage,
           exterior_color=excluded.exterior_color,drivetrain=excluded.drivetrain,fuel_type=excluded.fuel_type,body_style=excluded.body_style,
           image_urls=excluded.image_urls,source_price_cents=excluded.source_price_cents,margin_cents=excluded.margin_cents,
           source_dealer_name=excluded.source_dealer_name,source_dealer_url=excluded.source_dealer_url,source_payload=excluded.source_payload,
-          markup_bps=excluded.markup_bps,status='active',last_seen_at=now(),updated_at=now()`,
-        [sourceKey,v.id,v.vin??null,v.year??null,v.make,v.model,v.trim??null,v.mileage??null,v.exteriorColor??null,v.drivetrain??null,v.fuelType??null,v.bodyStyle??null,JSON.stringify(v.images??[]),v.priceCents??null,v.marginCents??marginCents,v.dealerName??null,v.dealerUrl??null,JSON.stringify(v.raw??{}),markupBps]);
+          markup_bps=excluded.markup_bps,condition=excluded.condition,status='active',last_seen_at=now(),updated_at=now()`,
+        [sourceKey,v.id,v.vin??null,v.year??null,v.make,v.model,v.trim??null,v.mileage??null,v.exteriorColor??null,v.drivetrain??null,v.fuelType??null,v.bodyStyle??null,JSON.stringify(v.images??[]),v.priceCents??null,v.marginCents??marginCents,v.dealerName??null,v.dealerUrl??null,JSON.stringify(v.raw??{}),markupBps,v.condition??null]);
     }
     // Feed pages and incremental updates must never remove cars absent from this batch.
     if(completeSnapshot){

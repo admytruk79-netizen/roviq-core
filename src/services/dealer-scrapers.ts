@@ -5,16 +5,23 @@ import type { InventoryFeedVehicle } from './inventory-sync.js';
 // and fall back to schema.org JSON-LD embedded in the listing page.
 
 export type DealerPlatform='dealer.com'|'dealer-inspire'|'json-ld';
+export type VehicleCondition='new'|'used';
 export type DealerSource={
   key:string;name:string;baseUrl:string;platform:DealerPlatform;
+  // Which side of the lot to scrape; defaults to used.
+  condition?:VehicleCondition;
   // Optional overrides when a platform's settings can't be read from the page.
   listingPath?:string;algoliaAppId?:string;algoliaApiKey?:string;algoliaIndex?:string;
 };
 
 export const DEFAULT_DEALER_SOURCES:DealerSource[]=[
   {key:'carr-chevrolet-beaverton',name:'Carr Chevrolet',baseUrl:'https://www.carrchevrolet.com',platform:'dealer.com'},
-  {key:'damerow-ford-beaverton',name:'Damerow Ford',baseUrl:'https://www.damerowford.com',platform:'dealer-inspire',listingPath:'/inventory/used-vehicles/'}
+  {key:'damerow-ford-beaverton',name:'Damerow Ford',baseUrl:'https://www.damerowford.com',platform:'dealer-inspire',listingPath:'/inventory/used-vehicles/'},
+  {key:'kendall-ford-eugene-new',name:'Kendall Ford of Eugene',baseUrl:'https://www.kendallford.com',platform:'dealer.com',condition:'new'},
+  {key:'kendall-ford-bend-new',name:'Kendall Ford of Bend',baseUrl:'https://www.kendallfordbend.com',platform:'dealer.com',condition:'new'}
 ];
+
+export const sourceCondition=(source:DealerSource):VehicleCondition=>source.condition??'used';
 
 export const MAX_MILEAGE=50_000;
 
@@ -51,15 +58,19 @@ function stringList(v:unknown,base:string):string[]{
     .filter((u):u is string=>Boolean(u));
 }
 
+// Failed responses keep a short, single-line excerpt so scrape logs show what the dealer sent back.
+const excerpt=(body:string)=>body.replace(/\s+/g,' ').trim().slice(0,160);
 async function getJson(fetcher:Fetcher,url:string,init?:RequestInit){
   const res=await fetcher(url,{...init,headers:{...HEADERS,...(init?.headers??{})}});
-  if(!res.ok) throw new Error(`dealer_fetch_failed:${res.status}:${url}`);
-  return res.json() as Promise<any>;
+  const body=await res.text();
+  if(!res.ok) throw new Error(`dealer_fetch_failed:${res.status}:${url}:${excerpt(body)}`);
+  try{return JSON.parse(body)}catch{throw new Error(`dealer_response_not_json:${url}:${excerpt(body)}`)}
 }
 async function getText(fetcher:Fetcher,url:string){
   const res=await fetcher(url,{headers:HEADERS});
-  if(!res.ok) throw new Error(`dealer_fetch_failed:${res.status}:${url}`);
-  return res.text();
+  const body=await res.text();
+  if(!res.ok) throw new Error(`dealer_fetch_failed:${res.status}:${url}:${excerpt(body)}`);
+  return body;
 }
 
 // ---------- Dealer.com (Cox Automotive) ----------
@@ -91,22 +102,66 @@ export function mapDealerComVehicle(item:any,source:DealerSource):InventoryFeedV
     images:stringList(item?.images,source.baseUrl),
     priceCents,
     dealerName:source.name,dealerUrl:absoluteUrl(source.baseUrl,item?.link),
-    raw:{condition:text(item?.type??item?.condition)??'used',title,cab:text(attribute(item,'cab','cabType')),stockNumber:text(item?.stockNumber)}
+    raw:{condition:text(item?.type??item?.condition)??sourceCondition(source),title,cab:text(attribute(item,'cab','cabType')),stockNumber:text(item?.stockNumber)}
   };
 }
 
-async function scrapeDealerCom(source:DealerSource,fetcher:Fetcher){
+// Dealer.com sites serve inventory from one of two JSON endpoints depending on
+// the site generation: the legacy widget GET and the newer ws-inv-data POST,
+// which needs the site id from the listing page. Try both, then JSON-LD.
+export function extractDealerComSite(html:string){
+  const siteId=html.match(/["']siteId["']\s*:\s*["']([A-Za-z0-9_-]+)["']/)?.[1]
+    ??html.match(/data-site-id=["']([A-Za-z0-9_-]+)["']/)?.[1];
+  const pageId=html.match(/["']pageId["']\s*:\s*["']([A-Za-z0-9_-]+)["']/)?.[1];
+  return siteId?{siteId,pageId}:undefined;
+}
+
+async function pageThrough(fetchPage:(start:number,pageSize:number)=>Promise<any>,source:DealerSource){
   const pageSize=100;
   const vehicles:InventoryFeedVehicle[]=[];
   for(let start=0,page=0;page<30;page++,start+=pageSize){
-    const url=`${source.baseUrl}/apis/widget/INVENTORY_LISTING_DEFAULT_AUTO_USED:inventory-data-bus1/getInventory?start=${start}&pageSize=${pageSize}`;
-    const body=await getJson(fetcher,url);
+    const body=await fetchPage(start,pageSize);
     const items:any[]=Array.isArray(body?.inventory)?body.inventory:[];
     vehicles.push(...items.map(i=>mapDealerComVehicle(i,source)));
     const total=parseNumber(body?.pageInfo?.totalCount);
-    if(!items.length||items.length<pageSize||(total!==undefined&&start+items.length>=total)) return vehicles;
+    if(!items.length||items.length<pageSize||(total!==undefined&&start+items.length>=total)) break;
   }
   return vehicles;
+}
+
+async function scrapeDealerCom(source:DealerSource,fetcher:Fetcher){
+  const kind=sourceCondition(source)==='new'?'NEW':'USED';
+  const alias=`INVENTORY_LISTING_DEFAULT_AUTO_${kind}`;
+  const attempts:string[]=[];
+  try{
+    const legacy=await pageThrough((start,size)=>getJson(fetcher,
+      `${source.baseUrl}/apis/widget/${alias}:inventory-data-bus1/getInventory?start=${start}&pageSize=${size}`),source);
+    if(legacy.length) return legacy;
+    attempts.push('widget_api_empty');
+  }catch(e){attempts.push(String((e as Error).message))}
+
+  const listingUrl=new URL(source.listingPath??`/${kind.toLowerCase()}-inventory/index.htm`,source.baseUrl).toString();
+  const html=await getText(fetcher,listingUrl);
+  const site=extractDealerComSite(html);
+  if(site){
+    try{
+      const current=await pageThrough((start,size)=>getJson(fetcher,`${source.baseUrl}/api/widget/ws-inv-data/getInventory`,{
+        method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify({
+          siteId:site.siteId,locale:'en_US',device:'DESKTOP',pageAlias:alias,
+          pageId:site.pageId??`${site.siteId}_SITEBUILDER_INVENTORY_SEARCH_RESULTS_AUTO_${kind}_V1_1`,
+          widgetName:'ws-inv-data',inventoryParameters:{start:String(start)},
+          preferences:{pageSize:String(size)},includePricing:true
+        })
+      }),source);
+      if(current.length) return current;
+      attempts.push('ws_inv_data_empty');
+    }catch(e){attempts.push(String((e as Error).message))}
+  }else attempts.push('site_id_not_found');
+
+  const fromPage=jsonLdVehicles(html,source);
+  if(fromPage.length) return fromPage;
+  throw new Error(`dealer_inventory_empty_or_unrecognized:${attempts.join(' | ')}`);
 }
 
 // ---------- Dealer Inspire (Algolia-backed search) ----------
@@ -185,7 +240,7 @@ export function jsonLdVehicles(html:string,source:DealerSource):InventoryFeedVeh
       exteriorColor:text(node.color),drivetrain:text(node.driveWheelConfiguration),fuelType:text(node.fuelType),
       bodyStyle:text(node.bodyType),images:stringList(node.image,source.baseUrl),
       priceCents:dollarsToCents(offer?.price),dealerName:source.name,dealerUrl:absoluteUrl(source.baseUrl,node.url??offer?.url),
-      raw:{condition:text(node.itemCondition??offer?.itemCondition)??'',title:text(node.name)}
+      raw:{condition:text(node.itemCondition??offer?.itemCondition)??sourceCondition(source),title:text(node.name)}
     });
   };
   for(const [,json] of blocks){
@@ -241,4 +296,16 @@ export function isUsed(v:InventoryFeedVehicle){
 
 export function isTargetTruck(v:InventoryFeedVehicle){
   return v.mileage!==undefined&&v.mileage<=MAX_MILEAGE&&isUsed(v)&&Boolean(targetModel(v))&&isCrewCab(v);
+}
+
+// New trucks: every F-150 and F-250 variant (XLT, Lariat, Tremor, Raptor,
+// Lightning, King Ranch, Platinum...), but only crew cab / SuperCrew.
+const NEW_TARGET_MODELS=new Set(['Ford F-150','Ford F-250']);
+export function isTargetNewTruck(v:InventoryFeedVehicle){
+  const model=targetModel(v);
+  return !isUsed(v)&&Boolean(model&&NEW_TARGET_MODELS.has(model))&&isCrewCab(v);
+}
+
+export function matchesSource(v:InventoryFeedVehicle,source:DealerSource){
+  return sourceCondition(source)==='new'?isTargetNewTruck(v):isTargetTruck(v);
 }

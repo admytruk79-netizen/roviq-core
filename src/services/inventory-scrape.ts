@@ -1,5 +1,5 @@
 import { pool } from '../db/pool.js';
-import { DEFAULT_DEALER_SOURCES, isTargetTruck, scrapeDealer, type DealerSource, type Fetcher } from './dealer-scrapers.js';
+import { DEFAULT_DEALER_SOURCES, matchesSource, scrapeDealer, sourceCondition, type DealerSource, type Fetcher } from './dealer-scrapers.js';
 import { DEFAULT_MARKUP_BPS, retireSourceInventory, syncInventoryFeed } from './inventory-sync.js';
 
 export type DealerScrapeResult={sourceKey:string;dealer:string;ok:boolean;scraped:number;matched:number;removed?:number;error?:string};
@@ -35,7 +35,9 @@ export async function runInventoryScrape(opts:{sources?:DealerSource[];markupBps
       const scraped=await scrapeDealer(source,opts.fetcher);
       if(!scraped.length) throw new Error('dealer_inventory_empty_or_unrecognized');
       const seen=new Set<string>();
-      const matches=scraped.filter(v=>v.id&&v.make&&v.model&&isTargetTruck(v)&&!seen.has(v.id)&&seen.add(v.id));
+      const condition=sourceCondition(source);
+      const matches=scraped.filter(v=>v.id&&v.make&&v.model&&matchesSource(v,source)&&!seen.has(v.id)&&seen.add(v.id))
+        .map(v=>({...v,condition}));
       if(matches.length){
         await syncInventoryFeed(source.key,matches,0,true,markupBps);
         results.push({sourceKey:source.key,dealer:source.name,ok:true,scraped:scraped.length,matched:matches.length});
