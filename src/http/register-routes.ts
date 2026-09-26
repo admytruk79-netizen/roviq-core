@@ -43,6 +43,7 @@ import { tradeCaseRoutes } from './routes/trade-cases.js';
 import { coreOperationsRoutes } from './routes/core-operations.js';
 import { coreActorSurfaceRoutes } from './routes/core-actor-surfaces.js';
 import { inventoryRoutes } from './routes/inventory.js';
+import { vehiclePurchaseRoutes } from './routes/vehicle-purchase.js';
 
 type RoutePlugin = FastifyPluginAsync | ((app: FastifyInstance) => Promise<void>);
 
@@ -58,7 +59,7 @@ const routeModules: RouteModule[] = [
   { name: 'service-operations', plugins: [diagnosticRoutes, fieldServiceRoutes, transportRoutes, mobilityRoutes, partsRoutes] },
   { name: 'shop-os', plugins: [shopOsRoutes, shopOsDeferredAppointmentChoiceRoutes, shopOsFloorRoutes] },
   { name: 'financial-and-communications', plugins: [paymentWebhookRoutes, paymentRoutes, commerceRoutes, notificationRoutes] },
-  { name: 'integration-and-observability', plugins: [integrationRoutes, analyticsRoutes, localRoutes, pilotRoutes, inventoryRoutes] },
+  { name: 'integration-and-observability', plugins: [integrationRoutes, analyticsRoutes, localRoutes, pilotRoutes, inventoryRoutes, vehiclePurchaseRoutes] },
   { name: 'actor-surfaces', plugins: [partnerRoutes, adminRoutes] }
 ];
 
