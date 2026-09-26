@@ -179,7 +179,7 @@ describe('DealerOn GMC feeds (Beaverton, Carr Vancouver)', () => {
     expect(dealerOnToFeedVehicle(card({ VehicleInternetPrice: '', TaggingPrice: '' }), gmc)).toBeNull();
   });
 
-  it('pages the card service per model', async () => {
+  it('pages the card service over all new stock', async () => {
     const urls = [];
     const fetcher = async url => {
       urls.push(url);
@@ -190,7 +190,26 @@ describe('DealerOn GMC feeds (Beaverton, Carr Vancouver)', () => {
     const r = await fetchFeed(gmc, fetcher);
     expect(r.vehicles.map(v => v.vin)).toEqual(['3GTUUDED4TG344911', '3GTUUDED4TG344912']);
     expect(urls.some(u => u.includes('/api/vhcliaa/vehicle-pages/cosmos/srp/vehicles/27824/2918791') && u.includes('pt=2'))).toBe(true);
-    expect(urls.find(u => u.includes('/api/'))).toContain('model=Sierra%201500');
+    expect(urls.find(u => u.includes('/api/'))).not.toContain('model=');
+  });
+});
+
+describe('DealerOn fallback', () => {
+  it('retries per Sierra model when unfiltered card queries are rejected', async () => {
+    const gmc = FEEDS.find(f => f.sourceKey === 'carr-buick-gmc-vancouver-new-trucks');
+    const fetcher = async url => {
+      if (url.includes('searchnew.aspx')) return new Response('<script id="dealeron_tagging_data" type="application/json">{"dealerId":"27292","pageId":2861344}</script>');
+      if (!url.includes('model=') || url.includes('2500HD')) return new Response('', { status: 422 });
+      return json({ Paging: { PaginationDataModel: { TotalPages: 1 } }, DisplayCards: [{ VehicleCard: {
+        VehicleVin: url.includes('1500') ? '3GTUUDED4TG344911' : '1GT49PEY0TF100001', VehicleType: 'New', VehicleYear: '2026', VehicleMake: 'GMC',
+        VehicleModel: url.includes('1500') ? 'Sierra 1500' : 'Sierra 2500 HD', VehicleTrim: 'SLE', VehicleModelCode: url.includes('1500') ? 'TK10543' : 'TK20743',
+        VehicleInternetPrice: '$60,000' } }] });
+    };
+    const r = await fetchFeed(gmc, fetcher);
+    expect(r.vehicles.map(v => [v.vin, v.model, v.dealerName])).toEqual([
+      ['3GTUUDED4TG344911', 'Sierra 1500', 'Carr Buick GMC (Vancouver, WA)'],
+      ['1GT49PEY0TF100001', 'Sierra 2500 HD', 'Carr Buick GMC (Vancouver, WA)']
+    ]);
   });
 });
 

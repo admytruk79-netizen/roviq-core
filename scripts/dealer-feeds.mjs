@@ -43,7 +43,6 @@ export const FEEDS = [
     dealerName: 'Buick GMC of Beaverton',
     platform: 'dealeron',
     pageUrl: 'https://www.beavertongmc.com/searchnew.aspx',
-    models: ['Sierra 1500', 'Sierra 2500HD'],
     condition: 'new'
   },
   {
@@ -51,7 +50,6 @@ export const FEEDS = [
     dealerName: 'Carr Buick GMC (Vancouver, WA)',
     platform: 'dealeron',
     pageUrl: 'https://www.carrbuickgmc.com/searchnew.aspx',
-    models: ['Sierra 1500', 'Sierra 2500HD'],
     condition: 'new'
   },
   {
@@ -247,23 +245,29 @@ export function dealerOnToFeedVehicle(card, feed) {
 
 async function fetchDealerOnFeed(feed, fetcher) {
   const origin = new URL(feed.pageUrl).origin;
+  const page = await fetcher(feed.pageUrl, { headers: { 'user-agent': PAGE_USER_AGENT } });
+  if (!page.ok) throw new Error(`dealer_page_${page.status}`);
+  const ids = readDealerOnIds(await page.text());
+  if (!ids) throw new Error('dealeron_ids_not_found');
+  // Model names differ per store ("Sierra 2500HD" vs "Sierra 2500 HD"): read all
+  // new stock when the service allows it, else each spelling, skipping rejects.
   const seen = new Map();
-  for (const model of feed.models) {
-    const pageUrl = new URL(feed.pageUrl); pageUrl.searchParams.set('model', model);
-    const page = await fetcher(pageUrl.href, { headers: { 'user-agent': PAGE_USER_AGENT } });
-    if (!page.ok) throw new Error(`dealer_page_${page.status}`);
-    const ids = readDealerOnIds(await page.text());
-    if (!ids) throw new Error('dealeron_ids_not_found');
-    for (let pt = 1; pt <= 10; pt++) {
-      // The card service rejects form-encoded "+" for spaces; send %20 like the site does.
-      const api = `${origin}/api/vhcliaa/vehicle-pages/cosmos/srp/vehicles/${ids.dealerId}/${ids.pageId}` +
-        `?pt=${pt}&pn=96&model=${encodeURIComponent(model)}&host=${new URL(origin).host}`;
+  const readCards = async model => {
+    for (let pt = 1; pt <= 15; pt++) {
+      const api = `${origin}/api/vhcliaa/vehicle-pages/cosmos/srp/vehicles/${ids.dealerId}/${ids.pageId}?pt=${pt}&pn=96` +
+        `${model ? `&model=${encodeURIComponent(model)}` : ''}&host=${new URL(origin).host}`;
       const res = await fetcher(api, { headers: { 'user-agent': PAGE_USER_AGENT, accept: 'application/json' } });
-      if (!res.ok) throw new Error(`dealeron_cards_${res.status}`);
+      if (!res.ok) return res.status;
       const body = await res.json();
       for (const c of body?.DisplayCards || []) if (c?.VehicleCard?.VehicleVin) seen.set(c.VehicleCard.VehicleVin, c.VehicleCard);
       if (pt >= (body?.Paging?.PaginationDataModel?.TotalPages || 1)) break;
     }
+    return 200;
+  };
+  if (await readCards(null) !== 200) {
+    const statuses = [];
+    for (const model of ['Sierra 1500', 'Sierra 2500HD', 'Sierra 2500 HD']) statuses.push(await readCards(model));
+    if (!statuses.includes(200)) throw new Error(`dealeron_cards_${statuses.join('/')}`);
   }
   const vehicles = [...seen.values()].map(c => dealerOnToFeedVehicle(c, feed)).filter(Boolean);
   return { scanned: seen.size, vehicles };
