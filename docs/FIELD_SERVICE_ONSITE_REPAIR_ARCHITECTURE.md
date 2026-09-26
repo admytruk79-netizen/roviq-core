@@ -12,9 +12,9 @@ The on-scene operator does not independently choose the commercial or safety out
 
 1. **On-scene operator** captures symptoms, photos, OBD/diagnostic data and observations.
 2. **Diagnostic workflow** records finding, drivability and whether the case enters field-service assessment.
-3. **ROVIQ Core field-service policy** checks safety exclusions, confidence, verified operator capability/tools and required parts.
+3. **ROVIQ Core field-service policy** checks safety exclusions, confidence, verified operator capability/tools and required parts, at assessment and again against the operator's current profile when work starts.
 4. **Parts fulfilment** is authoritative for availability. Clients do not self-declare that a part is available.
-5. **Customer authorization** is required before chargeable on-site repair or stabilization when configured.
+5. **Customer authorization** is required before chargeable on-site repair or stabilization when configured. It is on by default; the assessing operator cannot waive it or authorize their own decision, and only an admin can issue a decision that starts without it.
 6. **Core-issued action** is the operational source of truth: `field_repair`, `temporary_stabilization`, `dispatch_field_technician`, `route_to_shop`, `tow_required`, or `remote_review`.
 7. **Field operator** executes only an authorized action and records completion evidence/outcome.
 8. **Ops** handles exceptions, low-confidence cases, unavailable parts/capability, reassignment and escalation.

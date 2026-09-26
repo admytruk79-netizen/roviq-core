@@ -1,4 +1,4 @@
-# ROVIQ Release Readiness Matrix — 2026-09-01
+# ROVIQ Release Readiness Matrix — 2026-09-26
 
 Status key: GREEN = implementation and automated verification present. PARTIAL = implemented but browser/role-flow verification remains. BLOCKED = known release blocker.
 
@@ -12,20 +12,20 @@ Status key: GREEN = implementation and automated verification present. PARTIAL =
 | Customer intake GPS | PARTIAL | New maintenance intake requires precise device GPS and stores it in case attributes plus canonical spatial context. Existing pre-GPS cases require recapture/recovery UX and device verification. |
 | Tow dispatch authorization | GREEN | Assignment-scoped dispatch read/status/location checks and spatial authorization regression coverage. |
 | Spatial role projection | GREEN | Core projects case spatial context by role and tests prevent Tow leakage of diagnostic/parts-only fields. |
-| Transport pickup inheritance | PARTIAL | New transport dispatches inherit canonical case GPS when pickup is omitted. Requires migration/deployment and live regression verification. |
-| Tow decline / reassignment | PARTIAL | Core now releases a declined dispatch back to `requested`, clears provider ownership and case transport ownership, and preserves decline audit metadata. Reassignment automation/browser verification remains. |
-| Field-service data model | PARTIAL | `field_service_decisions` migration and API are implemented. Production migration and integration tests remain. |
-| Diagnostic → field-service handoff | PARTIAL | Diagnostics supports `field_service_assessment` without bypassing the case state machine. Diagnostic UI and end-to-end verification remain. |
-| Field-service safety policy | PARTIAL | Core enforces deterministic baseline gates for unsafe conditions, non-drivable vehicles, low confidence and missing operator/tool/part capability. Policy test matrix remains. |
-| Field-service customer authorization | PARTIAL | Core blocks start when customer authorization is required and absent. Customer UI/quote/payment coupling and browser verification remain. |
-| Field-service execution | PARTIAL | Authorized field repair can start and record fixed/stabilized/failed/escalated outcome. Parts reservation, settlement and full workflow recovery remain. |
+| Transport pickup inheritance | GREEN | Dispatches inherit canonical case GPS when pickup is omitted and keep an explicit pickup when given, with provenance in `metadata.pickupSource`. Field-service gate item 9 verifies both. Live device verification remains part of the browser gate. |
+| Tow decline / reassignment | GREEN | A declined dispatch returns to `requested`, drops the declining provider's ownership and case access, keeps decline audit metadata, and can be assigned to another provider; handoff state follows reassignment (#53). Field-service gate item 10 and `e2e-transport-dispatch` verify this. Browser verification remains. |
+| Field-service data model | GREEN | `field_service_decisions` and capability profiles apply on a fresh database in CI and are covered by Postgres end-to-end tests. |
+| Diagnostic → field-service handoff | PARTIAL | Diagnostics supports `field_service_assessment` without bypassing the case state machine, and the Diagnostic portal submits on-site assessments. Authenticated browser verification remains. |
+| Field-service safety policy | GREEN | Core enforces deterministic gates for every safety flag, non-drivable vehicles, low confidence, unknown repair class and missing repair class/capability/tool/part/time/cost limits. `/start` re-checks the operator's current profile under the same transaction. The policy matrix is `tests/e2e-field-service-production-gate.e2e.test.ts`. |
+| Field-service customer authorization | PARTIAL | Core requires customer authorization by default and blocks start without it; operators cannot waive it or authorize their own decisions (only admin can issue a no-authorization decision). The Customer portal can approve/decline. Quote/payment coupling and browser verification remain. |
+| Field-service execution | PARTIAL | Authorized field repair starts, reserves required parts under contention, and records fixed/stabilized/failed/escalated outcomes with evidence; failed work releases reserved parts and leaves the case open for another path. Settlement remains. |
 | Parts shortage recovery | GREEN | Regression verifies unavailable inventory does not corrupt case state and fulfilment can resume. |
 | Diagnostic assignment isolation | GREEN | Unassigned diagnostic finding attempts are rejected without state mutation. |
 | Local dependency isolation | GREEN | Adapter is whitelisted, does not forward caller authorization, and returns bounded upstream failure. |
 | Workers AI authority | GREEN | Shadow/advisory cannot automate; assisted remains blocked by safety override or human-review requirements. |
 | Workers AI outage behavior | GREEN | Missing AI binding is isolated from authoritative Core mutation paths. |
 | Integration/webhook retry | GREEN | Existing E2E covers signed delivery, retry and dead-letter behavior. |
-| Scheduled operations sweep | BLOCKED | The scheduled workflow is still pointed at the legacy Render Core URL and requires missing `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` repository secrets. The latest scheduled run fails before any deadline or notification processing occurs. |
+| Scheduled operations sweep | GREEN | Runs natively as a Cloudflare cron in the Core Worker every 10 minutes (`wrangler.jsonc`). `scheduled-operations-sweep.yml` is now a manual check that production `/health` advertises `scheduledOperations: cloudflare-cron`. |
 | Customer frontend | PARTIAL | Mobile hierarchy simplified and case-first. Production HTTP smoke is green; authenticated browser workflow still needs release-browser pass. Field-service authorization UI remains. |
 | Diagnostic frontend | PARTIAL | Mobile workflow fixes present. Production HTTP smoke is green; authenticated browser workflow and field-service assessment controls remain. |
 | Partner frontend | PARTIAL | Mobile layout and offer workflow improved. Production HTTP smoke is green; subtype/onboarding browser pass and field-service capability declaration remain. |
@@ -42,7 +42,7 @@ Status key: GREEN = implementation and automated verification present. PARTIAL =
 
 ## Field-service production gate
 
-Field repair must remain pilot/controlled until all of the following pass:
+Field repair must remain pilot/controlled until all of the following pass. Each item is a `describe` block in `tests/e2e-field-service-production-gate.e2e.test.ts`, run by CI's system-acceptance job; all ten pass as of 2026-09-26. The browser/device gate below still applies before field repair leaves controlled pilot.
 
 1. unsafe safety flags always produce `tow_required`;
 2. `non_drivable` always produces `tow_required`;
@@ -59,7 +59,7 @@ Architecture reference: `docs/FIELD_SERVICE_ONSITE_REPAIR_ARCHITECTURE.md`.
 
 ## Release gate
 
-ROVIQ should not be declared fully production-ready until the scheduled operations sweep is repaired and the following manual browser/device gate is completed for each role: login, landing render, primary case/queue load, one primary action, map render where applicable, browser Back, sign-out, expired-session recovery, API failure recovery, mobile viewport inspection, and the new diagnostic/field-service/transport branch where applicable.
+ROVIQ should not be declared fully production-ready until the following manual browser/device gate is completed for each role: login, landing render, primary case/queue load, one primary action, map render where applicable, browser Back, sign-out, expired-session recovery, API failure recovery, mobile viewport inspection, and the new diagnostic/field-service/transport branch where applicable.
 
 ## Automated production smoke
 
@@ -71,4 +71,4 @@ This smoke is intentionally a release shell gate, not a substitute for authentic
 
 ## Current operational blocker
 
-`.github/workflows/scheduled-operations-sweep.yml` is stale. It targets `https://roviq-core.onrender.com` and attempts to log in with `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD`; those secrets are absent, so the job stops at login and never runs deadline or notification processing. Repairing this workflow is a production-readiness requirement, not an optional cleanup.
+None in code. The earlier blocker (the scheduled sweep pointing at the legacy Render Core) was resolved by moving scheduled operations into the Core Worker's native Cloudflare cron. What remains before production is the manual browser/device release gate above and a controlled pilot with a real partner location.
