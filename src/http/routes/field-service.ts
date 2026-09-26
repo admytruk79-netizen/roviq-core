@@ -49,7 +49,8 @@ type FieldServiceAction='field_repair'|'temporary_stabilization'|'dispatch_field
 
 function stringArray(value:unknown):string[]{return Array.isArray(value)?value.filter((v):v is string=>typeof v==='string'):[]}
 function includesAll(have:string[],need:string[]){const set=new Set(have);return need.every(v=>set.has(v))}
-function operatorEligible(a:Assessment,p:CapabilityProfile|null){
+type EligibilityNeeds={repairClass:string;requiredCapabilities:string[];requiredTools:string[];estimatedMinutes?:number|null;estimatedCost?:number|null};
+function operatorEligible(a:EligibilityNeeds,p:CapabilityProfile|null){
   if(!p||!p.active||!p.verified_at)return false;
   if(!stringArray(p.repair_classes).includes(a.repairClass))return false;
   if(!includesAll(stringArray(p.capabilities),a.requiredCapabilities))return false;
@@ -140,6 +141,10 @@ export async function fieldServiceRoutes(app:FastifyInstance){
     if(!c)return reply.code(404).send({error:'case_not_found'});
     const operatorActorId=b.operatorActorId??req.principal.actorId??null;
     if(req.principal.role!=='admin'&&operatorActorId!==req.principal.actorId)return reply.code(403).send({error:'operator_override_forbidden'});
+    // The operator who will perform (and be paid for) the work cannot waive the customer's consent
+    // to it. Only an admin -- acting on configured policy -- may issue a decision that starts
+    // without customer authorization.
+    if(!b.customerAuthorizationRequired&&req.principal.role!=='admin')return reply.code(403).send({error:'customer_authorization_waiver_forbidden'});
     const profileResult=operatorActorId?await pool.query('select * from field_service_actor_capabilities where actor_id=$1',[operatorActorId]):{rows:[]};
     const profile=(profileResult.rows[0]??null) as CapabilityProfile|null;
     const fulfillingSupplierActorId=b.requiredParts.length?await findFulfillingSupplier(b.requiredParts):null;
@@ -207,8 +212,19 @@ export async function fieldServiceRoutes(app:FastifyInstance){
       if(!['field_repair','temporary_stabilization'].includes(decision.action))throw new Error('field_service_action_not_executable');
       const operatorActorId=decision.operator_context?.operatorActorId??req.principal.actorId;
       if(req.principal.role!=='admin'&&operatorActorId!==req.principal.actorId)throw new Error('field_service_operator_mismatch');
-      const profile=await client.query('select active,verified_at from field_service_actor_capabilities where actor_id=$1',[operatorActorId]);
-      if(!profile.rows[0]?.active||!profile.rows[0]?.verified_at)throw new Error('field_service_operator_not_verified');
+      // Re-evaluate the operator against the decision's stored requirements under this transaction:
+      // a capability, tool, repair class or limit revoked after assessment must block the start.
+      const profile=await client.query('select * from field_service_actor_capabilities where actor_id=$1 for share',[operatorActorId]);
+      const currentProfile=(profile.rows[0]??null) as CapabilityProfile|null;
+      if(!currentProfile?.active||!currentProfile?.verified_at)throw new Error('field_service_operator_not_verified');
+      const stillEligible=operatorEligible({
+        repairClass:decision.repair_class,
+        requiredCapabilities:stringArray(decision.required_capabilities),
+        requiredTools:stringArray(decision.required_tools),
+        estimatedMinutes:decision.estimated_minutes,
+        estimatedCost:decision.estimated_cost==null?null:Number(decision.estimated_cost)
+      },currentProfile);
+      if(!stillEligible)throw new Error('field_service_operator_not_eligible');
 
       const requiredParts=(decision.required_parts??[]) as {sku:string;quantity:number}[];
       const reservation:{sku:string;quantity:number;inventoryId:string}[]=[];
@@ -252,7 +268,7 @@ export async function fieldServiceRoutes(app:FastifyInstance){
       const message=e instanceof Error?e.message:'field_service_start_failed';
       if(message==='field_service_decision_not_found')return reply.code(404).send({error:message});
       if(message==='field_service_operator_mismatch')return reply.code(403).send({error:message});
-      if(['field_service_not_startable','field_service_action_not_executable','field_service_operator_not_verified','field_service_parts_unavailable'].includes(message))return reply.code(409).send({error:message});
+      if(['field_service_not_startable','field_service_action_not_executable','field_service_operator_not_verified','field_service_operator_not_eligible','field_service_parts_unavailable'].includes(message))return reply.code(409).send({error:message});
       throw e;
     }finally{
       client.release();
