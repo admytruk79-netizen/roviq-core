@@ -3,7 +3,7 @@
 // into ROVIQ Core through the admin inventory sync API, so every truck on the
 // site is traceable to its dealer, VIN, source price and sync time.
 
-// Dealer Inspire sites (Kendall Ford of Vancouver) load inventory from the Cars
+// Dealer Inspire sites (Kendall Ford of Vancouver, Courtesy Ford Portland) load inventory from the Cars
 // Commerce search service. The page carries the public, read-only search
 // settings every visitor's browser uses; we read those and query the service.
 const PAGE_USER_AGENT = 'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Claude-User/1.0; +Claude-User@anthropic.com)';
@@ -20,6 +20,13 @@ export const FEEDS = [
     sourceKey: 'kendall-ford-vancouver-new-trucks',
     dealerName: 'Kendall Ford of Vancouver',
     pageUrl: 'https://www.kendallfordvancouver.com/new-vehicles/',
+    typeSlug: 'New',
+    condition: 'new'
+  },
+  {
+    sourceKey: 'courtesy-ford-portland-new-trucks',
+    dealerName: 'Courtesy Ford (Portland)',
+    pageUrl: 'https://www.courtesyford.com/new-vehicles/',
     typeSlug: 'New',
     condition: 'new'
   }
