@@ -10,10 +10,10 @@ const PAGE_USER_AGENT = 'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; comp
 
 export const FEEDS = [
   {
-    sourceKey: 'kendall-ford-vancouver-new',
+    sourceKey: 'kendall-ford-vancouver-used-trucks',
     dealerName: 'Kendall Ford of Vancouver',
-    pageUrl: 'https://www.kendallfordvancouver.com/new-vehicles/f-150/',
-    typeSlug: 'New'
+    pageUrl: 'https://www.kendallfordvancouver.com/used-vehicles/',
+    typeSlug: 'Used'
   }
 ];
 
@@ -33,10 +33,13 @@ const MODELS = [
   { test: /^F-?250/i, label: () => 'F-250 Super Duty' }
 ];
 
-// New F-150 and F-250 in every trim, crew cab / SuperCrew only.
+// Used F-150 and F-250 only. Keep the Core catalog aligned with the Ukraine
+// inventory policy: no new trucks, and only low-mileage used vehicles.
 export function toFeedVehicle(listing, feed) {
   const model = MODELS.find(m => m.test.test(String(listing.model || '')));
-  if (!model || String(listing.type || '').toLowerCase() !== 'new') return null;
+  if (!model || String(listing.type || '').toLowerCase() !== 'used') return null;
+  const mileage = Number(listing.mileage);
+  if (!Number.isFinite(mileage) || mileage < 0 || mileage >= 30000) return null;
   const style = listing.styles?.style_name || listing.styles?.style_description || '';
   const descriptor = [style, listing.trim, listing.extra_fields?.title].filter(Boolean).join(' ');
   if (!/super\s*crew|crew\s*cab/i.test(descriptor)) return null;
@@ -46,12 +49,12 @@ export function toFeedVehicle(listing, feed) {
   return {
     id: listing.vin,
     vin: listing.vin,
-    condition: 'new',
+    condition: 'used',
     year: listing.year,
     make: listing.make || 'Ford',
     model: model.label(String(listing.model)),
     trim: [listing.trim, /super\s*crew/i.test(descriptor) ? 'SuperCrew' : 'Crew Cab'].filter(Boolean).join(' '),
-    mileage: Number(listing.mileage) || 0,
+    mileage,
     exteriorColor: listing.styles?.exterior_color || undefined,
     drivetrain: listing.mechanical?.drivetrain || undefined,
     fuelType: listing.mechanical?.fuel_type || undefined,
