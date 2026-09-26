@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FEEDS, fetchFeed, publishToCore, readSearchConfig, toFeedVehicle } from './dealer-feeds.mjs';
+import { FEEDS, dealerComToFeedVehicle, fetchFeed, publishToCore, readDealerComVehicles, readSearchConfig, toFeedVehicle } from './dealer-feeds.mjs';
 
 const feed = FEEDS[0];
 const page = `<script>var SEARCH_SERVICE = {"apiUrl":"https://websites-search.api.carscommerce.inc","ccid":"6067995","apiKey":"public-key","search":"https://websites-search.api.carscommerce.inc/api/v1/listings/6067995","visibleStatusValues":["publish","modified","pend-sale"]}; var SEARCH_SERVICE_FIELD_MAP = {"requestedFields":["vin","pricing"]}; var other = 1;</script>`;
@@ -86,5 +86,57 @@ describe('Kendall Ford of Vancouver feed', () => {
     expect(calls[1].url).toBe('https://core.example/api/admin/inventory/sync');
     expect(calls[1].init.headers.authorization).toBe('Bearer token');
     expect(JSON.parse(calls[1].init.body)).toMatchObject({ sourceKey: 'kendall-ford-vancouver-used-trucks', markupBps: 850, completeSnapshot: true, payload: { vehicles: [{ condition: 'used' }] } });
+  });
+});
+
+describe('Carr Chevrolet (dealer.com) feed', () => {
+  const carr = FEEDS.find(f => f.platform === 'dealer-com');
+  const vehicle = (o = {}) => ({
+    title: ['2026 Chevrolet', 'Silverado 1500 Custom Trail Boss'], make: 'Chevrolet', model: 'Silverado 1500', trim: 'Custom Trail Boss',
+    modelCode: 'CK10743', vin: '3GCUKCEDXTG495865', stockNumber: 'C269133', type: 'new', bodyStyle: 'Truck',
+    link: '/new/Chevrolet/2026-Chevrolet-Silverado-1500-de05b2f3.htm',
+    images: [{ uri: 'https://pictures.dealer.com/a.jpg' }],
+    pricing: { retailPrice: '$58,910', dprice: [
+      { label: 'MSRP', type: 'MIDDLE', value: '$58,910' }, { label: 'Carr Price', type: 'TOTAL', value: '$53,910' },
+      { label: 'Final Price', type: 'SIF', value: '$47,910', isFinalPrice: true }] },
+    trackingAttributes: [{ name: 'odometer', value: '4540' }, { name: 'driveLine', value: '4WD' }, { name: 'fuelType', value: 'Gasoline Fuel' }],
+    ...o
+  });
+  const page = list => `<script> DDC = DDC || {}; DDC.WidgetData["inventory-data-bus1"] = {"inventory":${JSON.stringify(list)},"note":"a \\"quoted\\" } brace"}; </script>`;
+
+  it('reads vehicles from the embedded widget JSON', () => {
+    expect(readDealerComVehicles(page([vehicle()])).map(v => v.vin)).toEqual(['3GCUKCEDXTG495865']);
+    expect(readDealerComVehicles('<html></html>')).toEqual([]);
+  });
+
+  it('keeps crew cabs at the dealer advertised price, not conditional rebates', () => {
+    expect(dealerComToFeedVehicle(vehicle(), carr)).toMatchObject({
+      vin: '3GCUKCEDXTG495865', condition: 'new', year: 2026, model: 'Silverado 1500', trim: 'Custom Trail Boss Crew Cab',
+      priceCents: 5391000, mileage: 4540, drivetrain: '4WD', dealerName: 'Carr Chevrolet (Beaverton)',
+      dealerUrl: 'https://www.carrchevrolet.com/new/Chevrolet/2026-Chevrolet-Silverado-1500-de05b2f3.htm'
+    });
+    expect(dealerComToFeedVehicle(vehicle({ model: 'Silverado 2500HD', modelCode: 'CK20743' }), carr)).toMatchObject({ model: 'Silverado 2500 HD' });
+  });
+
+  it('drops double and regular cabs, 3500s, used stock and unpriced trucks', () => {
+    expect(dealerComToFeedVehicle(vehicle({ modelCode: 'CK10753' }), carr)).toBeNull();
+    expect(dealerComToFeedVehicle(vehicle({ modelCode: 'CK10903' }), carr)).toBeNull();
+    expect(dealerComToFeedVehicle(vehicle({ model: 'Silverado 3500HD', modelCode: 'CK30743' }), carr)).toBeNull();
+    expect(dealerComToFeedVehicle(vehicle({ type: 'used' }), carr)).toBeNull();
+    expect(dealerComToFeedVehicle(vehicle({ pricing: {} }), carr)).toBeNull();
+  });
+
+  it('pages each model with start= until no new VINs appear', async () => {
+    const urls = [];
+    const fetcher = async url => {
+      urls.push(url);
+      const u = new URL(url); const start = Number(u.searchParams.get('start') || 0);
+      const list = start === 0 ? [vehicle(), vehicle({ vin: '3GCUKCEDXTG495866' })] : start === 2 ? [vehicle({ vin: '3GCUKCEDXTG495867', modelCode: 'CK10753' })] : [];
+      return new Response(page(list));
+    };
+    const r = await fetchFeed(carr, fetcher);
+    expect(r.vehicles.map(v => v.vin)).toEqual(['3GCUKCEDXTG495865', '3GCUKCEDXTG495866']);
+    expect(urls[0]).toContain('model=Silverado+1500');
+    expect(urls[1]).toContain('start=2');
   });
 });

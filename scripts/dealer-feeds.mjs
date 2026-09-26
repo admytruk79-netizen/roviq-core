@@ -29,6 +29,14 @@ export const FEEDS = [
     pageUrl: 'https://www.courtesyford.com/new-vehicles/',
     typeSlug: 'New',
     condition: 'new'
+  },
+  {
+    sourceKey: 'carr-chevrolet-beaverton-new-trucks',
+    dealerName: 'Carr Chevrolet (Beaverton)',
+    platform: 'dealer-com',
+    pageUrl: 'https://www.carrchevrolet.com/new-inventory/index.htm',
+    models: ['Silverado 1500', 'Silverado 2500HD'],
+    condition: 'new'
   }
 ];
 
@@ -89,7 +97,89 @@ export function toFeedVehicle(listing, feed) {
   };
 }
 
+// Dealer.com sites (Carr Chevrolet) embed each listing page's vehicles as JSON
+// in DDC.WidgetData; we read that object literally, never the page text.
+export function readDealerComVehicles(html) {
+  const at = html.indexOf('DDC.WidgetData["inventory-data-bus1"]');
+  if (at < 0) return [];
+  const start = html.indexOf('{', at);
+  let depth = 0, inString = false, end = -1;
+  for (let i = start; i < html.length; i++) {
+    const c = html[i];
+    if (inString) { if (c === '\\') i++; else if (c === '"') inString = false; continue; }
+    if (c === '"') inString = true;
+    else if (c === '{') depth++;
+    else if (c === '}' && --depth === 0) { end = i; break; }
+  }
+  if (end < 0) return [];
+  let data;
+  try { data = JSON.parse(html.slice(start, end + 1)); } catch { return []; }
+  const out = [];
+  const walk = node => {
+    if (Array.isArray(node)) return node.forEach(walk);
+    if (!node || typeof node !== 'object') return;
+    if (typeof node.vin === 'string' && node.vin.length === 17 && node.make) { out.push(node); return; }
+    Object.values(node).forEach(walk);
+  };
+  walk(data);
+  return out;
+}
+
+const money = v => Number(String(v ?? '').replace(/[^0-9.]/g, '')) || 0;
+
+// GM model codes end in 43 for crew cabs (CK10543, CK10743, CK20743, TK10543 ...);
+// 53 is Double Cab and 03 Regular Cab.
+export function dealerComToFeedVehicle(v, feed) {
+  const condition = feed.condition || 'new';
+  if (String(v.type || '').toLowerCase() !== condition) return null;
+  const model = MODELS.find(m => m.test.test(String(v.model || '')));
+  if (!model) return null;
+  const crew = /43$/.test(String(v.modelCode || '')) || /crew\s*cab/i.test([v.trim, ...(v.title || [])].join(' '));
+  if (!crew) return null;
+  const attrs = Object.fromEntries((v.trackingAttributes || []).map(a => [a.name, a.value]));
+  const mileage = money(attrs.odometer);
+  if (condition === 'used' && (!mileage || mileage >= 30000)) return null;
+  const dp = v.pricing?.dprice || [];
+  // The dealer's own advertised price (e.g. "Carr Price"), not conditional rebates.
+  const price = money(dp.find(d => d.type === 'TOTAL')?.value) || money(v.pricing?.retailPrice);
+  if (price < 1000) return null;
+  const base = new URL(feed.pageUrl).origin;
+  return {
+    id: v.vin, vin: v.vin, condition, year: Number(v.year) || Number(String(v.title?.[0] || '').slice(0, 4)) || undefined,
+    make: v.make, model: model.label(String(v.model)), trim: [v.trim, 'Crew Cab'].filter(Boolean).join(' '),
+    mileage, exteriorColor: attrs.exteriorColor || undefined, drivetrain: attrs.driveLine || undefined,
+    fuelType: attrs.fuelType || v.fuelType || undefined, bodyStyle: 'Crew Cab Pickup',
+    images: (v.images || []).map(i => i?.uri).filter(u => typeof u === 'string').slice(0, 24),
+    priceCents: Math.round(price * 100), dealerName: feed.dealerName,
+    dealerUrl: v.link ? new URL(v.link, base).href : undefined,
+    raw: { source: 'dealer-com-widget', stock: v.stockNumber, modelCode: v.modelCode, msrp: money(v.pricing?.retailPrice) || undefined, dealerPrice: price }
+  };
+}
+
+async function fetchDealerComFeed(feed, fetcher) {
+  const seen = new Map();
+  let scanned = 0;
+  for (const model of feed.models) {
+    for (let start = 0, pages = 0; pages < 20; pages++) {
+      const url = new URL(feed.pageUrl);
+      url.searchParams.set('model', model);
+      if (start) url.searchParams.set('start', String(start));
+      const res = await fetcher(url.href, { headers: { 'user-agent': PAGE_USER_AGENT } });
+      if (!res.ok) throw new Error(`dealer_page_${res.status}`);
+      const batch = readDealerComVehicles(await res.text());
+      const fresh = batch.filter(v => !seen.has(v.vin));
+      scanned += fresh.length;
+      fresh.forEach(v => seen.set(v.vin, v));
+      if (!fresh.length) break;
+      start += batch.length;
+    }
+  }
+  const vehicles = [...seen.values()].map(v => dealerComToFeedVehicle(v, feed)).filter(Boolean);
+  return { scanned, vehicles };
+}
+
 export async function fetchFeed(feed, fetcher = fetch) {
+  if (feed.platform === 'dealer-com') return fetchDealerComFeed(feed, fetcher);
   const page = await fetcher(feed.pageUrl, { headers: { 'user-agent': PAGE_USER_AGENT } });
   if (!page.ok) throw new Error(`dealer_page_${page.status}`);
   const cfg = readSearchConfig(await page.text());
