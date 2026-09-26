@@ -1,0 +1,36 @@
+name: Sync dealer truck inventory into ROVIQ Core
+
+# Runs from GitHub because dealer sites block ROVIQ Core's own server.
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/dealer-feeds.mjs'
+      - 'scripts/sync-dealer-feeds.mjs'
+      - '.github/workflows/sync-dealer-inventory.yml'
+
+concurrency:
+  group: sync-dealer-inventory
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Publish Kendall Ford of Vancouver new crew-cab F-150 / F-250
+        env:
+          ROVIQ_CORE_API_URL: https://roviq-core.onrender.com
+          ROVIQ_CORE_ADMIN_EMAIL: ${{ secrets.BOOTSTRAP_ADMIN_EMAIL }}
+          ROVIQ_CORE_ADMIN_PASSWORD: ${{ secrets.BOOTSTRAP_ADMIN_PASSWORD }}
+        run: node scripts/sync-dealer-feeds.mjs
