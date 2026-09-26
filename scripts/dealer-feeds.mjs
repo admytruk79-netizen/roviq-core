@@ -37,6 +37,30 @@ export const FEEDS = [
     pageUrl: 'https://www.carrchevrolet.com/new-inventory/index.htm',
     models: ['Silverado 1500', 'Silverado 2500HD'],
     condition: 'new'
+  },
+  {
+    sourceKey: 'buick-gmc-beaverton-new-trucks',
+    dealerName: 'Buick GMC of Beaverton',
+    platform: 'dealeron',
+    pageUrl: 'https://www.beavertongmc.com/searchnew.aspx',
+    models: ['Sierra 1500', 'Sierra 2500HD'],
+    condition: 'new'
+  },
+  {
+    sourceKey: 'carr-buick-gmc-vancouver-new-trucks',
+    dealerName: 'Carr Buick GMC (Vancouver, WA)',
+    platform: 'dealeron',
+    pageUrl: 'https://www.carrbuickgmc.com/searchnew.aspx',
+    models: ['Sierra 1500', 'Sierra 2500HD'],
+    condition: 'new'
+  },
+  {
+    sourceKey: 'northside-ford-portland-new-trucks',
+    dealerName: 'Northside Ford (Portland)',
+    platform: 'jazel',
+    pageUrl: 'https://www.northsideford.net/inventory/new-vehicles/',
+    modelPaths: ['f-150', 'f-250'],
+    condition: 'new'
   }
 ];
 
@@ -178,8 +202,123 @@ async function fetchDealerComFeed(feed, fetcher) {
   return { scanned, vehicles };
 }
 
+// DealerOn sites (Buick GMC of Beaverton, Carr Buick GMC) render listing cards
+// from their own JSON card service; the page's tagging block names the dealer
+// and page ids that service needs.
+export function readDealerOnIds(html) {
+  const m = html.match(/id="dealeron_tagging_data"[^>]*>([^<]+)</);
+  if (!m) return null;
+  try { const t = JSON.parse(m[1]); return t.dealerId && t.pageId ? { dealerId: String(t.dealerId), pageId: String(t.pageId) } : null; } catch { return null; }
+}
+
+export function dealerOnToFeedVehicle(card, feed) {
+  const condition = feed.condition || 'new';
+  const vin = String(card.VehicleVin || '');
+  if (vin.length !== 17) return null;
+  if (String(card.VehicleType || card.VehicleCondition || condition).toLowerCase() !== condition) return null;
+  const model = MODELS.find(m => m.test.test(String(card.VehicleModel || '')));
+  if (!model) return null;
+  const crew = /43$/.test(String(card.VehicleModelCode || '')) || /crew\s*cab/i.test(`${card.VehicleBodyStyle || ''} ${card.VehicleTrim || ''}`);
+  if (!crew) return null;
+  const mileage = money(card.VehicleMileage);
+  if (condition === 'used' && (!mileage || mileage >= 30000)) return null;
+  const price = money(card.VehicleInternetPrice) || money(card.TaggingPrice);
+  if (price < 1000) return null;
+  const origin = new URL(feed.pageUrl).origin;
+  const photos = card.VehicleImageModel?.VehicleImageCarouselModel?.PhotoList || [];
+  return {
+    id: vin, vin, condition, year: Number(card.VehicleYear) || undefined, make: card.VehicleMake || 'GMC',
+    model: model.label(String(card.VehicleModel)), trim: [card.VehicleTrim, 'Crew Cab'].filter(Boolean).join(' '),
+    mileage, exteriorColor: card.ExteriorColorLabel || undefined, drivetrain: card.VehicleDriveTrain || undefined,
+    fuelType: card.VehicleFuelType || undefined, bodyStyle: card.VehicleBodyStyle || 'Crew Cab Pickup',
+    images: [...new Set(photos)].filter(u => typeof u === 'string').map(u => new URL(u, origin).href).slice(0, 24),
+    priceCents: Math.round(price * 100), dealerName: feed.dealerName, dealerUrl: card.VehicleDetailUrl || undefined,
+    raw: { source: 'dealeron-cards', stock: card.VehicleStockNumber, modelCode: card.VehicleModelCode, engine: card.VehicleEngine, msrp: money(card.VehicleMsrp) || undefined, dealerPrice: price }
+  };
+}
+
+async function fetchDealerOnFeed(feed, fetcher) {
+  const origin = new URL(feed.pageUrl).origin;
+  const seen = new Map();
+  for (const model of feed.models) {
+    const pageUrl = new URL(feed.pageUrl); pageUrl.searchParams.set('model', model);
+    const page = await fetcher(pageUrl.href, { headers: { 'user-agent': PAGE_USER_AGENT } });
+    if (!page.ok) throw new Error(`dealer_page_${page.status}`);
+    const ids = readDealerOnIds(await page.text());
+    if (!ids) throw new Error('dealeron_ids_not_found');
+    for (let pt = 1; pt <= 10; pt++) {
+      const api = new URL(`/api/vhcliaa/vehicle-pages/cosmos/srp/vehicles/${ids.dealerId}/${ids.pageId}`, origin);
+      api.searchParams.set('pt', String(pt)); api.searchParams.set('pn', '96'); api.searchParams.set('model', model);
+      api.searchParams.set('host', new URL(origin).host);
+      const res = await fetcher(api.href, { headers: { 'user-agent': PAGE_USER_AGENT, accept: 'application/json' } });
+      if (!res.ok) throw new Error(`dealeron_cards_${res.status}`);
+      const body = await res.json();
+      for (const c of body?.DisplayCards || []) if (c?.VehicleCard?.VehicleVin) seen.set(c.VehicleCard.VehicleVin, c.VehicleCard);
+      if (pt >= (body?.Paging?.PaginationDataModel?.TotalPages || 1)) break;
+    }
+  }
+  const vehicles = [...seen.values()].map(c => dealerOnToFeedVehicle(c, feed)).filter(Boolean);
+  return { scanned: seen.size, vehicles };
+}
+
+// Jazel sites (Northside Ford) put each listing's details in a base64 JSON
+// data-event-details attribute. Ford VINs carry the cab in position 5:
+// "W" is SuperCrew / Crew Cab (1FTFW, 1FTEW, 1FT7W, 1FT8W ...).
+export function readJazelVehicles(html) {
+  const images = new Map();
+  for (const m of html.matchAll(/<script[^>]+application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi)) {
+    try { const o = JSON.parse(m[1]); if (o?.vehicleIdentificationNumber && o.image) images.set(o.vehicleIdentificationNumber, [].concat(o.image)[0]); } catch {}
+  }
+  const out = new Map();
+  for (const m of html.matchAll(/data-event-details='([^']+)'/g)) {
+    try {
+      const d = JSON.parse(Buffer.from(m[1], 'base64').toString('utf8'));
+      if (d?.vin && d.vin.length === 17 && !out.has(d.vin)) out.set(d.vin, { ...d, image: images.get(d.vin) });
+    } catch {}
+  }
+  return [...out.values()];
+}
+
+export function jazelToFeedVehicle(d, feed) {
+  const condition = feed.condition || 'new';
+  if (String(d.condition || '').toLowerCase() !== condition) return null;
+  const model = MODELS.find(m => m.test.test(String(d.model || '')));
+  if (!model || d.make !== 'Ford' || d.vin[4] !== 'W') return null;
+  const mileage = money(d.mileage);
+  if (condition === 'used' && (!mileage || mileage >= 30000)) return null;
+  const price = money(d.price);
+  if (price < 1000) return null;
+  const f150 = /F-?150/i.test(d.model);
+  return {
+    id: d.vin, vin: d.vin, condition, year: Number(d.year) || undefined, make: 'Ford', model: model.label(String(d.model)),
+    trim: [d.trim, f150 ? 'SuperCrew' : 'Crew Cab'].filter(Boolean).join(' '), mileage,
+    exteriorColor: d.exterior_color || undefined, drivetrain: d.drivetrain || undefined, fuelType: d.fuelType || undefined,
+    bodyStyle: f150 ? 'SuperCrew' : 'Crew Cab', images: d.image ? [d.image] : [],
+    priceCents: Math.round(price * 100), dealerName: feed.dealerName, dealerUrl: undefined,
+    raw: { source: 'jazel-listing', stock: d.stockNumber, dealerPrice: price }
+  };
+}
+
+async function fetchJazelFeed(feed, fetcher) {
+  const seen = new Map();
+  for (const path of feed.modelPaths) {
+    for (let n = 1; n <= 15; n++) {
+      const url = new URL(`${path}/${n > 1 ? `srp-page-${n}/` : ''}`, feed.pageUrl);
+      const res = await fetcher(url.href, { headers: { 'user-agent': PAGE_USER_AGENT } });
+      if (!res.ok) { if (n > 1) break; throw new Error(`dealer_page_${res.status}`); }
+      const fresh = readJazelVehicles(await res.text()).filter(d => !seen.has(d.vin));
+      if (!fresh.length) break;
+      fresh.forEach(d => seen.set(d.vin, d));
+    }
+  }
+  const vehicles = [...seen.values()].map(d => jazelToFeedVehicle(d, feed)).filter(Boolean);
+  return { scanned: seen.size, vehicles };
+}
+
 export async function fetchFeed(feed, fetcher = fetch) {
   if (feed.platform === 'dealer-com') return fetchDealerComFeed(feed, fetcher);
+  if (feed.platform === 'dealeron') return fetchDealerOnFeed(feed, fetcher);
+  if (feed.platform === 'jazel') return fetchJazelFeed(feed, fetcher);
   const page = await fetcher(feed.pageUrl, { headers: { 'user-agent': PAGE_USER_AGENT } });
   if (!page.ok) throw new Error(`dealer_page_${page.status}`);
   const cfg = readSearchConfig(await page.text());

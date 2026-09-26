@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FEEDS, dealerComToFeedVehicle, fetchFeed, publishToCore, readDealerComVehicles, readSearchConfig, toFeedVehicle } from './dealer-feeds.mjs';
+import { FEEDS, dealerComToFeedVehicle, dealerOnToFeedVehicle, fetchFeed, jazelToFeedVehicle, publishToCore, readDealerComVehicles, readDealerOnIds, readJazelVehicles, readSearchConfig, toFeedVehicle } from './dealer-feeds.mjs';
 
 const feed = FEEDS[0];
 const page = `<script>var SEARCH_SERVICE = {"apiUrl":"https://websites-search.api.carscommerce.inc","ccid":"6067995","apiKey":"public-key","search":"https://websites-search.api.carscommerce.inc/api/v1/listings/6067995","visibleStatusValues":["publish","modified","pend-sale"]}; var SEARCH_SERVICE_FIELD_MAP = {"requestedFields":["vin","pricing"]}; var other = 1;</script>`;
@@ -138,5 +138,87 @@ describe('Carr Chevrolet (dealer.com) feed', () => {
     expect(r.vehicles.map(v => v.vin)).toEqual(['3GCUKCEDXTG495865', '3GCUKCEDXTG495866']);
     expect(urls[0]).toContain('model=Silverado+1500');
     expect(urls[1]).toContain('start=2');
+  });
+});
+
+describe('DealerOn GMC feeds (Beaverton, Carr Vancouver)', () => {
+  const gmc = FEEDS.find(f => f.sourceKey === 'buick-gmc-beaverton-new-trucks');
+  const card = (o = {}) => ({
+    VehicleVin: '3GTUUDED4TG344911', VehicleType: 'New', VehicleYear: '2026', VehicleMake: 'GMC', VehicleModel: 'Sierra 1500',
+    VehicleTrim: 'SLT', VehicleModelCode: 'TK10543', VehicleBodyStyle: 'Crew Cab Pickup', VehicleInternetPrice: '$64,980',
+    VehicleMsrp: '$68,680', TaggingPrice: '68680', VehicleMileage: '5', VehicleDriveTrain: '4WD',
+    VehicleDetailUrl: 'https://www.beavertongmc.com/new-+Portland-2026-GMC-Sierra+1500-SLT-3GTUUDED4TG344911',
+    VehicleImageModel: { VehicleImageCarouselModel: { PhotoList: ['/inventoryphotos/18948/3gtuuded4tg344911/ip/1.jpg', '/inventoryphotos/18948/3gtuuded4tg344911/ip/1.jpg'] } },
+    ...o
+  });
+
+  it('reads the dealer and page ids the card service needs', () => {
+    expect(readDealerOnIds('<script id="dealeron_tagging_data" type="application/json">{"dealerId":"27824","pageId":2918791,"items":[]}</script>'))
+      .toEqual({ dealerId: '27824', pageId: '2918791' });
+    expect(readDealerOnIds('<html></html>')).toBeNull();
+  });
+
+  it('keeps crew-cab Sierras at the internet price with absolute photo URLs', () => {
+    expect(dealerOnToFeedVehicle(card(), gmc)).toMatchObject({
+      vin: '3GTUUDED4TG344911', condition: 'new', year: 2026, make: 'GMC', model: 'Sierra 1500', trim: 'SLT Crew Cab',
+      priceCents: 6498000, mileage: 5, dealerName: 'Buick GMC of Beaverton',
+      images: ['https://www.beavertongmc.com/inventoryphotos/18948/3gtuuded4tg344911/ip/1.jpg']
+    });
+    expect(dealerOnToFeedVehicle(card({ VehicleInternetPrice: '' }), gmc)).toMatchObject({ priceCents: 6868000 });
+  });
+
+  it('drops double cabs, 3500s, used and unpriced cards', () => {
+    expect(dealerOnToFeedVehicle(card({ VehicleModelCode: 'TK10753', VehicleBodyStyle: 'Double Cab Pickup' }), gmc)).toBeNull();
+    expect(dealerOnToFeedVehicle(card({ VehicleModel: 'Sierra 3500HD', VehicleModelCode: 'TK30743' }), gmc)).toBeNull();
+    expect(dealerOnToFeedVehicle(card({ VehicleType: 'Used' }), gmc)).toBeNull();
+    expect(dealerOnToFeedVehicle(card({ VehicleInternetPrice: '', TaggingPrice: '' }), gmc)).toBeNull();
+  });
+
+  it('pages the card service per model', async () => {
+    const urls = [];
+    const fetcher = async url => {
+      urls.push(url);
+      if (url.includes('searchnew.aspx')) return new Response('<script id="dealeron_tagging_data" type="application/json">{"dealerId":"27824","pageId":2918791}</script>');
+      const pt = Number(new URL(url).searchParams.get('pt'));
+      return json({ Paging: { PaginationDataModel: { TotalPages: 2 } }, DisplayCards: [{ VehicleCard: card({ VehicleVin: `3GTUUDED4TG34491${pt}` }) }, { IsAdCard: true }] });
+    };
+    const r = await fetchFeed(gmc, fetcher);
+    expect(r.vehicles.map(v => v.vin)).toEqual(['3GTUUDED4TG344911', '3GTUUDED4TG344912']);
+    expect(urls.some(u => u.includes('/api/vhcliaa/vehicle-pages/cosmos/srp/vehicles/27824/2918791') && u.includes('pt=2'))).toBe(true);
+  });
+});
+
+describe('Northside Ford (Jazel) feed', () => {
+  const ns = FEEDS.find(f => f.platform === 'jazel');
+  const det = (o = {}) => ({ year: '2026', make: 'Ford', model: 'F-150', trim: 'XLT', bodyType: ['Truck'], vin: '1FTFW3L81TKD12345',
+    drivetrain: 'Four Wheel Drive', fuelType: 'Gasoline', condition: 'new', mileage: 12, price: '52,340', stockNumber: 'N1', ...o });
+  const tag = d => `<div data-event-details='${Buffer.from(JSON.stringify(d)).toString('base64')}' data-vin='${d.vin}'></div>`;
+  const ld = (vin, image) => `<script type="application/ld+json">{"@type":"Car","vehicleIdentificationNumber":"${vin}","image":"${image}"}</script>`;
+
+  it('decodes each listing once and attaches its photo', () => {
+    const html = tag(det()) + tag(det()) + ld('1FTFW3L81TKD12345', 'https://media.test/1.jpg') + `<div data-event-details='bm90IGpzb24='></div>`;
+    expect(readJazelVehicles(html)).toEqual([{ ...det(), image: 'https://media.test/1.jpg' }]);
+  });
+
+  it('keeps new SuperCrew / Crew Cab trucks by the Ford VIN cab code', () => {
+    expect(jazelToFeedVehicle(det(), ns)).toMatchObject({ model: 'F-150', trim: 'XLT SuperCrew', priceCents: 5234000, mileage: 12, dealerName: 'Northside Ford (Portland)' });
+    expect(jazelToFeedVehicle(det({ model: 'F-250SD', vin: '1FT8W2BT1TED12345' }), ns)).toMatchObject({ model: 'F-250 Super Duty', trim: 'XLT Crew Cab' });
+    expect(jazelToFeedVehicle(det({ vin: '1FTFX1E81TKD12345' }), ns)).toBeNull(); // SuperCab
+    expect(jazelToFeedVehicle(det({ model: 'Maverick', vin: '3FTTW8B31TRA12345' }), ns)).toBeNull();
+    expect(jazelToFeedVehicle(det({ condition: 'used' }), ns)).toBeNull();
+    expect(jazelToFeedVehicle(det({ price: '' }), ns)).toBeNull();
+  });
+
+  it('walks srp-page-N for each model path until no new VINs', async () => {
+    const urls = [];
+    const fetcher = async url => {
+      urls.push(url);
+      if (url.endsWith('/f-150/')) return new Response(tag(det()));
+      if (url.endsWith('/f-150/srp-page-2/')) return new Response(tag(det({ vin: '1FTFW3L81TKD12346' })));
+      return new Response('');
+    };
+    const r = await fetchFeed(ns, fetcher);
+    expect(r.vehicles.map(v => v.vin)).toEqual(['1FTFW3L81TKD12345', '1FTFW3L81TKD12346']);
+    expect(urls).toContain('https://www.northsideford.net/inventory/new-vehicles/f-250/');
   });
 });
