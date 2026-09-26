@@ -119,12 +119,15 @@ export function extractDealerComSite(html:string){
 async function pageThrough(fetchPage:(start:number,pageSize:number)=>Promise<any>,source:DealerSource){
   const pageSize=100;
   const vehicles:InventoryFeedVehicle[]=[];
-  for(let start=0,page=0;page<30;page++,start+=pageSize){
+  // Sites may cap the page size below what we ask for, so advance by what came
+  // back and stop on the reported total rather than on a short page.
+  for(let start=0,page=0;page<60;page++){
     const body=await fetchPage(start,pageSize);
     const items:any[]=Array.isArray(body?.inventory)?body.inventory:[];
     vehicles.push(...items.map(i=>mapDealerComVehicle(i,source)));
+    start+=items.length;
     const total=parseNumber(body?.pageInfo?.totalCount);
-    if(!items.length||items.length<pageSize||(total!==undefined&&start+items.length>=total)) break;
+    if(!items.length||(total!==undefined?start>=total:items.length<pageSize)) break;
   }
   return vehicles;
 }
@@ -304,6 +307,17 @@ const NEW_TARGET_MODELS=new Set(['Ford F-150','Ford F-250']);
 export function isTargetNewTruck(v:InventoryFeedVehicle){
   const model=targetModel(v);
   return !isUsed(v)&&Boolean(model&&NEW_TARGET_MODELS.has(model))&&isCrewCab(v);
+}
+
+// Why a scraped vehicle was not published, for the scrape log.
+export function rejectionReason(v:InventoryFeedVehicle,source:DealerSource){
+  const wantNew=sourceCondition(source)==='new';
+  if(wantNew===isUsed(v)) return wantNew?'used':'new';
+  if(!targetModel(v)||(wantNew&&!NEW_TARGET_MODELS.has(targetModel(v)!))) return 'model';
+  if(!isCrewCab(v)) return 'cab';
+  if(!wantNew&&v.mileage===undefined) return 'mileage_unknown';
+  if(!wantNew&&v.mileage!>MAX_MILEAGE) return 'mileage_over';
+  return undefined;
 }
 
 export function matchesSource(v:InventoryFeedVehicle,source:DealerSource){
