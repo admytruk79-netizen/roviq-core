@@ -13,7 +13,15 @@ export const FEEDS = [
     sourceKey: 'kendall-ford-vancouver-used-trucks',
     dealerName: 'Kendall Ford of Vancouver',
     pageUrl: 'https://www.kendallfordvancouver.com/used-vehicles/',
-    typeSlug: 'Used'
+    typeSlug: 'Used',
+    condition: 'used'
+  },
+  {
+    sourceKey: 'kendall-ford-vancouver-new-trucks',
+    dealerName: 'Kendall Ford of Vancouver',
+    pageUrl: 'https://www.kendallfordvancouver.com/new-vehicles/',
+    typeSlug: 'New',
+    condition: 'new'
   }
 ];
 
@@ -30,16 +38,20 @@ export function readSearchConfig(html) {
 
 const MODELS = [
   { test: /^F-?150\b/i, label: m => m.replace(/^F-?150/i, 'F-150') },
-  { test: /^F-?250/i, label: () => 'F-250 Super Duty' }
+  { test: /^F-?250/i, label: () => 'F-250 Super Duty' },
+  { test: /^Silverado\s*(1500|2500)/i, label: m => m.replace(/\s*HD$/i, ' HD').replace(/^Silverado\s*/i, 'Silverado ') },
+  { test: /^Sierra\s*(1500|2500)/i, label: m => m.replace(/\s*HD$/i, ' HD').replace(/^Sierra\s*/i, 'Sierra ') }
 ];
 
-// Used F-150 and F-250 only. Keep the Core catalog aligned with the Ukraine
-// inventory policy: no new trucks, and only low-mileage used vehicles.
+// Crew cab / SuperCrew F-150, F-250, Silverado and Sierra 1500/2500 only.
+// Used feeds keep the low-mileage policy (under 30,000 miles); new feeds take
+// the dealer's new stock as listed.
 export function toFeedVehicle(listing, feed) {
+  const condition = feed.condition || 'used';
   const model = MODELS.find(m => m.test.test(String(listing.model || '')));
-  if (!model || String(listing.type || '').toLowerCase() !== 'used') return null;
-  const mileage = Number(listing.mileage);
-  if (!Number.isFinite(mileage) || mileage < 0 || mileage >= 30000) return null;
+  if (!model || String(listing.type || '').toLowerCase() !== condition) return null;
+  const mileage = Number(listing.mileage) || 0;
+  if (mileage < 0 || (condition === 'used' && (!(Number(listing.mileage) > 0) || mileage >= 30000))) return null;
   const style = listing.styles?.style_name || listing.styles?.style_description || '';
   const descriptor = [style, listing.trim, listing.extra_fields?.title].filter(Boolean).join(' ');
   if (!/super\s*crew|crew\s*cab/i.test(descriptor)) return null;
@@ -49,7 +61,7 @@ export function toFeedVehicle(listing, feed) {
   return {
     id: listing.vin,
     vin: listing.vin,
-    condition: 'used',
+    condition,
     year: listing.year,
     make: listing.make || 'Ford',
     model: model.label(String(listing.model)),

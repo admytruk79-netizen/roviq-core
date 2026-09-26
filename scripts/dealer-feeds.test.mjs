@@ -42,6 +42,23 @@ describe('Kendall Ford of Vancouver feed', () => {
     expect(toFeedVehicle(listing({ pricing: {} }), feed)).toBeNull();
   });
 
+  it('new-truck feed keeps new crew-cab trucks at any delivery mileage and rejects used ones', () => {
+    const newFeed = FEEDS.find(f => f.condition === 'new');
+    expect(newFeed).toMatchObject({ dealerName: 'Kendall Ford of Vancouver', typeSlug: 'New' });
+    expect(toFeedVehicle(listing({ type: 'New', mileage: 5 }), newFeed)).toMatchObject({ condition: 'new', mileage: 5, priceCents: 7483500 });
+    expect(toFeedVehicle(listing({ type: 'New', mileage: undefined }), newFeed)).toMatchObject({ mileage: 0 });
+    expect(toFeedVehicle(listing(), newFeed)).toBeNull();
+    expect(toFeedVehicle(listing({ type: 'New', styles: { style_name: 'XL 4WD Reg Cab 8\' Box' } }), newFeed)).toBeNull();
+  });
+
+  it('accepts crew-cab Silverado and Sierra 1500/2500 but not 3500', () => {
+    const gm = o => listing({ make: 'GMC', model: 'Sierra 1500', trim: 'Denali', styles: { style_name: '4WD Crew Cab 147" Denali' }, ...o });
+    expect(toFeedVehicle(gm(), feed)).toMatchObject({ model: 'Sierra 1500', trim: 'Denali Crew Cab' });
+    expect(toFeedVehicle(gm({ model: 'Sierra 2500HD' }), feed)).toMatchObject({ model: 'Sierra 2500 HD' });
+    expect(toFeedVehicle(gm({ make: 'Chevrolet', model: 'Silverado 1500' }), feed)).toMatchObject({ model: 'Silverado 1500' });
+    expect(toFeedVehicle(gm({ model: 'Sierra 3500HD' }), feed)).toBeNull();
+  });
+
   it('pages through the search service with the page key and dedupes by VIN', async () => {
     const calls = [];
     const fetcher = async (url, init) => {
