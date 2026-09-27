@@ -14,9 +14,15 @@ export function Layout() {
             <span className="roviq-mark"><span>R</span></span>
             <span>ROVIQ</span>
           </Link>
+          {!principal && (
+            <nav className="roviq-customer-nav" aria-label="Site navigation">
+              <Link to="/inventory" className="roviq-nav-link">Trucks</Link>
+            </nav>
+          )}
           {principal && (
             <nav className="roviq-customer-nav" aria-label="Customer navigation">
               <Link to="/" className="roviq-nav-link">My cases</Link>
+              <Link to="/inventory" className="roviq-nav-link">Trucks</Link>
               <Link to="/core-cases" className="roviq-nav-link">Coordinated cases</Link>
               <Link to="/cases/new" className="roviq-nav-link roviq-nav-primary">Start service</Link>
               <button onClick={logout} className="roviq-nav-link roviq-account-action" type="button" aria-label="Sign out">Sign out</button>

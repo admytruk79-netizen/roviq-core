@@ -36,3 +36,14 @@
 .bg-white\/80 { background-color:rgba(11,22,36,.55) !important }.border-white\/80 { border-color:rgba(244,242,237,.18) !important }.border-white\/10 { border-color:rgba(244,242,237,.1) !important }
 
 @media (max-width:640px){.roviq-notify-banner{flex-direction:column;align-items:stretch}.roviq-notify-banner-actions{width:100%}.roviq-notify-banner-actions button{flex:1}.roviq-header-inner{min-height:58px;padding-top:7px;padding-bottom:7px}.roviq-brand{letter-spacing:.14em;font-size:14px}.roviq-mark{width:30px;height:30px}.roviq-customer-nav{gap:5px}.roviq-nav-link{min-height:48px;padding:0 9px;font-size:11px}.roviq-customer-nav .roviq-nav-link:first-child{display:none}.roviq-customer-hero{align-items:stretch;flex-direction:column;gap:14px;padding-top:2px}.roviq-customer-hero h1{font-size:32px}.roviq-start-service{width:100%}.roviq-summary-strip{gap:7px}.roviq-summary-strip>div{padding:11px}.roviq-summary-strip span{font-size:9px}.roviq-summary-strip strong{font-size:18px}.roviq-case-card{padding:15px 14px}.roviq-case-copy h2{font-size:16px}.roviq-case-status{gap:7px}.roviq-case-status>span:last-child{font-size:23px}.roviq-empty-state{padding:22px 18px}}
+
+/* Truck inventory motion: staggered card entrance, hero reveal, price-change glow and an animated empty state. Reduced-motion users get none of it (see universal.css). */
+@keyframes roviq-rise{from{opacity:0;transform:translateY(18px) scale(.985)}to{opacity:1;transform:none}}
+@keyframes roviq-glow{0%,100%{box-shadow:0 0 0 0 rgba(228,111,53,0)}50%{box-shadow:0 0 0 6px rgba(228,111,53,.28)}}
+@keyframes roviq-drive{0%{transform:translateX(-46px)}100%{transform:translateX(46px)}}
+@keyframes roviq-sheen{from{background-position:-200% 0}to{background-position:200% 0}}
+.roviq-rise{animation:roviq-rise .55s cubic-bezier(.2,.7,.2,1) both}
+.roviq-truck-card{animation:roviq-rise .5s cubic-bezier(.2,.7,.2,1) both}
+.roviq-truck-card.is-changed{animation:roviq-rise .5s cubic-bezier(.2,.7,.2,1) both,roviq-glow 1.6s ease-in-out 3}
+.roviq-price-sheen{background:linear-gradient(90deg,#fff 0%,#fff 40%,var(--roviq-copper-soft) 50%,#fff 60%,#fff 100%);background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:roviq-sheen 3.5s linear infinite}
+.roviq-drive{animation:roviq-drive 2.4s ease-in-out infinite alternate}

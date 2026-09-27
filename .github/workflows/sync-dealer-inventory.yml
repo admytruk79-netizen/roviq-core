@@ -1,0 +1,46 @@
+name: Sync dealer truck inventory into ROVIQ Core
+
+# Runs from GitHub because dealer sites block ROVIQ Core's own server.
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - 'scripts/dealer-feeds.mjs'
+      - 'scripts/sync-dealer-feeds.mjs'
+      - '.github/workflows/sync-dealer-inventory.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/dealer-feeds.mjs'
+      - 'scripts/sync-dealer-feeds.mjs'
+      - '.github/workflows/sync-dealer-inventory.yml'
+
+concurrency:
+  group: sync-dealer-inventory
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Pull requests only preview what each dealer would publish; nothing is written to Core.
+      - name: Dry run (pull request)
+        if: github.event_name == 'pull_request'
+        run: node scripts/sync-dealer-feeds.mjs --dry-run
+      - name: Publish Portland / Beaverton / Vancouver WA dealer trucks
+        if: github.event_name != 'pull_request'
+        env:
+          ROVIQ_CORE_API_URL: https://roviq-core.onrender.com
+          ROVIQ_CORE_ADMIN_EMAIL: ${{ secrets.BOOTSTRAP_ADMIN_EMAIL }}
+          ROVIQ_CORE_ADMIN_PASSWORD: ${{ secrets.BOOTSTRAP_ADMIN_PASSWORD }}
+        run: node scripts/sync-dealer-feeds.mjs

@@ -2,6 +2,7 @@ import type { InventoryFeedVehicle } from './inventory-sync.js';
 
 function text(v:unknown){return typeof v==='string'&&v.trim()?v.trim():undefined}
 function num(v:unknown){const n=Number(v);return Number.isFinite(n)?n:undefined}
+function condition(v:unknown){const c=text(v)?.toLowerCase();return c==='new'||c==='used'?c:undefined}
 function arr(v:unknown){return Array.isArray(v)?v.filter((x):x is string=>typeof x==='string'&&x.length>0):[]}
 
 export function normalizeInventoryPayload(payload:unknown):InventoryFeedVehicle[]{
@@ -16,7 +17,8 @@ export function normalizeInventoryPayload(payload:unknown):InventoryFeedVehicle[
       drivetrain:text(r.drivetrain),fuelType:text(r.fuelType??r.fuel_type),bodyStyle:text(r.bodyStyle??r.body_style),
       images:arr(r.images??r.imageUrls??r.image_urls),priceCents:price,
       marginCents:num(r.marginCents??r.margin_cents),
-      dealerName:text(r.dealerName??r.dealer_name),dealerUrl:text(r.dealerUrl??r.dealer_url),raw:r
+      dealerName:text(r.dealerName??r.dealer_name),dealerUrl:text(r.dealerUrl??r.dealer_url),raw:r,
+      condition:condition(r.condition)
     };
   }).filter((v:InventoryFeedVehicle)=>Boolean(v.id&&v.make&&v.model));
 }
