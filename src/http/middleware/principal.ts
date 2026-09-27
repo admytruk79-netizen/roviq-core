@@ -32,10 +32,19 @@ async function validateBearerPrincipal(input:{identityId:string;role:RoviqRole;a
   if(!result.rowCount) return false;
   const row=result.rows[0];
   if(row.active!==true) return false;
-  if(row.role!==input.role) return false;
-  if((row.actor_id??undefined)!==(input.actorId??undefined)) return false;
-  if(input.role!=='admin'&&row.actor_status!=='active') return false;
-  return true;
+  if(row.role===input.role&&(row.actor_id??undefined)===(input.actorId??undefined)){
+    return input.role==='admin'||row.actor_status==='active';
+  }
+  // Not the primary role: the token must match an active role grant on an active actor. Admin is
+  // never grantable, and revoking the grant rejects its tokens on the next request.
+  if(input.role==='admin'||!input.actorId) return false;
+  const grant=await pool.query(
+    `select 1 from identity_role_grants g join actors a on a.id=g.actor_id
+      where g.identity_id=$1 and g.role=$2 and g.actor_id=$3 and g.active=true and a.status='active'
+      limit 1`,
+    [input.identityId,input.role,input.actorId]
+  );
+  return (grant.rowCount??0)>0;
 }
 
 declare module 'fastify' {
