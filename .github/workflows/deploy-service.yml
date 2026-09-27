@@ -1,0 +1,38 @@
+name: Deploy ROVIQ Service App
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'service/**'
+      - 'diagnostic/**'
+      - 'tow/**'
+      - 'partner/**'
+      - 'parts-portal/**'
+      - 'fleet/**'
+      - 'shared/theme/**'
+      - 'scripts/build-service-app.mjs'
+      - '.github/workflows/deploy-service.yml'
+permissions: { contents: read }
+concurrency: { group: roviq-service-production, cancel-in-progress: true }
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      VITE_API_BASE_URL: https://roviq-core.admytruk79.workers.dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Build the Service shell and every role workspace
+        run: node scripts/build-service-app.mjs
+      - name: Record accessibility baseline and enforce performance budget
+        run: node scripts/check-portal-evidence.mjs service
+      - working-directory: service
+        run: npx wrangler pages project list | grep -qw roviq-service || npx wrangler pages project create roviq-service --production-branch=main
+      - name: Deploy the Service app
+        working-directory: service
+        run: npx wrangler pages deploy dist --project-name=roviq-service --branch=main --commit-dirty=true

@@ -87,6 +87,8 @@ Production requests use signed JWT identity. Development/bootstrap headers can b
 
 Authorization middleware enforces actor ownership server-side; clients cannot gain access by supplying another actor ID.
 
+One sign-in can hold several workspace roles. An identity keeps its primary role and an admin can grant it more non-admin roles, each bound to its own actor (`PUT`/`DELETE /api/admin/identities/:id/roles/:role`). Login returns the roles the sign-in can open, `GET /api/auth/roles` lists them, and `POST /api/auth/switch-role` issues a token scoped to one role and its actor. A granted role's tokens are rejected on the next request once the grant, the identity or that actor is deactivated.
+
 ## Core route groups
 
 - `GET /health`
@@ -171,6 +173,16 @@ npm run build
 ```
 
 Deploys to Cloudflare Pages (`roviq-ops.pages.dev`) via `.github/workflows/deploy-ops.yml` on every push to `main` that touches `ops/`. It has no access control of its own beyond the admin-role login — anyone who reaches the URL can attempt to sign in, so treat the URL as sensitive until real staff accounts (not the bootstrap admin) and, ideally, a Cloudflare Access policy are in front of it.
+
+## Service app
+
+`service/` is the single app for the service network: sign in once and swipe between a tab for each role the account holds (Diagnostic, Tow, Shop, Parts, Mobility). Each tab runs that role's existing portal, unchanged, in its own same-origin frame with a token scoped to that one role, so the tabs keep the same separation as separate logins. Signing in with the admin account opens every tab through clearly labelled admin test accounts. If any tab's sign-in expires or its role is revoked, the whole app signs out together.
+
+```
+node scripts/build-service-app.mjs   # shell at /, portals at /diagnostic/ /tow/ /partner/ /parts/ /fleet/
+```
+
+Deploys to Cloudflare Pages (`roviq-service`) via `.github/workflows/deploy-service.yml` on every push to `main` that touches the shell or any of those portals. The standalone portal sites keep deploying as before.
 
 ## Remaining work
 

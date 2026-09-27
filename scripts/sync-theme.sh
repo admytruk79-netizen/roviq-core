@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 SOURCE="shared/theme/roviq-tokens.css"
-PORTALS=(web ops partner diagnostic parts-portal)
+PORTALS=(web ops partner diagnostic parts-portal service)
 
 for portal in "${PORTALS[@]}"; do
   cp "$SOURCE" "$portal/src/roviq-tokens.css"
