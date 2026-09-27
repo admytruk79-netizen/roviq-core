@@ -37,3 +37,33 @@ describe('public inventory search',()=>{
     }finally{await app.close();query.mockClear()}
   });
 });
+
+describe('truck availability and requests',()=>{
+  it('returns availability for a VIN without dealer details and rejects malformed VINs',async()=>{
+    query.mockResolvedValueOnce({rows:[{id:'i',vin:'1FTEW2LP5TKE63673',year:2026,make:'Ford',model:'F-150',trim:'STX',condition:'new',
+      public_price_cents:4894500,source_price_cents:4511100,source_dealer_name:'Courtesy Ford',source_dealer_url:'https://d',last_seen_at:'2026-09-27T06:00:00Z',available:true}]} as never);
+    const app=Fastify();
+    await app.register(inventoryRoutes);
+    try{
+      const ok=await app.inject('/api/inventory/vin/1FTEW2LP5TKE63673');
+      expect(ok.json()).toMatchObject({found:true,available:true,priceCents:4894500,title:'2026 Ford F-150 STX'});
+      expect(JSON.stringify(ok.json())).not.toMatch(/Courtesy|4511100|https:\/\/d/);
+      expect((await app.inject('/api/inventory/vin/NOTAVIN')).statusCode).not.toBe(200);
+    }finally{await app.close();query.mockReset()}
+  });
+
+  it('accepts a request and answers 429 when the sender is rate limited',async()=>{
+    const app=Fastify();
+    await app.register(inventoryRoutes);
+    try{
+      query.mockResolvedValueOnce({rows:[{count:0}]}).mockResolvedValueOnce({rows:[]}).mockResolvedValueOnce({rows:[{id:'req'}]});
+      const body={vin:'1FTEW2LP5TKE63673',name:'A',email:'a@example.com',clientIp:'203.0.113.5'};
+      const created=await app.inject({method:'POST',url:'/api/inventory/inquiries',payload:body});
+      expect(created.statusCode).toBe(201);
+      expect(created.json()).toMatchObject({id:'req',available:false,ownerNotified:false});
+      query.mockResolvedValueOnce({rows:[{count:5}]});
+      expect((await app.inject({method:'POST',url:'/api/inventory/inquiries',payload:body})).statusCode).toBe(429);
+      expect((await app.inject({method:'POST',url:'/api/inventory/inquiries',payload:{...body,email:'bad'}})).statusCode).not.toBe(201);
+    }finally{await app.close();query.mockReset()}
+  });
+});
