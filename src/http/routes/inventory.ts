@@ -5,6 +5,7 @@ import { requireRole } from '../middleware/principal.js';
 import { normalizeInventoryPayload } from '../../services/inventory-feed-adapter.js';
 import { syncInventoryFeed } from '../../services/inventory-sync.js';
 import { lastInventoryScrape, runInventoryScrapeLocked } from '../../services/inventory-scrape.js';
+import { createVehicleInquiry, findInventoryByVin, vehicleTitle } from '../../services/vehicle-inquiries.js';
 
 const querySchema=z.object({
   q:z.string().trim().max(120).optional(),
@@ -51,6 +52,35 @@ export async function inventoryRoutes(app:FastifyInstance){
       [...filters,q.limit,q.offset]);
     const count=await pool.query(`select count(*)::int as count from vehicle_inventory where ${publicFilters}`,filters);
     return {inventory:r.rows,total:count.rows[0].count,updatedAt:new Date().toISOString(),pricingNotice:'Prices update live from dealer inventory. Taxes, title, registration and dealer fees are extra.'};
+  });
+
+  // Public availability for one truck. Dealer identity is never returned here.
+  app.get('/api/inventory/vin/:vin',{config:{public:true}},async(req,reply)=>{
+    const {vin}=z.object({vin:z.string().trim().regex(/^[A-HJ-NPR-Z0-9]{17}$/i)}).parse(req.params);
+    const v=await findInventoryByVin(vin);
+    if(!v) return reply.code(404).send({vin:vin.toUpperCase(),found:false,available:false});
+    return {vin:v.vin,found:true,available:v.available,lastSeenAt:v.last_seen_at,title:vehicleTitle(v),condition:v.condition,priceCents:v.public_price_cents};
+  });
+
+  // A customer's request for one truck. Core keeps the dealer, dealer price and
+  // availability with the request; the caller only gets the request id back.
+  app.post('/api/inventory/inquiries',{config:{public:true},bodyLimit:16*1024},async(req,reply)=>{
+    const b=z.object({
+      vin:z.string().trim().regex(/^[A-HJ-NPR-Z0-9]{17}$/i),
+      name:z.string().trim().min(1).max(120),
+      email:z.string().trim().email().max(160),
+      phone:z.string().trim().max(40).optional().nullable(),
+      note:z.string().trim().max(1200).optional().nullable(),
+      clientIp:z.string().trim().max(80).optional()
+    }).parse(req.body??{});
+    const r=await createVehicleInquiry(b,(b.clientIp||req.ip||'unknown').slice(0,80));
+    if(r.rateLimited) return reply.code(429).send({error:'too_many_requests'});
+    return reply.code(201).send({id:r.id,available:r.available,lastSeenAt:r.lastSeenAt,ownerNotified:r.notified});
+  });
+
+  app.get('/api/admin/inventory/inquiries',{preHandler:requireRole('admin')},async()=>{
+    const r=await pool.query(`select * from vehicle_inquiries order by created_at desc limit 200`);
+    return {inquiries:r.rows};
   });
 
   app.get('/api/admin/inventory',{preHandler:requireRole('admin')},async(req)=>{
