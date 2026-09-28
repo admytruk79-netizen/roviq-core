@@ -38,6 +38,26 @@ describe('public inventory search',()=>{
   });
 });
 
+describe('new trucks hidden until SHOW_NEW_TRUCKS=true',()=>{
+  it('filters out new trucks by default and shows them when switched on',async()=>{
+    const app=Fastify();
+    await app.register(inventoryRoutes);
+    const prev=process.env.SHOW_NEW_TRUCKS;
+    try{
+      delete process.env.SHOW_NEW_TRUCKS;
+      const hidden=await app.inject('/api/inventory');
+      expect(hidden.json().newTrucksShown).toBe(false);
+      expect(query.mock.calls[0][0]).toContain("condition is distinct from 'new'");
+      expect(query.mock.calls[1][0]).toContain("condition is distinct from 'new'");
+      query.mockClear();
+      process.env.SHOW_NEW_TRUCKS='true';
+      const shown=await app.inject('/api/inventory');
+      expect(shown.json().newTrucksShown).toBe(true);
+      expect(query.mock.calls[0][0]).not.toContain("condition is distinct from 'new'");
+    }finally{await app.close();query.mockClear();if(prev===undefined)delete process.env.SHOW_NEW_TRUCKS;else process.env.SHOW_NEW_TRUCKS=prev}
+  });
+});
+
 describe('truck availability and requests',()=>{
   it('returns availability for a VIN without dealer details and rejects malformed VINs',async()=>{
     query.mockResolvedValueOnce({rows:[{id:'i',vin:'1FTEW2LP5TKE63673',year:2026,make:'Ford',model:'F-150',trim:'STX',condition:'new',

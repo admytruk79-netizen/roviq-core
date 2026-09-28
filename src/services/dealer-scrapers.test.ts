@@ -13,11 +13,11 @@ describe('target truck filter',()=>{
     expect(isTargetTruck(truck({make:'Chevrolet',model:'Silverado 1500',trim:'LT',bodyStyle:'Crew Cab Pickup'}))).toBe(true);
     expect(isTargetTruck(truck({make:'Chevrolet',model:'Silverado 2500HD',trim:'LTZ Crew Cab'}))).toBe(true);
     expect(isTargetTruck(truck({make:'GMC',model:'Sierra 1500',trim:'AT4 Crew Cab'}))).toBe(true);
-    expect(isTargetTruck(truck({make:'GMC',model:'Sierra 2500HD',trim:'Denali',bodyStyle:'Crew Cab Pickup',mileage:50000}))).toBe(true);
+    expect(isTargetTruck(truck({make:'GMC',model:'Sierra 2500HD',trim:'Denali',bodyStyle:'Crew Cab Pickup',mileage:40000}))).toBe(true);
     expect(isTargetTruck(truck({make:'GMC',model:'Sierra 1500',trim:'Elevation Double Cab'}))).toBe(false);
   });
   it('rejects high mileage, unknown mileage, other cabs, other models and new trucks',()=>{
-    expect(isTargetTruck(truck({mileage:50000}))).toBe(true);
+    expect(isTargetTruck(truck({mileage:40000}))).toBe(true);
     expect(isTargetTruck(truck({mileage:50001}))).toBe(false);
     expect(isTargetTruck(truck({mileage:undefined}))).toBe(false);
     expect(isTargetTruck(truck({trim:'XL SuperCab'}))).toBe(false);
@@ -67,10 +67,10 @@ describe('Dealer Inspire scraper',()=>{
   });
 
   it('falls back to schema.org JSON-LD when no Algolia settings are on the page',async()=>{
-    const html=`<script type="application/ld+json">{"@context":"https://schema.org","@type":"Car","name":"Used 2020 Ford F-250 Lariat Crew Cab","vehicleIdentificationNumber":"1FT7W2BT","brand":{"@type":"Brand","name":"Ford"},"model":"Super Duty F-250 SRW","vehicleModelDate":"2020","itemCondition":"https://schema.org/UsedCondition","mileageFromOdometer":{"@type":"QuantitativeValue","value":41000},"offers":{"price":"55995"},"url":"/inventory/used-2020-ford-f-250/"}</script>`;
+    const html=`<script type="application/ld+json">{"@context":"https://schema.org","@type":"Car","name":"Used 2020 Ford F-250 Lariat Crew Cab","vehicleIdentificationNumber":"1FT7W2BT","brand":{"@type":"Brand","name":"Ford"},"model":"Super Duty F-250 SRW","vehicleModelDate":"2020","itemCondition":"https://schema.org/UsedCondition","mileageFromOdometer":{"@type":"QuantitativeValue","value":36000},"offers":{"price":"55995"},"url":"/inventory/used-2020-ford-f-250/"}</script>`;
     const vehicles=await scrapeDealer(damerow,async()=>new Response(html,{status:200}));
     expect(vehicles).toEqual(jsonLdVehicles(html,damerow));
-    expect(vehicles[0]).toMatchObject({id:'1FT7W2BT',make:'Ford',year:2020,mileage:41000,priceCents:5599500,dealerUrl:'https://www.damerowford.com/inventory/used-2020-ford-f-250/'});
+    expect(vehicles[0]).toMatchObject({id:'1FT7W2BT',make:'Ford',year:2020,mileage:36000,priceCents:5599500,dealerUrl:'https://www.damerowford.com/inventory/used-2020-ford-f-250/'});
     expect(isTargetTruck(vehicles[0])).toBe(true);
   });
 });

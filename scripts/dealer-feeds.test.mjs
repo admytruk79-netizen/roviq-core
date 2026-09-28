@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FEEDS, dealerComToFeedVehicle, dealerOnToFeedVehicle, fetchFeed, jazelToFeedVehicle, publishToCore, readDealerComVehicles, readDealerOnIds, readJazelVehicles, readSearchConfig, toFeedVehicle } from './dealer-feeds.mjs';
+import { FEEDS, USED_MAX_MILES, dealerComToFeedVehicle, dealerOnToFeedVehicle, fetchFeed, jazelToFeedVehicle, publishToCore, readDealerComVehicles, readDealerOnIds, readJazelVehicles, readSearchConfig, toFeedVehicle } from './dealer-feeds.mjs';
 
 const feed = FEEDS[0];
 const page = `<script>var SEARCH_SERVICE = {"apiUrl":"https://websites-search.api.carscommerce.inc","ccid":"6067995","apiKey":"public-key","search":"https://websites-search.api.carscommerce.inc/api/v1/listings/6067995","visibleStatusValues":["publish","modified","pend-sale"]}; var SEARCH_SERVICE_FIELD_MAP = {"requestedFields":["vin","pricing"]}; var other = 1;</script>`;
@@ -38,15 +38,17 @@ describe('Kendall Ford of Vancouver feed', () => {
     expect(toFeedVehicle(listing({ model: 'F-350SD', styles: { style_name: 'XL Crew Cab' } }), feed)).toBeNull();
     expect(toFeedVehicle(listing({ model: 'Ranger', styles: { style_name: 'XLT SuperCrew' } }), feed)).toBeNull();
     expect(toFeedVehicle(listing({ type: 'New' }), feed)).toBeNull();
-    expect(toFeedVehicle(listing({ mileage: 30000 }), feed)).toBeNull();
+    expect(toFeedVehicle(listing({ mileage: 40000 }), feed)).toBeNull();
+    expect(toFeedVehicle(listing({ mileage: 39999 }), feed)).toMatchObject({ mileage: 39999 });
+    expect(toFeedVehicle(listing({ mileage: 250 }), feed)).toMatchObject({ condition: 'used', mileage: 250 });
     expect(toFeedVehicle(listing({ pricing: {} }), feed)).toBeNull();
   });
 
-  it('used feeds include certified pre-owned trucks under 30,000 miles and flag them', () => {
+  it('used feeds include certified pre-owned trucks under 40,000 miles and flag them', () => {
     const cpo = toFeedVehicle(listing({ type: 'Certified Used', mileage: 8400 }), feed);
     expect(cpo).toMatchObject({ condition: 'used', mileage: 8400, trim: 'Lariat SuperCrew · Certified Pre-Owned', raw: { certified: true } });
     expect(toFeedVehicle(listing(), feed)).toMatchObject({ trim: 'Lariat SuperCrew', raw: { certified: false } });
-    expect(toFeedVehicle(listing({ type: 'Certified Used', mileage: 31000 }), feed)).toBeNull();
+    expect(toFeedVehicle(listing({ type: 'Certified Used', mileage: 41000 }), feed)).toBeNull();
     expect(feed.typeSlugs).toEqual(['Used', 'Certified Used']);
     expect(FEEDS.find(f => f.sourceKey === 'courtesy-ford-portland-used-trucks')).toMatchObject({ condition: 'used', typeSlugs: ['Used', 'Certified Used'] });
   });
@@ -99,7 +101,7 @@ describe('Kendall Ford of Vancouver feed', () => {
 });
 
 describe('Carr Chevrolet (dealer.com) feed', () => {
-  const carr = FEEDS.find(f => f.platform === 'dealer-com');
+  const carr = FEEDS.find(f => f.sourceKey === 'carr-chevrolet-beaverton-new-trucks');
   const vehicle = (o = {}) => ({
     title: ['2026 Chevrolet', 'Silverado 1500 Custom Trail Boss'], make: 'Chevrolet', model: 'Silverado 1500', trim: 'Custom Trail Boss',
     modelCode: 'CK10743', vin: '3GCUKCEDXTG495865', stockNumber: 'C269133', type: 'new', bodyStyle: 'Truck',
@@ -223,7 +225,7 @@ describe('DealerOn fallback', () => {
 });
 
 describe('Northside Ford (Jazel) feed', () => {
-  const ns = FEEDS.find(f => f.platform === 'jazel');
+  const ns = FEEDS.find(f => f.sourceKey === 'northside-ford-portland-new-trucks');
   const det = (o = {}) => ({ year: '2026', make: 'Ford', model: 'F-150', trim: 'XLT', bodyType: ['Truck'], vin: '1FTFW3L81TKD12345',
     drivetrain: 'Four Wheel Drive', fuelType: 'Gasoline', condition: 'new', mileage: 12, price: '52,340', stockNumber: 'N1', ...o });
   const tag = d => `<div data-event-details='${Buffer.from(JSON.stringify(d)).toString('base64')}' data-vin='${d.vin}'></div>`;
@@ -254,5 +256,34 @@ describe('Northside Ford (Jazel) feed', () => {
     const r = await fetchFeed(ns, fetcher);
     expect(r.vehicles.map(v => v.vin)).toEqual(['1FTFW3L81TKD12345', '1FTFW3L81TKD12346']);
     expect(urls).toContain('https://www.northsideford.net/inventory/new-vehicles/f-250/');
+  });
+});
+
+describe('used low-mileage trucks from every dealer (under 40,000 miles)', () => {
+  const byKey = k => FEEDS.find(f => f.sourceKey === k);
+  it('adds used feeds for every Portland / Beaverton / Vancouver WA dealer', () => {
+    for (const k of ['carr-chevrolet-beaverton-used-trucks', 'buick-gmc-beaverton-used-trucks', 'carr-buick-gmc-vancouver-used-trucks', 'northside-ford-portland-used-trucks'])
+      expect(byKey(k)).toMatchObject({ condition: 'used' });
+    expect(USED_MAX_MILES).toBe(40000);
+  });
+
+  it('DealerOn used: used and certified stock, any make, 200 miles counts, 40,000 does not', () => {
+    const feed = byKey('buick-gmc-beaverton-used-trucks');
+    const card = o => ({ VehicleVin: '1FTFW1E57NKF17052', VehicleType: 'Used', VehicleYear: '2023', VehicleMake: 'Ford', VehicleModel: 'F-150',
+      VehicleTrim: 'XLT', VehicleBodyStyle: 'Pickup', VehicleInternetPrice: '$41,995', VehicleMileage: '220', ...o });
+    expect(dealerOnToFeedVehicle(card(), feed)).toMatchObject({ condition: 'used', make: 'Ford', model: 'F-150', trim: 'XLT SuperCrew', mileage: 220 });
+    expect(dealerOnToFeedVehicle(card({ VehicleType: 'Certified' }), feed)).toMatchObject({ mileage: 220 });
+    expect(dealerOnToFeedVehicle(card({ VehicleMileage: '40000' }), feed)).toBeNull();
+    expect(dealerOnToFeedVehicle(card({ VehicleMileage: '0' }), feed)).toBeNull();
+    expect(dealerOnToFeedVehicle(card({ VehicleVin: '1FTFX1E57NKF17052' }), feed)).toBeNull(); // SuperCab
+    expect(dealerOnToFeedVehicle(card({ VehicleType: 'New' }), feed)).toBeNull();
+  });
+
+  it('dealer.com used: certified GM crew cabs under 40,000 miles', () => {
+    const feed = byKey('carr-chevrolet-beaverton-used-trucks');
+    const v = o => ({ vin: '3GCUDFE11PG123456', type: 'certified', year: 2023, make: 'Chevrolet', model: 'Silverado 1500', trim: 'LT', modelCode: 'CK10543',
+      pricing: { dprice: [{ type: 'TOTAL', value: '$44,500' }] }, trackingAttributes: [{ name: 'odometer', value: '18450' }], ...o });
+    expect(dealerComToFeedVehicle(v(), feed)).toMatchObject({ condition: 'used', mileage: 18450, trim: 'LT Crew Cab', priceCents: 4450000 });
+    expect(dealerComToFeedVehicle(v({ trackingAttributes: [{ name: 'odometer', value: '41000' }] }), feed)).toBeNull();
   });
 });

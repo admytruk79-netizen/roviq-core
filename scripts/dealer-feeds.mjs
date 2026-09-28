@@ -6,6 +6,10 @@
 // Dealer Inspire sites (Kendall Ford of Vancouver, Courtesy Ford Portland) load inventory from the Cars
 // Commerce search service. The page carries the public, read-only search
 // settings every visitor's browser uses; we read those and query the service.
+// Used and certified pre-owned trucks: any mileage under this cap (a 200-mile used truck counts).
+export const USED_MAX_MILES = 40000;
+const isUsedType = t => /\b(used|certified|pre-?owned|cpo)\b/i.test(String(t || ''));
+
 const PAGE_USER_AGENT = 'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Claude-User/1.0; +Claude-User@anthropic.com)';
 
 export const FEEDS = [
@@ -13,7 +17,7 @@ export const FEEDS = [
     sourceKey: 'kendall-ford-vancouver-used-trucks',
     dealerName: 'Kendall Ford of Vancouver',
     pageUrl: 'https://www.kendallfordvancouver.com/used-vehicles/',
-    // Certified pre-owned trucks are used stock with the same under-30,000-mile rule.
+    // Certified pre-owned trucks are used stock with the same mileage cap.
     typeSlugs: ['Used', 'Certified Used'],
     condition: 'used'
   },
@@ -23,6 +27,36 @@ export const FEEDS = [
     // The search settings are dealership-wide; only the new-vehicles page carries them.
     pageUrl: 'https://www.courtesyford.com/new-vehicles/',
     typeSlugs: ['Used', 'Certified Used'],
+    condition: 'used'
+  },
+  {
+    sourceKey: 'carr-chevrolet-beaverton-used-trucks',
+    dealerName: 'Carr Chevrolet (Beaverton)',
+    platform: 'dealer-com',
+    pageUrl: 'https://www.carrchevrolet.com/used-inventory/index.htm',
+    models: ['Silverado 1500', 'Silverado 2500HD', 'Sierra 1500', 'Sierra 2500HD', 'F-150', 'Super Duty F-250 SRW'],
+    condition: 'used'
+  },
+  {
+    sourceKey: 'buick-gmc-beaverton-used-trucks',
+    dealerName: 'Buick GMC of Beaverton',
+    platform: 'dealeron',
+    pageUrl: 'https://www.beavertongmc.com/searchused.aspx',
+    condition: 'used'
+  },
+  {
+    sourceKey: 'carr-buick-gmc-vancouver-used-trucks',
+    dealerName: 'Carr Buick GMC (Vancouver, WA)',
+    platform: 'dealeron',
+    pageUrl: 'https://www.carrbuickgmc.com/searchused.aspx',
+    condition: 'used'
+  },
+  {
+    sourceKey: 'northside-ford-portland-used-trucks',
+    dealerName: 'Northside Ford (Portland)',
+    platform: 'jazel',
+    pageUrl: 'https://www.northsideford.net/inventory/used-vehicles/',
+    modelPaths: ['f-150', 'f-250'],
     condition: 'used'
   },
   {
@@ -90,7 +124,7 @@ const MODELS = [
 ];
 
 // Crew cab / SuperCrew F-150, F-250, Silverado and Sierra 1500/2500 only.
-// Used feeds keep the low-mileage policy (under 30,000 miles); new feeds take
+// Used feeds keep the low-mileage policy (under USED_MAX_MILES); new feeds take
 // the dealer's new stock as listed.
 export function toFeedVehicle(listing, feed) {
   const condition = feed.condition || 'used';
@@ -100,7 +134,7 @@ export function toFeedVehicle(listing, feed) {
   if (!model || (condition === 'used' ? !/\bused\b/.test(type) : type !== condition)) return null;
   const certified = condition === 'used' && /certified/.test(type);
   const mileage = Number(listing.mileage) || 0;
-  if (mileage < 0 || (condition === 'used' && (!(Number(listing.mileage) > 0) || mileage >= 30000))) return null;
+  if (mileage < 0 || (condition === 'used' && (!(Number(listing.mileage) > 0) || mileage >= USED_MAX_MILES))) return null;
   const style = listing.styles?.style_name || listing.styles?.style_description || '';
   const descriptor = [style, listing.trim, listing.extra_fields?.title].filter(Boolean).join(' ');
   if (!/super\s*crew|crew\s*cab/i.test(descriptor)) return null;
@@ -167,20 +201,23 @@ export function readDealerComVehicles(html) {
   return [...out.values()];
 }
 
+// Ford VINs carry the cab in position 5: "W" is SuperCrew / Crew Cab.
+const fordCrewVin = (make, vin) => /^ford$/i.test(String(make || '')) && String(vin || '')[4] === 'W';
+
 const money = v => Number(String(v ?? '').replace(/[^0-9.]/g, '')) || 0;
 
 // GM model codes end in 43 for crew cabs (CK10543, CK10743, CK20743, TK10543 ...);
 // 53 is Double Cab and 03 Regular Cab.
 export function dealerComToFeedVehicle(v, feed) {
   const condition = feed.condition || 'new';
-  if (String(v.type || '').toLowerCase() !== condition) return null;
+  if (condition === 'used' ? !isUsedType(v.type) : String(v.type || '').toLowerCase() !== condition) return null;
   const model = MODELS.find(m => m.test.test(String(v.model || '')));
   if (!model) return null;
-  const crew = /43$/.test(String(v.modelCode || '')) || /crew\s*cab/i.test([v.trim, ...(v.title || [])].join(' '));
+  const crew = /43$/.test(String(v.modelCode || '')) || /crew\s*cab|super\s*crew/i.test([v.trim, v.bodyStyle, ...(v.title || [])].join(' ')) || fordCrewVin(v.make, v.vin);
   if (!crew) return null;
   const attrs = Object.fromEntries((v.trackingAttributes || []).map(a => [a.name, a.value]));
   const mileage = money(attrs.odometer);
-  if (condition === 'used' && (!mileage || mileage >= 30000)) return null;
+  if (condition === 'used' && (!mileage || mileage >= USED_MAX_MILES)) return null;
   const dp = v.pricing?.dprice || [];
   // The dealer's own advertised price (e.g. "Carr Price"), not conditional rebates.
   const price = money(dp.find(d => d.type === 'TOTAL')?.value) || money(v.pricing?.retailPrice);
@@ -188,7 +225,7 @@ export function dealerComToFeedVehicle(v, feed) {
   const base = new URL(feed.pageUrl).origin;
   return {
     id: v.vin, vin: v.vin, condition, year: Number(v.year) || Number(String(v.title?.[0] || '').slice(0, 4)) || undefined,
-    make: v.make, model: model.label(String(v.model)), trim: [v.trim, 'Crew Cab'].filter(Boolean).join(' '),
+    make: v.make, model: model.label(String(v.model)), trim: [v.trim, /F-?150/i.test(v.model) ? 'SuperCrew' : 'Crew Cab'].filter(Boolean).join(' '),
     mileage, exteriorColor: attrs.exteriorColor || undefined, drivetrain: attrs.driveLine || undefined,
     fuelType: attrs.fuelType || v.fuelType || undefined, bodyStyle: 'Crew Cab Pickup',
     images: (v.images || []).map(i => i?.uri).filter(u => typeof u === 'string').slice(0, 24),
@@ -233,20 +270,21 @@ export function dealerOnToFeedVehicle(card, feed) {
   const condition = feed.condition || 'new';
   const vin = String(card.VehicleVin || '');
   if (vin.length !== 17) return null;
-  if (String(card.VehicleType || card.VehicleCondition || condition).toLowerCase() !== condition) return null;
+  const type = card.VehicleType || card.VehicleCondition || condition;
+  if (condition === 'used' ? !isUsedType(type) : String(type).toLowerCase() !== condition) return null;
   const model = MODELS.find(m => m.test.test(String(card.VehicleModel || '')));
   if (!model) return null;
-  const crew = /43$/.test(String(card.VehicleModelCode || '')) || /crew\s*cab/i.test(`${card.VehicleBodyStyle || ''} ${card.VehicleTrim || ''}`);
+  const crew = /43$/.test(String(card.VehicleModelCode || '')) || /crew\s*cab|super\s*crew/i.test(`${card.VehicleBodyStyle || ''} ${card.VehicleTrim || ''}`) || fordCrewVin(card.VehicleMake, vin);
   if (!crew) return null;
   const mileage = money(card.VehicleMileage);
-  if (condition === 'used' && (!mileage || mileage >= 30000)) return null;
+  if (condition === 'used' && (!mileage || mileage >= USED_MAX_MILES)) return null;
   const price = money(card.VehicleInternetPrice) || money(card.TaggingPrice);
   if (price < 1000) return null;
   const origin = new URL(feed.pageUrl).origin;
   const photos = card.VehicleImageModel?.VehicleImageCarouselModel?.PhotoList || [];
   return {
     id: vin, vin, condition, year: Number(card.VehicleYear) || undefined, make: card.VehicleMake || 'GMC',
-    model: model.label(String(card.VehicleModel)), trim: [card.VehicleTrim, 'Crew Cab'].filter(Boolean).join(' '),
+    model: model.label(String(card.VehicleModel)), trim: [card.VehicleTrim, /F-?150/i.test(card.VehicleModel) ? 'SuperCrew' : 'Crew Cab'].filter(Boolean).join(' '),
     mileage, exteriorColor: card.ExteriorColorLabel || undefined, drivetrain: card.VehicleDriveTrain || undefined,
     fuelType: card.VehicleFuelType || undefined, bodyStyle: card.VehicleBodyStyle || 'Crew Cab Pickup',
     images: [...new Set(photos)].filter(u => typeof u === 'string').map(u => new URL(u, origin).href).slice(0, 24),
@@ -305,11 +343,11 @@ export function readJazelVehicles(html) {
 
 export function jazelToFeedVehicle(d, feed) {
   const condition = feed.condition || 'new';
-  if (String(d.condition || '').toLowerCase() !== condition) return null;
+  if (condition === 'used' ? !isUsedType(d.condition) : String(d.condition || '').toLowerCase() !== condition) return null;
   const model = MODELS.find(m => m.test.test(String(d.model || '')));
   if (!model || d.make !== 'Ford' || d.vin[4] !== 'W') return null;
   const mileage = money(d.mileage);
-  if (condition === 'used' && (!mileage || mileage >= 30000)) return null;
+  if (condition === 'used' && (!mileage || mileage >= USED_MAX_MILES)) return null;
   const price = money(d.price);
   if (price < 1000) return null;
   const f150 = /F-?150/i.test(d.model);
