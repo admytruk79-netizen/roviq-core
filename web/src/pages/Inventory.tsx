@@ -19,7 +19,7 @@ type Vehicle = {
   price_cents: number | null;
   last_seen_at: string;
 };
-type InventoryResponse = { inventory: Vehicle[]; total: number; updatedAt: string; pricingNotice: string };
+type InventoryResponse = { inventory: Vehicle[]; total: number; updatedAt: string; pricingNotice: string; newTrucksShown?: boolean };
 
 const REFRESH_MS = 60_000;
 const CONTACT_EMAIL = import.meta.env.VITE_INVENTORY_CONTACT_EMAIL as string | undefined;
@@ -55,7 +55,7 @@ const PRICE_CAPS = [
   { value: '7500000', label: 'Under $75,000' }
 ];
 const MILE_CAPS = [
-  { value: '', label: 'Up to 50k mi' },
+  { value: '', label: 'Up to 40k mi' },
   { value: '10000', label: 'Up to 10k mi' },
   { value: '25000', label: 'Up to 25k mi' },
   { value: '35000', label: 'Up to 35k mi' }
@@ -386,7 +386,7 @@ export function Inventory() {
             </label>
           </div>
         </div>
-        <div className="inline-flex rounded-xl border border-[var(--roviq-line)] p-1" role="group" aria-label="New or used">
+        {data?.newTrucksShown !== false && <div className="inline-flex rounded-xl border border-[var(--roviq-line)] p-1" role="group" aria-label="New or used">
           {CONDITIONS.map(c => (
             <button
               key={c.label}
@@ -398,7 +398,7 @@ export function Inventory() {
               {c.label}
             </button>
           ))}
-        </div>
+        </div>}
         <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1" role="group" aria-label="Filter by model">
           {MODELS.map(m => (
             <button
@@ -429,7 +429,7 @@ export function Inventory() {
             <svg className="roviq-drive" width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M3 16V9a1 1 0 0 1 1-1h9l3 4h3a2 2 0 0 1 2 2v2" /><circle cx="7" cy="17" r="2" /><circle cx="17" cy="17" r="2" /><path d="M9 17h6" /></svg>
           </div>
           <h2 className="text-lg font-bold text-white">No trucks match right now</h2>
-          <p className="text-sm text-[var(--roviq-muted)]">New trucks are checked every few minutes. {filtered ? 'Try widening your filters.' : 'Check back soon.'}</p>
+          <p className="text-sm text-[var(--roviq-muted)]">Trucks are checked every few minutes. {filtered ? 'Try widening your filters.' : 'Check back soon.'}</p>
           {filtered && <button type="button" onClick={clearAll} className="roviq-btn-primary text-sm">Clear filters</button>}
         </div>
       ) : (

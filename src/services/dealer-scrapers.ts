@@ -23,7 +23,7 @@ export const DEFAULT_DEALER_SOURCES:DealerSource[]=[
 
 export const sourceCondition=(source:DealerSource):VehicleCondition=>source.condition??'used';
 
-export const MAX_MILEAGE=50_000;
+export const MAX_MILEAGE=40_000;
 
 export type Fetcher=(url:string,init?:RequestInit)=>Promise<Response>;
 

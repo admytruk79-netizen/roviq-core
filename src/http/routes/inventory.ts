@@ -20,7 +20,10 @@ const querySchema=z.object({
   limit:z.coerce.number().int().min(1).max(100).default(48),
   offset:z.coerce.number().int().min(0).default(0)
 });
-const publicFilters=`status='active' and last_seen_at >= now() - interval '24 hours'
+// New trucks stay synced but are hidden from the public until SHOW_NEW_TRUCKS=true
+// (the owner's dealer licence for new vehicles is pending).
+export const newTrucksShown=()=>process.env.SHOW_NEW_TRUCKS==='true';
+const publicFilters=()=>`status='active' and last_seen_at >= now() - interval '24 hours'${newTrucksShown()?'':" and condition is distinct from 'new'"}
   and ($1::text is null or concat_ws(' ',year::text,make,model,trim) ilike '%'||$1||'%')
   and ($2::text is null or make ilike $2)
   and ($3::text is null or model ilike $3)
@@ -46,12 +49,12 @@ export async function inventoryRoutes(app:FastifyInstance){
       select id,condition,vin,year,make,model,trim,mileage,exterior_color,drivetrain,fuel_type,body_style,
              image_urls,public_price_cents::int as public_price_cents,public_price_cents::int as price_cents,last_seen_at
       from vehicle_inventory
-      where ${publicFilters}
+      where ${publicFilters()}
       order by ${publicSorts[q.sort]},id
       limit $9 offset $10`,
       [...filters,q.limit,q.offset]);
-    const count=await pool.query(`select count(*)::int as count from vehicle_inventory where ${publicFilters}`,filters);
-    return {inventory:r.rows,total:count.rows[0].count,updatedAt:new Date().toISOString(),pricingNotice:'Prices update live from dealer inventory. Taxes, title, registration and dealer fees are extra.'};
+    const count=await pool.query(`select count(*)::int as count from vehicle_inventory where ${publicFilters()}`,filters);
+    return {inventory:r.rows,total:count.rows[0].count,newTrucksShown:newTrucksShown(),updatedAt:new Date().toISOString(),pricingNotice:'Prices update live from dealer inventory. Taxes, title, registration and dealer fees are extra.'};
   });
 
   // Public availability for one truck. Dealer identity is never returned here.
