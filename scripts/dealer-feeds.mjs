@@ -13,7 +13,16 @@ export const FEEDS = [
     sourceKey: 'kendall-ford-vancouver-used-trucks',
     dealerName: 'Kendall Ford of Vancouver',
     pageUrl: 'https://www.kendallfordvancouver.com/used-vehicles/',
-    typeSlug: 'Used',
+    // Certified pre-owned trucks are used stock with the same under-30,000-mile rule.
+    typeSlugs: ['Used', 'Certified Used'],
+    condition: 'used'
+  },
+  {
+    sourceKey: 'courtesy-ford-portland-used-trucks',
+    dealerName: 'Courtesy Ford (Portland)',
+    // The search settings are dealership-wide; only the new-vehicles page carries them.
+    pageUrl: 'https://www.courtesyford.com/new-vehicles/',
+    typeSlugs: ['Used', 'Certified Used'],
     condition: 'used'
   },
   {
@@ -86,7 +95,10 @@ const MODELS = [
 export function toFeedVehicle(listing, feed) {
   const condition = feed.condition || 'used';
   const model = MODELS.find(m => m.test.test(String(listing.model || '')));
-  if (!model || String(listing.type || '').toLowerCase() !== condition) return null;
+  const type = String(listing.type || '').toLowerCase();
+  // "Certified Used" counts as used; it is flagged so customers see the CPO status.
+  if (!model || (condition === 'used' ? !/\bused\b/.test(type) : type !== condition)) return null;
+  const certified = condition === 'used' && /certified/.test(type);
   const mileage = Number(listing.mileage) || 0;
   if (mileage < 0 || (condition === 'used' && (!(Number(listing.mileage) > 0) || mileage >= 30000))) return null;
   const style = listing.styles?.style_name || listing.styles?.style_description || '';
@@ -102,7 +114,7 @@ export function toFeedVehicle(listing, feed) {
     year: listing.year,
     make: listing.make || 'Ford',
     model: model.label(String(listing.model)),
-    trim: [listing.trim, /super\s*crew/i.test(descriptor) ? 'SuperCrew' : 'Crew Cab'].filter(Boolean).join(' '),
+    trim: [listing.trim, /super\s*crew/i.test(descriptor) ? 'SuperCrew' : 'Crew Cab', certified ? '· Certified Pre-Owned' : ''].filter(Boolean).join(' '),
     mileage,
     exteriorColor: listing.styles?.exterior_color || undefined,
     drivetrain: listing.mechanical?.drivetrain || undefined,
@@ -113,7 +125,7 @@ export function toFeedVehicle(listing, feed) {
     dealerName: feed.dealerName,
     dealerUrl: listing.vdp_url || undefined,
     raw: {
-      source: 'cars-commerce-search', stock: listing.stock, style, engine: listing.mechanical?.engine,
+      source: 'cars-commerce-search', certified, stock: listing.stock, style, engine: listing.mechanical?.engine,
       msrp: p.msrp, dealerPrice: price, statusLabel: listing.extra_fields?.lightning?.statusLabel
     }
   };
@@ -339,7 +351,7 @@ export async function fetchFeed(feed, fetcher = fetch) {
     const res = await fetcher(cfg.search + '/search', {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json', 'x-api-key': cfg.apiKey },
-      body: JSON.stringify({ page: n, perPage: 100, filters: { status: cfg.statuses, type_slug: [feed.typeSlug] }, requestedFields: cfg.requestedFields })
+      body: JSON.stringify({ page: n, perPage: 100, filters: { status: cfg.statuses, type_slug: feed.typeSlugs ?? [feed.typeSlug] }, requestedFields: cfg.requestedFields })
     });
     if (!res.ok) throw new Error(`search_service_${res.status}`);
     const body = await res.json();

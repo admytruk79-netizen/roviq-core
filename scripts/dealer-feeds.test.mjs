@@ -42,6 +42,15 @@ describe('Kendall Ford of Vancouver feed', () => {
     expect(toFeedVehicle(listing({ pricing: {} }), feed)).toBeNull();
   });
 
+  it('used feeds include certified pre-owned trucks under 30,000 miles and flag them', () => {
+    const cpo = toFeedVehicle(listing({ type: 'Certified Used', mileage: 8400 }), feed);
+    expect(cpo).toMatchObject({ condition: 'used', mileage: 8400, trim: 'Lariat SuperCrew · Certified Pre-Owned', raw: { certified: true } });
+    expect(toFeedVehicle(listing(), feed)).toMatchObject({ trim: 'Lariat SuperCrew', raw: { certified: false } });
+    expect(toFeedVehicle(listing({ type: 'Certified Used', mileage: 31000 }), feed)).toBeNull();
+    expect(feed.typeSlugs).toEqual(['Used', 'Certified Used']);
+    expect(FEEDS.find(f => f.sourceKey === 'courtesy-ford-portland-used-trucks')).toMatchObject({ condition: 'used', typeSlugs: ['Used', 'Certified Used'] });
+  });
+
   it('new-truck feed keeps new crew-cab trucks at any delivery mileage and rejects used ones', () => {
     const newFeed = FEEDS.find(f => f.condition === 'new');
     expect(newFeed).toMatchObject({ dealerName: 'Kendall Ford of Vancouver', typeSlug: 'New' });
@@ -71,7 +80,7 @@ describe('Kendall Ford of Vancouver feed', () => {
     const { scanned, vehicles } = await fetchFeed(feed, fetcher);
     expect(calls[1].url).toBe('https://websites-search.api.carscommerce.inc/api/v1/listings/6067995/search');
     expect(calls[1].init.headers['x-api-key']).toBe('public-key');
-    expect(JSON.parse(calls[1].init.body)).toMatchObject({ page: 1, perPage: 100, filters: { type_slug: ['Used'] } });
+    expect(JSON.parse(calls[1].init.body)).toMatchObject({ page: 1, perPage: 100, filters: { type_slug: ['Used', 'Certified Used'] } });
     expect(scanned).toBe(102);
     expect(vehicles).toHaveLength(100);
   });
