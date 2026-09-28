@@ -262,8 +262,9 @@ describe('Northside Ford (Jazel) feed', () => {
 describe('used low-mileage trucks from every dealer (under 40,000 miles)', () => {
   const byKey = k => FEEDS.find(f => f.sourceKey === k);
   it('adds used feeds for every Portland / Beaverton / Vancouver WA dealer', () => {
-    for (const k of ['carr-chevrolet-beaverton-used-trucks', 'buick-gmc-beaverton-used-trucks', 'carr-buick-gmc-vancouver-used-trucks', 'northside-ford-portland-used-trucks'])
+    for (const k of ['carr-chevrolet-beaverton-used-trucks', 'buick-gmc-beaverton-used-trucks', 'northside-ford-portland-used-trucks'])
       expect(byKey(k)).toMatchObject({ condition: 'used' });
+    expect(byKey('carr-buick-gmc-vancouver-used-trucks')).toBeUndefined(); // same Carr group stock as Carr Chevrolet
     expect(USED_MAX_MILES).toBe(40000);
   });
 

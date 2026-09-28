@@ -29,6 +29,7 @@ export const FEEDS = [
     typeSlugs: ['Used', 'Certified Used'],
     condition: 'used'
   },
+  // Carr Buick GMC (Vancouver) lists the same Carr group used stock, so it is read once here.
   {
     sourceKey: 'carr-chevrolet-beaverton-used-trucks',
     dealerName: 'Carr Chevrolet (Beaverton)',
@@ -42,13 +43,6 @@ export const FEEDS = [
     dealerName: 'Buick GMC of Beaverton',
     platform: 'dealeron',
     pageUrl: 'https://www.beavertongmc.com/searchused.aspx',
-    condition: 'used'
-  },
-  {
-    sourceKey: 'carr-buick-gmc-vancouver-used-trucks',
-    dealerName: 'Carr Buick GMC (Vancouver, WA)',
-    platform: 'dealeron',
-    pageUrl: 'https://www.carrbuickgmc.com/searchused.aspx',
     condition: 'used'
   },
   {
