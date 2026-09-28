@@ -7,6 +7,7 @@ import { audit } from '../../services/audit.js';
 import { appendCaseEvent } from '../../services/orchestration.js';
 import { setCustomerSnapshot } from '../../services/operations.js';
 import { createPartsOrder } from '../../services/parts.js';
+import { sourcingAllowedSql } from '../../services/network-inventory.js';
 
 const executableRepairClass = z.enum(['battery','tire','ignition','electrical_minor','fluid_service','minor_mechanical']);
 const repairClass = z.enum(['battery','tire','ignition','electrical_minor','fluid_service','minor_mechanical','unknown']);
@@ -75,11 +76,14 @@ function decide(a:Assessment,p:CapabilityProfile|null,partsFulfillable:boolean):
   if(a.drivability==='limited')return'temporary_stabilization' as const;
   return'field_repair' as const;
 }
-async function findFulfillingSupplier(items:{sku:string;quantity:number}[]):Promise<string|null>{
+// Only stock the operator may source: dedicated parts suppliers, the operator's own stock, or stock
+// whose owner granted the operator a parts transfer permission (network-inventory.ts).
+async function findFulfillingSupplier(items:{sku:string;quantity:number}[],operatorActorId:string|null):Promise<string|null>{
   if(!items.length)return null;
   const first=await pool.query(
-    `select distinct supplier_actor_id from parts_inventory where active=true and sku=$1 and (quantity_on_hand-quantity_reserved)>=$2`,
-    [items[0].sku,items[0].quantity]
+    `select distinct pi.supplier_actor_id from parts_inventory pi join actors a on a.id=pi.supplier_actor_id and a.status='active'
+      where pi.active=true and pi.sku=$1 and (pi.quantity_on_hand-pi.quantity_reserved)>=$2 and ${sourcingAllowedSql('a.id','a.actor_type','$3')}`,
+    [items[0].sku,items[0].quantity,operatorActorId]
   );
   let candidates=first.rows.map((r:any)=>r.supplier_actor_id as string);
   for(const item of items.slice(1)){
@@ -147,7 +151,7 @@ export async function fieldServiceRoutes(app:FastifyInstance){
     if(!b.customerAuthorizationRequired&&req.principal.role!=='admin')return reply.code(403).send({error:'customer_authorization_waiver_forbidden'});
     const profileResult=operatorActorId?await pool.query('select * from field_service_actor_capabilities where actor_id=$1',[operatorActorId]):{rows:[]};
     const profile=(profileResult.rows[0]??null) as CapabilityProfile|null;
-    const fulfillingSupplierActorId=b.requiredParts.length?await findFulfillingSupplier(b.requiredParts):null;
+    const fulfillingSupplierActorId=b.requiredParts.length?await findFulfillingSupplier(b.requiredParts,operatorActorId):null;
     const partsFulfillable=b.requiredParts.length===0||fulfillingSupplierActorId!==null;
     const action=decide(b,profile,partsFulfillable);
     const authorizationRequired=b.customerAuthorizationRequired&&(action==='field_repair'||action==='temporary_stabilization');

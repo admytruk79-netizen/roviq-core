@@ -180,6 +180,12 @@ Every maintenance case can carry the vehicle it is about, stored in `customer_ve
 
 `GET /api/maintenance/cases/:id/vehicle` returns the vehicle reduced to the caller's role: customer, shop, diagnostic and admin see everything; tow sees what it needs to find and load the vehicle (no VIN or odometer); parts sees what it needs for fitment (no plate, color or odometer); mobility sees nothing. Tow's job queue carries the same tow view on every dispatch, and a repair order opened for a case uses the case vehicle unless one is named.
 
+## Dealership inventory sharing
+
+A dealership's or shop's stock is private by default; ROVIQ never assumes cross-dealer inventory access or transfer rights. Each business sets an inventory disclosure policy per resource (`PUT /api/partners/me/inventory-policies/:resourceType`, visibility `private` | `same_organization` | `named_partners` | `network`, with `availability_only` or `quantity` detail) and grants named partners view and/or transfer-request rights (`PUT`/`DELETE /api/partners/me/transfer-permissions/:granteeActorId/:resourceType`, optional expiry). Admins can do the same for any actor under `/api/admin/actors/:actorId/...`. `GET /api/network/parts?sku=` returns only the stock the caller may see.
+
+Automatic sourcing (parts supplier auto-assignment and on-site field repair) uses dealership stock only for the business doing the work, or under an active transfer permission from the owner; dedicated parts suppliers are always eligible. The Shop portal's "Network sharing" panel manages these settings.
+
 ## Service app
 
 `service/` is the single app for the service network: sign in once and swipe between a tab for each role the account holds (Diagnostic, Tow, Shop, Parts, Mobility). Each tab runs that role's existing portal, unchanged, in its own same-origin frame with a token scoped to that one role, so the tabs keep the same separation as separate logins. Signing in with the admin account opens every tab through clearly labelled admin test accounts. If any tab's sign-in expires or its role is revoked, the whole app signs out together.

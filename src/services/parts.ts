@@ -8,6 +8,7 @@ import { assertCaseAccess } from './case-access.js';
 import { rankCoordinationCandidates, type CoordinationCandidate } from './coordination-engine.js';
 import { loadActiveRoutingPolicy } from './routing-repository.js';
 import { handoffStatusForParts, upsertNetworkHandoff } from './network-execution.js';
+import { sourcingAllowedSql } from './network-inventory.js';
 
 type PartItemInput = { sku:string; partNumber?:string; description?:string; quantity:number; attributes?:Record<string,unknown> };
 
@@ -150,7 +151,11 @@ export async function assignSupplier(principal: Principal, orderId:string, suppl
 // Candidates that can fulfill every requested SKU/quantity combination in full -- an order is
 // sourced from one supplier, not split across several, matching how reserveOrderInventory already
 // commits the whole order to a single supplier_actor_id.
-async function loadPartsSupplierCandidates(items:{sku:string;quantity:number}[]) {
+//
+// Dealership and shop stock is only a candidate when its owner is the business doing the repair or
+// has granted that business an active parts transfer permission (network-inventory.ts); dedicated
+// parts suppliers are always candidates.
+async function loadPartsSupplierCandidates(items:{sku:string;quantity:number}[], repairingActorId:string|null) {
   const wanted = JSON.stringify(items.map(item=>({ sku:item.sku, quantity:item.quantity })));
   const result = await pool.query(
     `with wanted as (
@@ -173,9 +178,10 @@ async function loadPartsSupplierCandidates(items:{sku:string;quantity:number}[])
             (select avg(pm.value) from performance_metrics pm where pm.actor_id=a.id and pm.metric_code='on_time_rate')::float as on_time_rate
      from fulfillable f
      join actors a on a.id = f.supplier_actor_id and a.status='active' and a.actor_type in ('parts','partner','dealership')
+     where ${sourcingAllowedSql('a.id','a.actor_type','$2')}
      group by a.id
      having count(distinct f.sku) = (select count(*) from wanted)`,
-    [wanted]
+    [wanted, repairingActorId]
   );
   return result.rows as { actor_id:string; fulfillment_ratio:number|null; total_price:string|number|null; avg_rating:number|null; on_time_rate:number|null }[];
 }
@@ -190,7 +196,8 @@ async function loadPartsSupplierCandidates(items:{sku:string;quantity:number}[])
  */
 export async function autoAssignPartsSupplier(principal: Principal, orderId:string) {
   const orderResult = await pool.query(
-    `select po.*, sc.domain_id from parts_orders po join service_cases sc on sc.id=po.case_id where po.id=$1`,
+    `select po.*, sc.domain_id, coalesce(sc.selected_actor_id, sc.current_owner_actor_id) as repairing_actor_id
+       from parts_orders po join service_cases sc on sc.id=po.case_id where po.id=$1`,
     [orderId]
   );
   const order = orderResult.rows[0];
@@ -201,7 +208,7 @@ export async function autoAssignPartsSupplier(principal: Principal, orderId:stri
   if (!policy) return { result:null, policyRequired:true, ranked:[] as unknown[] };
 
   const items = await pool.query('select sku,quantity from parts_order_items where order_id=$1',[orderId]);
-  const candidates = await loadPartsSupplierCandidates(items.rows);
+  const candidates = await loadPartsSupplierCandidates(items.rows, order.repairing_actor_id ?? null);
 
   const eligible:CoordinationCandidate[] = candidates.map(candidate=>({
     actorId:candidate.actor_id,
