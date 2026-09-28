@@ -5,7 +5,7 @@ import { requireRole } from '../middleware/principal.js';
 import { normalizeInventoryPayload } from '../../services/inventory-feed-adapter.js';
 import { syncInventoryFeed } from '../../services/inventory-sync.js';
 import { lastInventoryScrape, runInventoryScrapeLocked } from '../../services/inventory-scrape.js';
-import { createVehicleInquiry, findInventoryByVin, vehicleTitle } from '../../services/vehicle-inquiries.js';
+import { createVehicleInquiry, dealerDetailsForVins, findInventoryByVin, siteKeyMatches, vehicleTitle } from '../../services/vehicle-inquiries.js';
 
 const querySchema=z.object({
   q:z.string().trim().max(120).optional(),
@@ -76,6 +76,15 @@ export async function inventoryRoutes(app:FastifyInstance){
     const r=await createVehicleInquiry(b,(b.clientIp||req.ip||'unknown').slice(0,80));
     if(r.rateLimited) return reply.code(429).send({error:'too_many_requests'});
     return reply.code(201).send({id:r.id,available:r.available,lastSeenAt:r.lastSeenAt,ownerNotified:r.notified});
+  });
+
+  // Dealer behind each requested truck, for the owner's website bookings page only.
+  // Server-to-server: the site sends the shared SITE_DEALER_LOOKUP_KEY; unset key = lookup off.
+  app.post('/api/site/inventory/dealers',{config:{public:true},bodyLimit:8*1024},async(req,reply)=>{
+    if(!process.env.SITE_DEALER_LOOKUP_KEY) return reply.code(503).send({error:'not_configured'});
+    if(!siteKeyMatches(req.headers['x-roviq-site-key'])) return reply.code(401).send({error:'unauthorized'});
+    const b=z.object({vins:z.array(z.string().trim().regex(/^[A-HJ-NPR-Z0-9]{17}$/i)).max(50)}).parse(req.body??{});
+    return reply.header('cache-control','no-store').send({dealers:await dealerDetailsForVins(b.vins)});
   });
 
   app.get('/api/admin/inventory/inquiries',{preHandler:requireRole('admin')},async()=>{

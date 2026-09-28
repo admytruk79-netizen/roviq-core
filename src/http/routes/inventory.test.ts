@@ -67,3 +67,43 @@ describe('truck availability and requests',()=>{
     }finally{await app.close();query.mockReset()}
   });
 });
+
+describe('site dealer lookup',()=>{
+  const KEY='k'.repeat(32);
+  it('is off without a configured key and rejects a wrong key',async()=>{
+    const app=Fastify();
+    await app.register(inventoryRoutes);
+    const prev=process.env.SITE_DEALER_LOOKUP_KEY;
+    try{
+      delete process.env.SITE_DEALER_LOOKUP_KEY;
+      const payload={vins:['1FTEW2LP5TKE63673']};
+      expect((await app.inject({method:'POST',url:'/api/site/inventory/dealers',payload,headers:{'x-roviq-site-key':KEY}})).statusCode).toBe(503);
+      process.env.SITE_DEALER_LOOKUP_KEY=KEY;
+      expect((await app.inject({method:'POST',url:'/api/site/inventory/dealers',payload})).statusCode).toBe(401);
+      expect((await app.inject({method:'POST',url:'/api/site/inventory/dealers',payload,headers:{'x-roviq-site-key':'wrong'}})).statusCode).toBe(401);
+      expect(query).not.toHaveBeenCalled();
+    }finally{await app.close();query.mockReset();if(prev===undefined)delete process.env.SITE_DEALER_LOOKUP_KEY;else process.env.SITE_DEALER_LOOKUP_KEY=prev}
+  });
+
+  it('returns the current dealer, falling back to the snapshot kept with the request',async()=>{
+    const app=Fastify();
+    await app.register(inventoryRoutes);
+    const prev=process.env.SITE_DEALER_LOOKUP_KEY;
+    process.env.SITE_DEALER_LOOKUP_KEY=KEY;
+    try{
+      query
+        .mockResolvedValueOnce({rows:[{vin:'1GTUUEE82TG498073',source_dealer_name:'Buick GMC of Beaverton',source_dealer_url:'https://gmc/v',
+          source_price_cents:7499500,public_price_cents:8136958,last_seen_at:'2026-09-28T16:00:00Z',available:true}]} as never)
+        .mockResolvedValueOnce({rows:[{vin:'1FTEW2LP5TKE63673',dealer_name:'Courtesy Ford (Portland)',dealer_url:'https://cf/v',
+          source_price_cents:4511100,quoted_price_cents:4894500}]} as never);
+      const res=await app.inject({method:'POST',url:'/api/site/inventory/dealers',headers:{'x-roviq-site-key':KEY},
+        payload:{vins:['1gtuuee82tg498073','1FTEW2LP5TKE63673']}});
+      expect(res.statusCode).toBe(200);
+      expect(res.json().dealers).toMatchObject({
+        '1GTUUEE82TG498073':{dealerName:'Buick GMC of Beaverton',dealerPriceCents:7499500,available:true,from:'inventory'},
+        '1FTEW2LP5TKE63673':{dealerName:'Courtesy Ford (Portland)',dealerUrl:'https://cf/v',available:false,from:'request'}});
+      expect(query.mock.calls[0][1]).toEqual([['1GTUUEE82TG498073','1FTEW2LP5TKE63673']]);
+      expect((await app.inject({method:'POST',url:'/api/site/inventory/dealers',headers:{'x-roviq-site-key':KEY},payload:{vins:['bad']}})).statusCode).not.toBe(200);
+    }finally{await app.close();query.mockReset();if(prev===undefined)delete process.env.SITE_DEALER_LOOKUP_KEY;else process.env.SITE_DEALER_LOOKUP_KEY=prev}
+  });
+});
