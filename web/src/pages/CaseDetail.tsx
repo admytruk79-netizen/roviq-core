@@ -3,7 +3,8 @@ import { Link, useParams } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import { formatAmount, formatDateTime, formatMinorAmount, humanizeToken } from '../lib/format';
 import { StatusBadge } from '../components/StatusBadge';
-import type { CustomerSnapshot, PaymentIntent, ServiceCase, ServicePlanResponse, TimelineEvent } from '../lib/types';
+import type { CustomerSnapshot, CustomerVehicle, PaymentIntent, ServiceCase, ServicePlanResponse, TimelineEvent } from '../lib/types';
+import { vehicleLabel } from '../components/VehiclePicker';
 
 type Spatial = {
   origin?: unknown;
@@ -137,6 +138,7 @@ export function CaseDetail() {
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [spatial, setSpatial] = useState<Spatial | null>(null);
   const [fieldDecisions, setFieldDecisions] = useState<FieldDecision[]>([]);
+  const [vehicle, setVehicle] = useState<CustomerVehicle | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const [fieldDecisionError, setFieldDecisionError] = useState<string | null>(null);
@@ -152,16 +154,18 @@ export function CaseDetail() {
     if (!id) return;
     setError(null);
     try {
-      const [caseRes, planRes, paymentsRes, timelineRes, spatialRes, fieldRes] = await Promise.all([
+      const [caseRes, planRes, paymentsRes, timelineRes, spatialRes, fieldRes, vehicleRes] = await Promise.all([
         api.get<{ case: ServiceCase; customerSnapshot: CustomerSnapshot }>(`/api/maintenance/cases/${id}`),
         api.get<ServicePlanResponse>(`/api/maintenance/cases/${id}/service-plan`).catch(() => null),
         api.get<{ payments: PaymentIntent[] }>(`/api/maintenance/cases/${id}/payments`),
         api.get<{ timeline: TimelineEvent[] }>(`/api/maintenance/cases/${id}/timeline`),
         api.get<{ spatial: Spatial }>(`/api/maintenance/cases/${id}/spatial`).catch(() => null),
-        api.get<{ decisions: FieldDecision[] }>(`/api/maintenance/cases/${id}/field-service`).catch(() => ({ decisions: [] }))
+        api.get<{ decisions: FieldDecision[] }>(`/api/maintenance/cases/${id}/field-service`).catch(() => ({ decisions: [] })),
+        api.get<{ vehicle: CustomerVehicle | null }>(`/api/maintenance/cases/${id}/vehicle`).catch(() => ({ vehicle: null }))
       ]);
       setCaseData(caseRes.case);
       setSnapshot(caseRes.customerSnapshot);
+      setVehicle(vehicleRes.vehicle);
       setPlan(planRes);
       setPayments(paymentsRes.payments);
       setTimeline(timelineRes.timeline);
@@ -340,6 +344,19 @@ export function CaseDetail() {
           {cancelError && <p className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{cancelError}</p>}
         </div>
       </section>
+
+      {vehicle && (
+        <section className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Vehicle</p>
+            <p className="mt-1 text-sm font-medium text-slate-800">{vehicleLabel(vehicle)}</p>
+            {(vehicle.licensePlate || vehicle.vin) && <p className="mt-0.5 text-xs text-slate-500">{[vehicle.licensePlate, vehicle.vin && `VIN ${vehicle.vin}`].filter(Boolean).join(' · ')}</p>}
+          </div>
+          <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${vehicle.verified ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+            {vehicle.verified ? 'Confirmed by technician' : 'Awaiting on-site check'}
+          </span>
+        </section>
+      )}
 
       {caseData.attributes?.description && (
         <section className="rounded-xl border border-slate-200 bg-white p-4">

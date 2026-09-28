@@ -6,6 +6,7 @@ import { demandRoutes } from './routes/demands.js';
 import { caseRoutes } from './routes/cases.js';
 import { exceptionRoutes } from './routes/exceptions.js';
 import { coherenceRoutes } from './routes/coherence.js';
+import { caseVehicleRoutes } from './routes/case-vehicle.js';
 import { fieldServiceRoutes } from './routes/field-service.js';
 import { meRoutes } from './routes/me.js';
 import { servicePlanRoutes } from './routes/service-plans.js';
@@ -53,7 +54,7 @@ type RouteModule = {
 
 const routeModules: RouteModule[] = [
   { name: 'platform', plugins: [authRoutes, coreRoutes, meRoutes, caseKernelRoutes, capabilityRoutes, connectorGatewayRoutes, sagaRoutes, policyRoutes, coreApprovalToolRoutes, tradeCaseRoutes, coreOperationsRoutes, coreActorSurfaceRoutes] },
-  { name: 'case-lifecycle', plugins: [demandRoutes, caseRoutes, exceptionRoutes, servicePlanRoutes, quoteRoutes, caseAddonItemRoutes] },
+  { name: 'case-lifecycle', plugins: [demandRoutes, caseRoutes, caseVehicleRoutes, exceptionRoutes, servicePlanRoutes, quoteRoutes, caseAddonItemRoutes] },
   { name: 'coordination', plugins: [routingRoutes, triageRoutes, triageEvaluationRoutes, coherenceRoutes, connectedVehicleRoutes, networkOrchestrationRoutes] },
   { name: 'service-operations', plugins: [diagnosticRoutes, fieldServiceRoutes, transportRoutes, mobilityRoutes, partsRoutes] },
   { name: 'shop-os', plugins: [shopOsRoutes, shopOsDeferredAppointmentChoiceRoutes, shopOsFloorRoutes] },

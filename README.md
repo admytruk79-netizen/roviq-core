@@ -174,6 +174,12 @@ npm run build
 
 Deploys to Cloudflare Pages (`roviq-ops.pages.dev`) via `.github/workflows/deploy-ops.yml` on every push to `main` that touches `ops/`. It has no access control of its own beyond the admin-role login — anyone who reaches the URL can attempt to sign in, so treat the URL as sensitive until real staff accounts (not the bootstrap admin) and, ideally, a Cloudflare Access policy are in front of it.
 
+## Case vehicle
+
+Every maintenance case can carry the vehicle it is about, stored in `customer_vehicles` (the same record Shop OS repair orders, deferred service and connected devices use). The customer keeps a garage of saved vehicles (`GET`/`POST /api/me/vehicles`, `PATCH`/`DELETE /api/me/vehicles/:id`) and picks one, or adds one, when opening a case (`POST /api/demands` with `vehicleId` or `vehicle`). The assigned diagnostic, the shop or an admin confirms it on site (`POST /api/maintenance/cases/:id/vehicle/confirm`: corrections, VIN, odometer), which marks it verified; the customer can switch vehicles only until then (`PUT /api/maintenance/cases/:id/vehicle`).
+
+`GET /api/maintenance/cases/:id/vehicle` returns the vehicle reduced to the caller's role: customer, shop, diagnostic and admin see everything; tow sees what it needs to find and load the vehicle (no VIN or odometer); parts sees what it needs for fitment (no plate, color or odometer); mobility sees nothing. Tow's job queue carries the same tow view on every dispatch, and a repair order opened for a case uses the case vehicle unless one is named.
+
 ## Service app
 
 `service/` is the single app for the service network: sign in once and swipe between a tab for each role the account holds (Diagnostic, Tow, Shop, Parts, Mobility). Each tab runs that role's existing portal, unchanged, in its own same-origin frame with a token scoped to that one role, so the tabs keep the same separation as separate logins. Signing in with the admin account opens every tab through clearly labelled admin test accounts. If any tab's sign-in expires or its role is revoked, the whole app signs out together.

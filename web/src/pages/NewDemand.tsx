@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api } from '../lib/api';
+import { api, ApiError } from '../lib/api';
+import { VehiclePicker, type VehicleChoice } from '../components/VehiclePicker';
 import type { ServiceCase } from '../lib/types';
 
 const ISSUE_TYPES: { value: string; label: string }[] = [
@@ -43,6 +44,7 @@ export function NewDemand() {
   const [locationMessage, setLocationMessage] = useState('');
   const [manualLocation, setManualLocation] = useState('');
   const [gpsAttempted, setGpsAttempted] = useState(false);
+  const [vehicle, setVehicle] = useState<VehicleChoice>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
@@ -68,6 +70,11 @@ export function NewDemand() {
     e.preventDefault();
     setSubmitting(true);
     setError(null);
+    if (!vehicle) {
+      setError('Choose your vehicle, or enter its year, make and model.');
+      setSubmitting(false);
+      return;
+    }
     try {
       const demandType = issueType === 'other' ? otherIssue.trim().toLowerCase().replace(/\s+/g, '_') : issueType;
       const intakeLocation = location ?? (gpsAttempted ? null : await captureLocation());
@@ -84,11 +91,17 @@ export function NewDemand() {
         demandType,
         ...(intakeLocation ? { location: intakeLocation } : {}),
         urgency,
-        attributes
+        attributes,
+        ...vehicle
       });
       navigate(`/cases/${res.case.id}`);
-    } catch {
-      setError('Could not submit your request. Please try again.');
+    } catch (err) {
+      const code = err instanceof ApiError ? err.message : '';
+      setError(
+        code === 'vehicle_vin_conflict' ? 'That VIN is already registered to another account. Leave the VIN blank and our technician will confirm it on site.'
+          : err instanceof ApiError && err.status === 400 && 'vehicle' in vehicle ? 'Check the vehicle details: the VIN must be 17 letters and digits (no I, O or Q).'
+            : 'Could not submit your request. Please try again.'
+      );
       setSubmitting(false);
     }
   }
@@ -97,6 +110,7 @@ export function NewDemand() {
     <div className="max-w-lg space-y-4">
       <h1 className="text-lg font-semibold">Report a new issue</h1>
       <form onSubmit={handleSubmit} className="space-y-4 rounded-lg border border-slate-200 bg-white p-6">
+        <VehiclePicker onChange={setVehicle} />
         <div>
           <label className="block text-sm font-medium text-slate-700" htmlFor="issueType">
             What's going on with your vehicle?

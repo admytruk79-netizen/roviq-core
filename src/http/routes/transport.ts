@@ -4,6 +4,7 @@ import { pool } from '../../db/pool.js';
 import { requireRole, requireRoleOrCapability } from '../middleware/principal.js';
 import { assignTransportDispatch, createTransportDispatch, getTransportDispatch, updateTransportStatus } from '../../services/transport.js';
 import { resolveTransportLocations } from '../../services/transport-spatial.js';
+import { projectVehicle, type VehicleRow } from '../../services/case-vehicle.js';
 import { assertAdminCaseScope, getAdminActorScope } from '../../services/admin-case-scope.js';
 import { withIdempotency } from '../../services/orchestration.js';
 
@@ -108,7 +109,14 @@ export async function transportRoutes(app: FastifyInstance) {
 
   app.get('/api/transport/me/dispatches', { preHandler: requireRoleOrCapability('tow','tow','partner') }, async (req) => {
     const r = await pool.query(`${effectiveDispatchSelect} where td.provider_actor_id=$1 order by td.created_at desc limit 200`, [req.principal.actorId]);
-    return { dispatches:r.rows };
+    // Each job carries the vehicle to find and load, at tow visibility (no VIN or odometer).
+    const caseIds = [...new Set(r.rows.map((d) => d.case_id as string))];
+    const vehicles = caseIds.length ? await pool.query<VehicleRow & { case_id:string }>(
+      `select c.id as case_id, v.* from service_cases c join customer_vehicles v on v.id=c.vehicle_id where c.id=any($1::uuid[])`,
+      [caseIds]
+    ) : { rows:[] as (VehicleRow & { case_id:string })[] };
+    const byCase = new Map(vehicles.rows.map((v) => [v.case_id, projectVehicle('tow', v)]));
+    return { dispatches:r.rows.map((d) => ({ ...d, vehicle:byCase.get(d.case_id) ?? null })) };
   });
 
   app.get('/api/transport/me/history', { preHandler: requireRoleOrCapability('tow','tow','partner') }, async (req) => {
