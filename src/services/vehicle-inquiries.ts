@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { pool } from '../db/pool.js';
 
 export type InventoryMatch = {
@@ -82,4 +83,38 @@ export async function createVehicleInquiry(
   const notified = await notifyOwner(ownerEmail(input, v, id), fetcher);
   if (notified) await pool.query(`update vehicle_inquiries set owner_notified=true where id=$1`, [id]);
   return { rateLimited: false as const, id, available: Boolean(v?.available), lastSeenAt: v?.last_seen_at ?? null, notified };
+}
+
+// Shared key between the owner's website and Core (SITE_DEALER_LOOKUP_KEY). Unset = lookup off.
+export function siteKeyMatches(provided: unknown, expected = process.env.SITE_DEALER_LOOKUP_KEY): boolean {
+  if (!expected || expected.length < 24 || typeof provided !== 'string' || !provided) return false;
+  const a = createHash('sha256').update(provided).digest();
+  const b = createHash('sha256').update(expected).digest();
+  return timingSafeEqual(a, b);
+}
+
+export type DealerDetails = {
+  dealerName: string | null; dealerUrl: string | null; dealerPriceCents: number | null; roviqPriceCents: number | null;
+  available: boolean; lastSeenAt: Date | string | null; from: 'inventory' | 'request';
+};
+
+// Dealer for each VIN: the current inventory record, else the snapshot kept with the latest request.
+export async function dealerDetailsForVins(vins: string[]): Promise<Record<string, DealerDetails>> {
+  const list = [...new Set(vins.map(v => v.toUpperCase()))];
+  if (!list.length) return {};
+  const inv = await pool.query(`
+    select distinct on (upper(vin)) upper(vin) as vin,source_dealer_name,source_dealer_url,
+           source_price_cents::int as source_price_cents,public_price_cents::int as public_price_cents,last_seen_at,
+           (status='active' and last_seen_at >= now() - interval '24 hours') as available
+    from vehicle_inventory where upper(vin) = any($1::text[])
+    order by upper(vin),(status='active' and last_seen_at >= now() - interval '24 hours') desc,last_seen_at desc`, [list]);
+  const req = await pool.query(`
+    select distinct on (vin) vin,dealer_name,dealer_url,source_price_cents::int as source_price_cents,quoted_price_cents::int as quoted_price_cents
+    from vehicle_inquiries where vin = any($1::text[]) order by vin,created_at desc`, [list]);
+  const out: Record<string, DealerDetails> = {};
+  for (const r of req.rows) out[r.vin] = { dealerName: r.dealer_name, dealerUrl: r.dealer_url, dealerPriceCents: r.source_price_cents,
+    roviqPriceCents: r.quoted_price_cents, available: false, lastSeenAt: null, from: 'request' };
+  for (const r of inv.rows) out[r.vin] = { dealerName: r.source_dealer_name, dealerUrl: r.source_dealer_url, dealerPriceCents: r.source_price_cents,
+    roviqPriceCents: r.public_price_cents, available: Boolean(r.available), lastSeenAt: r.last_seen_at, from: 'inventory' };
+  return out;
 }
