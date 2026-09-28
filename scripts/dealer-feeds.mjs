@@ -20,7 +20,8 @@ export const FEEDS = [
   {
     sourceKey: 'courtesy-ford-portland-used-trucks',
     dealerName: 'Courtesy Ford (Portland)',
-    pageUrl: 'https://www.courtesyford.com/used-vehicles/',
+    // The search settings are dealership-wide; only the new-vehicles page carries them.
+    pageUrl: 'https://www.courtesyford.com/new-vehicles/',
     typeSlugs: ['Used', 'Certified Used'],
     condition: 'used'
   },
