@@ -7,6 +7,7 @@ const password = process.env.ROVIQ_CORE_ADMIN_PASSWORD;
 const dryRun = process.argv.includes('--dry-run');
 if (!dryRun && (!email || !password)) throw new Error('ROVIQ_CORE_ADMIN_EMAIL and ROVIQ_CORE_ADMIN_PASSWORD are required');
 
+// Ukraine customer inventory is used-only. New-truck feeds remain defined for future use but are not scraped or published here.
 // Dealer sites sometimes refuse one request (rate limit or bot challenge page);
 // retry a feed twice, 20s and 40s later, before counting it as failed.
 async function fetchFeedWithRetry(feed, attempts = 3) {
@@ -21,7 +22,7 @@ async function fetchFeedWithRetry(feed, attempts = 3) {
 }
 
 let failures = 0;
-for (const feed of FEEDS) {
+for (const feed of FEEDS.filter(feed => feed.condition === 'used')) {
   try {
     const { scanned, vehicles } = await fetchFeedWithRetry(feed);
     // Never publish an empty snapshot: that would wipe the dealer's trucks.
