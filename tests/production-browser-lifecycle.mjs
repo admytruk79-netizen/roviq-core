@@ -147,6 +147,15 @@ async function productionLifecycle(browser) {
   await customer.getByRole('button', { name: 'Sign in' }).click();
   await waitForCustomerSession(customer);
   await gotoStable(customer, `${PORTALS.customer}/cases/new`);
+  // Intake requires a vehicle: the test customer's saved vehicle is preselected on later runs;
+  // on the first run (or after the garage is emptied) add one through the form.
+  await customer.locator('fieldset', { hasText: 'Which vehicle?' }).waitFor({ state: 'visible', timeout: 20_000 });
+  if (await customer.locator('#vehicleYear').isVisible()) {
+    await customer.locator('#vehicleYear').fill('2018');
+    await customer.locator('#vehicleMake').fill('Toyota');
+    await customer.locator('#vehicleModel').fill('Camry');
+    await customer.locator('#vehicleColor').fill('Silver');
+  }
   await customer.locator('#issueType').selectOption('wont_start');
   await customer.locator('#description').fill(marker);
   await customer.locator('#urgency').selectOption('urgent');
@@ -167,6 +176,8 @@ async function productionLifecycle(browser) {
   await gotoStable(customer, `${PORTALS.customer}/cases/${caseId}`);
   const customerToken = await customer.evaluate(() => localStorage.getItem('roviq_access_token'));
   assert.ok(customerToken, 'Customer UI did not persist its scoped access token');
+  const caseVehicle = await requestJson(`/api/maintenance/cases/${caseId}/vehicle`, { token: customerToken });
+  assert.ok(caseVehicle?.vehicle?.make, 'Customer case was created without its vehicle');
   await screenshot(customer, 'lifecycle-01-customer-created');
 
   log('2/10 Core: obtain the same real admin session and scoped test-role sessions used by each portal.');
