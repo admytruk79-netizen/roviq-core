@@ -38,9 +38,11 @@ describe('Kendall Ford of Vancouver feed', () => {
     expect(toFeedVehicle(listing({ model: 'F-350SD', styles: { style_name: 'XL Crew Cab' } }), feed)).toBeNull();
     expect(toFeedVehicle(listing({ model: 'Ranger', styles: { style_name: 'XLT SuperCrew' } }), feed)).toBeNull();
     expect(toFeedVehicle(listing({ type: 'New' }), feed)).toBeNull();
-    expect(toFeedVehicle(listing({ mileage: 40000 }), feed)).toBeNull();
-    expect(toFeedVehicle(listing({ mileage: 39999 }), feed)).toMatchObject({ mileage: 39999 });
-    expect(toFeedVehicle(listing({ mileage: 250 }), feed)).toMatchObject({ condition: 'used', mileage: 250 });
+    // Used export window: 500 to 40,000 miles inclusive.
+    expect(toFeedVehicle(listing({ mileage: 40001 }), feed)).toBeNull();
+    expect(toFeedVehicle(listing({ mileage: 40000 }), feed)).toMatchObject({ mileage: 40000 });
+    expect(toFeedVehicle(listing({ mileage: 499 }), feed)).toBeNull();
+    expect(toFeedVehicle(listing({ mileage: 500 }), feed)).toMatchObject({ condition: 'used', mileage: 500 });
     expect(toFeedVehicle(listing({ pricing: {} }), feed)).toBeNull();
   });
 
@@ -268,13 +270,14 @@ describe('used low-mileage trucks from every dealer (under 40,000 miles)', () =>
     expect(USED_MAX_MILES).toBe(40000);
   });
 
-  it('DealerOn used: used and certified stock, any make, 200 miles counts, 40,000 does not', () => {
+  it('DealerOn used: used and certified stock, any make, 500 to 40,000 miles', () => {
     const feed = byKey('buick-gmc-beaverton-used-trucks');
     const card = o => ({ VehicleVin: '1FTFW1E57NKF17052', VehicleType: 'Used', VehicleYear: '2023', VehicleMake: 'Ford', VehicleModel: 'F-150',
-      VehicleTrim: 'XLT', VehicleBodyStyle: 'Pickup', VehicleInternetPrice: '$41,995', VehicleMileage: '220', ...o });
-    expect(dealerOnToFeedVehicle(card(), feed)).toMatchObject({ condition: 'used', make: 'Ford', model: 'F-150', trim: 'XLT SuperCrew', mileage: 220 });
-    expect(dealerOnToFeedVehicle(card({ VehicleType: 'Certified' }), feed)).toMatchObject({ mileage: 220 });
-    expect(dealerOnToFeedVehicle(card({ VehicleMileage: '40000' }), feed)).toBeNull();
+      VehicleTrim: 'XLT', VehicleBodyStyle: 'Pickup', VehicleInternetPrice: '$41,995', VehicleMileage: '620', ...o });
+    expect(dealerOnToFeedVehicle(card(), feed)).toMatchObject({ condition: 'used', make: 'Ford', model: 'F-150', trim: 'XLT SuperCrew', mileage: 620 });
+    expect(dealerOnToFeedVehicle(card({ VehicleType: 'Certified' }), feed)).toMatchObject({ mileage: 620 });
+    expect(dealerOnToFeedVehicle(card({ VehicleMileage: '40001' }), feed)).toBeNull();
+    expect(dealerOnToFeedVehicle(card({ VehicleMileage: '220' }), feed)).toBeNull();
     expect(dealerOnToFeedVehicle(card({ VehicleMileage: '0' }), feed)).toBeNull();
     expect(dealerOnToFeedVehicle(card({ VehicleVin: '1FTFX1E57NKF17052' }), feed)).toBeNull(); // SuperCab
     expect(dealerOnToFeedVehicle(card({ VehicleType: 'New' }), feed)).toBeNull();
