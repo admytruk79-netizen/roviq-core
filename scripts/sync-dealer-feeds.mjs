@@ -7,15 +7,28 @@ const password = process.env.ROVIQ_CORE_ADMIN_PASSWORD;
 const dryRun = process.argv.includes('--dry-run');
 if (!dryRun && (!email || !password)) throw new Error('ROVIQ_CORE_ADMIN_EMAIL and ROVIQ_CORE_ADMIN_PASSWORD are required');
 
+// Dealer sites sometimes refuse one request (rate limit or bot challenge page);
+// retry a feed twice, 20s and 40s later, before counting it as failed.
+async function fetchFeedWithRetry(feed, attempts = 3) {
+  for (let i = 1; ; i++) {
+    try { return await fetchFeed(feed); }
+    catch (error) {
+      if (i >= attempts) throw error;
+      console.error(JSON.stringify({ feed: feed.sourceKey, retry: i, error: String(error?.message || error) }));
+      await new Promise(r => setTimeout(r, 20000 * i));
+    }
+  }
+}
+
 let failures = 0;
 for (const feed of FEEDS) {
   try {
-    const { scanned, vehicles } = await fetchFeed(feed);
+    const { scanned, vehicles } = await fetchFeedWithRetry(feed);
     // Never publish an empty snapshot: that would wipe the dealer's trucks.
     if (!vehicles.length) throw new Error(`no_matching_trucks (scanned ${scanned})`);
     if (dryRun) {
       console.log(`${feed.sourceKey}: scanned ${scanned}, would publish ${vehicles.length}`);
-      for (const v of vehicles) console.log(`  ${v.year} ${v.make} ${v.model} ${v.trim} | ${v.mileage} mi | $${v.priceCents / 100} | ${v.vin}`);
+      for (const v of vehicles) console.log(`  ${v.year} ${v.make} ${v.model} ${v.trim} | ${v.mileage} mi | $${v.priceCents / 100} | ${v.vin} | MSRP ${v.raw?.msrp ?? '-'}`);
       continue;
     }
     const result = await publishToCore(feed, vehicles, { baseUrl, email, password });
