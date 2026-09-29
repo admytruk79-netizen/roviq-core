@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FEEDS, USED_MAX_MILES, dealerComToFeedVehicle, dealerOnToFeedVehicle, fetchFeed, jazelToFeedVehicle, publishToCore, readDealerComVehicles, readDealerOnIds, readJazelVehicles, readSearchConfig, toFeedVehicle } from './dealer-feeds.mjs';
+import { FEEDS, dealerOnSellingPrice, readDealerOnPriceLibrary, USED_MAX_MILES, dealerComToFeedVehicle, dealerOnToFeedVehicle, fetchFeed, jazelToFeedVehicle, publishToCore, readDealerComVehicles, readDealerOnIds, readJazelVehicles, readSearchConfig, toFeedVehicle } from './dealer-feeds.mjs';
 
 const feed = FEEDS[0];
 const page = `<script>var SEARCH_SERVICE = {"apiUrl":"https://websites-search.api.carscommerce.inc","ccid":"6067995","apiKey":"public-key","search":"https://websites-search.api.carscommerce.inc/api/v1/listings/6067995","visibleStatusValues":["publish","modified","pend-sale"]}; var SEARCH_SERVICE_FIELD_MAP = {"requestedFields":["vin","pricing"]}; var other = 1;</script>`;
@@ -286,5 +286,24 @@ describe('used low-mileage trucks from every dealer (under 40,000 miles)', () =>
       pricing: { dprice: [{ type: 'TOTAL', value: '$44,500' }] }, trackingAttributes: [{ name: 'odometer', value: '18450' }], ...o });
     expect(dealerComToFeedVehicle(v(), feed)).toMatchObject({ condition: 'used', mileage: 18450, trim: 'LT Crew Cab', priceCents: 4450000 });
     expect(dealerComToFeedVehicle(v({ trackingAttributes: [{ name: 'odometer', value: '41000' }] }), feed)).toBeNull();
+  });
+});
+
+describe('DealerOn selling price comes from the dealer price sheet, not the sticker', () => {
+  const b64 = s => Buffer.from(s).toString('base64');
+  const gmc = FEEDS.find(f => f.sourceKey === 'buick-gmc-beaverton-new-trucks');
+  const card = o => ({ VehicleVin: '1GT4UNEY7TF250208', VehicleType: 'New', VehicleYear: '2026', VehicleMake: 'GMC', VehicleModel: 'Sierra 2500HD',
+    VehicleTrim: 'SLT', VehicleModelCode: 'TK20743', VehicleMileage: '5', TaggingPrice: '85895', VehicleInternetPrice: 0, VehicleMsrp: 85895, ...o });
+  it('uses the final price (everyone rebates, dealer fee) for new trucks', () => {
+    const lib = b64('MSRP:85895.0;Internet Price:85895.0;Selling Price:74395.0;Global:11500.0;dealer_fee:250.0;calc_INTERNET PRICE:85895.0;calc_FINAL PRICE:74645.0;Doc Fee::215.0');
+    expect(dealerOnSellingPrice(card({ VehiclePriceLibrary: lib }))).toBe(74645);
+    expect(dealerOnToFeedVehicle(card({ VehiclePriceLibrary: lib }), gmc)).toMatchObject({ priceCents: 7464500, raw: { msrp: 85895, dealerPrice: 74645 } });
+  });
+  it('uses the internet price (with dealer fee) when there is no final price, and falls back to the card', () => {
+    expect(dealerOnSellingPrice(card({ VehiclePriceLibrary: b64('MSRP:34990.0;Selling Price:34990.0;dealer_fee:250.0;calc_INTERNET PRICE:35240.0') }))).toBe(35240);
+    expect(dealerOnSellingPrice(card({ VehiclePriceLibrary: b64('MSRP:40000.0;Selling Price:38000.0;dealer_fee:250.0') }))).toBe(38250);
+    expect(readDealerOnPriceLibrary('not base64 ;;')).toEqual({});
+    expect(dealerOnSellingPrice(card({ VehicleInternetPrice: '$64,980' }))).toBe(64980);
+    expect(dealerOnSellingPrice(card())).toBe(85895);
   });
 });

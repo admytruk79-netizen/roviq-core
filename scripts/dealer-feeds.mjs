@@ -272,6 +272,32 @@ export function readDealerOnIds(html) {
   try { const t = JSON.parse(m[1]); return t.dealerId && t.pageId ? { dealerId: String(t.dealerId), pageId: String(t.pageId) } : null; } catch { return null; }
 }
 
+// DealerOn cards carry the dealer's full price sheet base64-encoded in
+// VehiclePriceLibrary ("MSRP:85895.0;Selling Price:74395.0;...;calc_FINAL PRICE:74645.0").
+// VehicleMsrp / TaggingPrice are the sticker price, not what the dealer sells for.
+export function readDealerOnPriceLibrary(encoded) {
+  if (!encoded) return {};
+  let text;
+  try { text = Buffer.from(String(encoded), 'base64').toString('utf8'); } catch { return {}; }
+  const out = {};
+  for (const part of text.split(';')) {
+    const i = part.indexOf(':');
+    if (i <= 0) continue;
+    const n = Number(part.slice(i + 1).replace(/^:+/, ''));
+    if (Number.isFinite(n)) out[part.slice(0, i).trim()] = n;
+  }
+  return out;
+}
+
+// The dealer's advertised selling price: final price (after everyone-qualifies
+// rebates, before conditional offers, with dealer fees), else the internet price.
+export function dealerOnSellingPrice(card) {
+  const lib = readDealerOnPriceLibrary(card.VehiclePriceLibrary);
+  const fee = lib.dealer_fee || 0;
+  return [lib['calc_FINAL PRICE'], lib['calc_INTERNET PRICE'], lib['Selling Price'] && lib['Selling Price'] + fee,
+    money(card.VehicleInternetPrice), money(card.TaggingPrice)].find(n => n >= 1000) || 0;
+}
+
 export function dealerOnToFeedVehicle(card, feed) {
   const condition = feed.condition || 'new';
   const vin = String(card.VehicleVin || '');
@@ -284,7 +310,7 @@ export function dealerOnToFeedVehicle(card, feed) {
   if (!crew) return null;
   const mileage = money(card.VehicleMileage);
   if (condition === 'used' && (!mileage || mileage >= USED_MAX_MILES)) return null;
-  const price = money(card.VehicleInternetPrice) || money(card.TaggingPrice);
+  const price = dealerOnSellingPrice(card);
   if (price < 1000) return null;
   const origin = new URL(feed.pageUrl).origin;
   const photos = card.VehicleImageModel?.VehicleImageCarouselModel?.PhotoList || [];
@@ -295,7 +321,7 @@ export function dealerOnToFeedVehicle(card, feed) {
     fuelType: card.VehicleFuelType || undefined, bodyStyle: card.VehicleBodyStyle || 'Crew Cab Pickup',
     images: [...new Set(photos)].filter(u => typeof u === 'string').map(u => new URL(u, origin).href).slice(0, 24),
     priceCents: Math.round(price * 100), dealerName: feed.dealerName, dealerUrl: card.VehicleDetailUrl || undefined,
-    raw: { source: 'dealeron-cards', stock: card.VehicleStockNumber, modelCode: card.VehicleModelCode, engine: card.VehicleEngine, msrp: money(card.VehicleMsrp) || undefined, dealerPrice: price, priceFields: priceFields(card) }
+    raw: { source: 'dealeron-cards', stock: card.VehicleStockNumber, modelCode: card.VehicleModelCode, engine: card.VehicleEngine, msrp: money(card.VehicleMsrp) || undefined, dealerPrice: price, priceFields: { ...priceFields(card), VehiclePriceLibrary: undefined, ...readDealerOnPriceLibrary(card.VehiclePriceLibrary) } }
   };
 }
 
