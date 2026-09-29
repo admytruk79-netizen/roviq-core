@@ -25,11 +25,6 @@ const REFRESH_MS = 60_000;
 const CONTACT_EMAIL = import.meta.env.VITE_INVENTORY_CONTACT_EMAIL as string | undefined;
 const CONTACT_PHONE = import.meta.env.VITE_INVENTORY_CONTACT_PHONE as string | undefined;
 
-const CONDITIONS = [
-  { value: '', label: 'New & used' },
-  { value: 'new', label: 'New' },
-  { value: 'used', label: 'Used' }
-];
 const MODELS = [
   { label: 'All trucks', q: '' },
   { label: 'F-150', q: 'F-150' },
@@ -41,18 +36,8 @@ const MODELS = [
 ];
 const SORTS = [
   { value: 'recommended', label: 'Newest, lowest miles' },
-  { value: 'price_asc', label: 'Price: low to high' },
-  { value: 'price_desc', label: 'Price: high to low' },
   { value: 'miles_asc', label: 'Mileage: lowest first' },
   { value: 'year_desc', label: 'Year: newest first' }
-];
-const PRICE_CAPS = [
-  { value: '', label: 'Any price' },
-  { value: '3000000', label: 'Under $30,000' },
-  { value: '4000000', label: 'Under $40,000' },
-  { value: '5000000', label: 'Under $50,000' },
-  { value: '6000000', label: 'Under $60,000' },
-  { value: '7500000', label: 'Under $75,000' }
 ];
 const MILE_CAPS = [
   { value: '', label: 'Up to 40k mi' },
@@ -62,17 +47,6 @@ const MILE_CAPS = [
 ];
 
 const title = (v: Vehicle) => [v.year, v.make, v.model].filter(Boolean).join(' ');
-const dollars = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
-// Ocean freight to a European port, quoted separately from the truck price.
-const SHIPPING_LOW = 5000;
-const SHIPPING_HIGH = 7000;
-const shippingRange = `${dollars.format(SHIPPING_LOW)}–${dollars.format(SHIPPING_HIGH)}`;
-const deliveredRange = (v: Vehicle) => {
-  if (v.price_cents == null) return null;
-  const base = Math.round(v.price_cents / 100);
-  return `${dollars.format(base + SHIPPING_LOW)}–${dollars.format(base + SHIPPING_HIGH)}`;
-};
-const price = (v: Vehicle) => (v.price_cents != null ? dollars.format(Math.round(v.price_cents / 100)) : 'Call for price');
 const miles = (v: Vehicle) => (v.condition === 'new' && (v.mileage ?? 0) < 500 ? 'New' : v.mileage != null ? `${v.mileage.toLocaleString()} mi` : 'Mileage on request');
 
 function cabLabel(v: Vehicle) {
@@ -128,12 +102,6 @@ function TruckCard({ v, changed, index, onOpen }: { v: Vehicle; changed: boolean
         {v.image_urls.length > 1 && (
           <span className="absolute bottom-2 right-2 rounded-md bg-black/65 px-2 py-0.5 text-xs font-semibold text-white">{v.image_urls.length} photos</span>
         )}
-        {v.condition === 'new' && (
-          <span className="absolute right-2 top-2 rounded-md bg-[var(--roviq-success)] px-2 py-0.5 text-xs font-extrabold uppercase tracking-wide text-white">New</span>
-        )}
-        {changed && (
-          <span className="absolute left-2 top-2 rounded-md bg-[var(--roviq-copper)] px-2 py-0.5 text-xs font-bold text-white">Price updated</span>
-        )}
       </div>
       <div className="flex flex-1 flex-col gap-3 p-4">
         <div>
@@ -149,8 +117,7 @@ function TruckCard({ v, changed, index, onOpen }: { v: Vehicle; changed: boolean
         <div className="mt-auto flex items-end justify-between border-t border-[var(--roviq-line)] pt-3">
           <div>
             <span className="block text-[11px] font-extrabold uppercase tracking-[0.14em] text-[var(--roviq-muted)]">Price</span>
-            <span className="roviq-price-sheen text-2xl font-extrabold">{price(v)}</span>
-            <span className="block text-[11px] text-[var(--roviq-muted)]">+ {shippingRange} shipping to Europe</span>
+            <span className="text-lg font-extrabold text-white">Inquire for current price</span>
           </div>
           <span className="text-sm font-bold text-[var(--roviq-copper-soft)]">View details →</span>
         </div>
@@ -221,12 +188,8 @@ function TruckDialog({ v, onClose }: { v: Vehicle | null; onClose: () => void })
           </div>
           <div className="rounded-xl border border-[var(--roviq-line)] bg-white/[0.03] p-4">
             <span className="block text-[11px] font-extrabold uppercase tracking-[0.14em] text-[var(--roviq-muted)]">Price</span>
-            <span className="text-3xl font-extrabold text-white">{price(v)}</span>
-            <p className="mt-1 text-xs text-[var(--roviq-muted)]">Truck price, all ROVIQ fees included.</p>
-            <div className="mt-3 grid gap-1 border-t border-[var(--roviq-line)] pt-3 text-sm">
-              <div className="flex justify-between gap-3"><span className="text-[var(--roviq-muted)]">Shipping to a European port</span><span className="font-semibold text-white">{shippingRange}</span></div>
-              {deliveredRange(v) && <div className="flex justify-between gap-3"><span className="text-[var(--roviq-muted)]">Estimated delivered</span><span className="font-bold text-white">{deliveredRange(v)}</span></div>}
-            </div>
+            <span className="text-2xl font-extrabold text-white">Inquire for current price</span>
+            <p className="mt-1 text-xs text-[var(--roviq-muted)]">ROVIQ confirms the dealer's current used-vehicle price before quoting.</p>
           </div>
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
             {specs.filter(([, value]) => value).map(([label, value]) => (
@@ -275,18 +238,14 @@ export function Inventory() {
   const [params, setParams] = useSearchParams();
   const model = params.get('model') ?? '';
   const sort = params.get('sort') ?? 'recommended';
-  const maxPrice = params.get('maxPrice') ?? '';
-  const condition = params.get('condition') ?? '';
-  const maxMiles = condition === 'new' ? '' : params.get('maxMiles') ?? '';
+  const maxMiles = params.get('maxMiles') ?? '';
   const [search, setSearch] = useState(params.get('q') ?? '');
   const [query, setQuery] = useState(search);
   const [data, setData] = useState<InventoryResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [changed, setChanged] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Vehicle | null>(null);
   const [now, setNow] = useState(() => Date.now());
-  const prices = useRef(new Map<string, number | null>());
 
   const update = useCallback((key: string, value: string) => {
     setParams(prev => {
@@ -302,26 +261,17 @@ export function Inventory() {
   }, [search, update]);
 
   const apiPath = useMemo(() => {
-    const p = new URLSearchParams({ limit: '100', sort });
+    const p = new URLSearchParams({ limit: '100', sort, condition: 'used', maxMileage: '39999' });
     // Dealer model names vary ("Silverado 2500HD", "Super Duty F-250 SRW"), so match inside them.
     if (model) p.set('model', `%${model}%`);
     if (query) p.set('q', query);
-    if (maxPrice) p.set('maxPriceCents', maxPrice);
-    if (condition) p.set('condition', condition);
     if (maxMiles) p.set('maxMileage', maxMiles);
     return `/api/inventory?${p}`;
-  }, [model, query, sort, maxPrice, maxMiles, condition]);
+  }, [model, query, sort, maxMiles]);
 
   const load = useCallback(async () => {
     try {
       const next = await api.get<InventoryResponse>(apiPath);
-      const moved = new Set<string>();
-      for (const v of next.inventory) {
-        const before = prices.current.get(v.id);
-        if (before !== undefined && before !== v.price_cents) moved.add(v.id);
-        prices.current.set(v.id, v.price_cents);
-      }
-      if (moved.size) setChanged(prev => new Set([...prev, ...moved]));
       setData(next);
       setError(null);
     } catch {
@@ -340,7 +290,7 @@ export function Inventory() {
     return () => { clearInterval(timer); clearInterval(tick); document.removeEventListener('visibilitychange', onVisible); };
   }, [load]);
 
-  const filtered = Boolean(model || query || maxPrice || maxMiles || condition);
+  const filtered = Boolean(model || query || maxMiles);
   const clearAll = () => { setSearch(''); setQuery(''); setParams(new URLSearchParams(sort !== 'recommended' ? { sort } : {}), { replace: true }); };
 
   return (
@@ -351,8 +301,8 @@ export function Inventory() {
             <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--roviq-success)] opacity-75" /><span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--roviq-success)]" /></span>
             Live inventory
           </span>
-          <h1 className="text-white">Crew cab trucks, new and used</h1>
-          <p className="text-[var(--roviq-muted)]">New Ford F-150 SuperCrew and F-250 crew cabs in every trim, plus used F-150, F-250, Chevy Silverado and GMC Sierra 1500/2500 crew cabs with 50,000 miles or less.</p>
+          <h1 className="text-white">Low-mileage used crew cab trucks</h1>
+          <p className="text-[var(--roviq-muted)]">Only dealership-listed used or certified pre-owned Ford F-150/F-250, Chevrolet Silverado and GMC Sierra trucks under 40,000 miles.</p>
         </div>
       </div>
 
@@ -374,31 +324,13 @@ export function Inventory() {
                 {SORTS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
               </select>
             </label>
-            <label><span className="sr-only">Maximum price</span>
-              <select value={maxPrice} onChange={e => update('maxPrice', e.target.value)} className={`${selectClass} w-full`}>
-                {PRICE_CAPS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-              </select>
-            </label>
             <label><span className="sr-only">Maximum mileage</span>
-              <select value={maxMiles} disabled={condition === 'new'} onChange={e => update('maxMiles', e.target.value)} className={`${selectClass} w-full`}>
+              <select value={maxMiles} onChange={e => update('maxMiles', e.target.value)} className={`${selectClass} w-full`}>
                 {MILE_CAPS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
               </select>
             </label>
           </div>
         </div>
-        {data?.newTrucksShown !== false && <div className="inline-flex rounded-xl border border-[var(--roviq-line)] p-1" role="group" aria-label="New or used">
-          {CONDITIONS.map(c => (
-            <button
-              key={c.label}
-              type="button"
-              onClick={() => update('condition', c.value)}
-              aria-pressed={condition === c.value}
-              className={`rounded-lg px-4 py-1.5 text-sm font-bold transition ${condition === c.value ? 'bg-[var(--roviq-copper)] text-white' : 'text-[var(--roviq-porcelain)] hover:bg-white/10'}`}
-            >
-              {c.label}
-            </button>
-          ))}
-        </div>}
         <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1" role="group" aria-label="Filter by model">
           {MODELS.map(m => (
             <button
@@ -434,7 +366,7 @@ export function Inventory() {
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {data?.inventory.map((v, i) => <TruckCard key={v.id} v={v} index={i} changed={changed.has(v.id)} onOpen={() => setSelected(v)} />)}
+          {data?.inventory.map((v, i) => <TruckCard key={v.id} v={v} index={i} changed={false} onOpen={() => setSelected(v)} />)}
         </div>
       )}
 
