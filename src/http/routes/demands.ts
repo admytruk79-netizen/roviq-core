@@ -6,6 +6,7 @@ import { createServiceCase, transitionCase } from '../../services/orchestration.
 import { autoRouteNewDemand } from '../../services/routing.js';
 import { requireRole } from '../middleware/principal.js';
 import { createDemandSchema } from './demand-schema.js';
+import { createCustomerVehicle, loadOwnedVehicle, VehicleError } from '../../services/case-vehicle.js';
 
 export async function demandRoutes(app: FastifyInstance) {
   app.post('/api/demands', { preHandler: requireRole('customer','admin') }, async (req, reply) => {
@@ -14,6 +15,21 @@ export async function demandRoutes(app: FastifyInstance) {
     if (!domain.rowCount) return reply.code(400).send({ error: 'unknown_domain' });
 
     const requester = req.principal.role === 'admin' ? null : req.principal.actorId;
+
+    // Resolve the vehicle before creating anything, so a bad vehicle never leaves a half-made case.
+    let vehicleId: string | null = null;
+    if (body.vehicleId || body.vehicle) {
+      if (!requester) return reply.code(400).send({ error:'vehicle_requires_customer' });
+      if (body.domain !== 'maintenance') return reply.code(400).send({ error:'vehicle_requires_maintenance_case' });
+      try {
+        vehicleId = body.vehicleId
+          ? (await loadOwnedVehicle(requester, body.vehicleId)).id
+          : (await createCustomerVehicle(requester, body.vehicle!)).id;
+      } catch (error) {
+        if (error instanceof VehicleError) return reply.code(error.status).send({ error:error.code });
+        throw error;
+      }
+    }
     const attributes = {
       ...body.attributes,
       ...(body.requestedServiceAt ? { requestedServiceAt:body.requestedServiceAt } : {})
@@ -33,6 +49,9 @@ export async function demandRoutes(app: FastifyInstance) {
         priority,
         attributes:{ demandType:body.demandType, intakeLocation:body.location ?? null, ...attributes }
       });
+      if (vehicleId) {
+        await pool.query('update service_cases set vehicle_id=$2,updated_at=now() where id=$1',[serviceCase.id,vehicleId]);
+      }
 
       if (body.location) {
         const vehiclePoint = {

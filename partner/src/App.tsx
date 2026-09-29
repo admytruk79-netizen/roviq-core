@@ -12,6 +12,7 @@ import { ShopOsRecoveryControl } from './ShopOsRecoveryControl';
 import { ShopOsDeferredServiceControl } from './ShopOsDeferredServiceControl';
 import { ShopOsRepairOrderDetailControl } from './ShopOsRepairOrderDetailControl';
 import { CoreCaseQueue } from './CoreCaseQueue';
+import { NetworkSharingControl } from './NetworkSharingControl';
 
 function Portal() {
   const { principal } = useAuth();
@@ -54,6 +55,7 @@ function Portal() {
         <ShopOsFloorControl />
         <ShopOsDeferredServiceControl />
       </section>
+      <NetworkSharingControl />
       <LocalMap />
     </Dashboard>
   ) : <Login />;

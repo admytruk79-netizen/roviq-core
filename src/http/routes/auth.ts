@@ -3,12 +3,15 @@ import { z } from 'zod';
 import { pool } from '../../db/pool.js';
 import { hashPassword, issueAccessToken, verifyPasswordConstantTime } from '../../services/auth.js';
 import { audit } from '../../services/audit.js';
+import { listIdentityRoles } from '../../services/identity-roles.js';
 import { requireRole } from '../middleware/principal.js';
 
 const loginBody = z.object({ email: z.string().email(), password: z.string().min(8) });
+const roleEnum = z.enum(['admin','customer','partner','diagnostic','tow','parts','fleet']);
+const grantableRole = z.enum(['customer','partner','diagnostic','tow','parts','fleet']);
 const createIdentityBody = z.object({
   email: z.string().email(), password: z.string().min(12),
-  role: z.enum(['admin','customer','partner','diagnostic','tow','parts','fleet']),
+  role: roleEnum,
   actorId: z.string().uuid().nullable().optional()
 });
 
@@ -174,7 +177,61 @@ export async function authRoutes(app: FastifyInstance) {
     if (!identity || !identity.active || !passwordOk) return reply.code(401).send({ error:'invalid_credentials' });
     const principal = { role: identity.role, actorId: identity.actor_id ?? undefined };
     const accessToken = await issueAccessToken(identity.id, principal);
-    return { accessToken, tokenType:'Bearer', expiresIn:28800, principal:{ role:identity.role, actorId:identity.actor_id } };
+    const roles = await listIdentityRoles(identity.id);
+    return { accessToken, tokenType:'Bearer', expiresIn:28800, principal:{ role:identity.role, actorId:identity.actor_id }, roles };
+  });
+
+  // The workspaces (tabs) this sign-in can open. Each entry is one role bound to its own actor.
+  app.get('/api/auth/roles', async (req, reply) => {
+    if (!req.principal.identityId) return reply.code(400).send({ error:'signed_in_identity_required' });
+    const roles = await listIdentityRoles(req.principal.identityId);
+    return { active:{ role:req.principal.role, actorId:req.principal.actorId ?? null }, roles };
+  });
+
+  // Switching tabs issues a new token scoped to exactly one role and its actor; the previous
+  // token keeps only its own role's access. Every request still re-validates the grant.
+  app.post('/api/auth/switch-role', { config:{ rateLimit:{ max:30, timeWindow:'1 minute' } } }, async (req, reply) => {
+    const b = z.object({ role: roleEnum }).parse(req.body);
+    const identityId = req.principal.identityId;
+    if (!identityId) return reply.code(400).send({ error:'signed_in_identity_required' });
+    const target = (await listIdentityRoles(identityId)).find((r) => r.role === b.role);
+    if (!target) return reply.code(403).send({ error:'role_not_granted' });
+    const principal = { role:target.role, actorId:target.actorId };
+    const accessToken = await issueAccessToken(identityId, principal);
+    await audit(req.principal, 'switch_role', 'principal_identity', identityId, b.role, { fromRole:req.principal.role, toRole:b.role, actorId:target.actorId ?? null });
+    return { accessToken, tokenType:'Bearer', expiresIn:28800, principal:{ role:target.role, actorId:target.actorId ?? null } };
+  });
+
+  app.put('/api/admin/identities/:id/roles/:role', { preHandler: requireRole('admin') }, async (req, reply) => {
+    const { id } = req.params as { id:string };
+    const role = grantableRole.parse((req.params as { role:string }).role);
+    const b = z.object({ actorId: z.string().uuid() }).parse(req.body);
+    const identity = await pool.query('select id,role from principal_identities where id=$1', [id]);
+    if (!identity.rowCount) return reply.code(404).send({ error:'identity_not_found' });
+    if (identity.rows[0].role === role) return reply.code(409).send({ error:'role_is_primary' });
+    const actor = await pool.query(`select id from actors where id=$1 and status='active'`, [b.actorId]);
+    if (!actor.rowCount) return reply.code(404).send({ error:'actor_not_found' });
+    const r = await pool.query(
+      `insert into identity_role_grants(identity_id,role,actor_id,active,granted_by_identity_id)
+       values($1,$2,$3,true,$4)
+       on conflict(identity_id,role) do update set actor_id=excluded.actor_id,active=true,granted_by_identity_id=excluded.granted_by_identity_id,updated_at=now()
+       returning id,identity_id,role,actor_id,active`,
+      [id, role, b.actorId, req.principal.identityId ?? null]
+    );
+    await audit(req.principal, 'grant_identity_role', 'principal_identity', id, role, { actorId:b.actorId });
+    return { grant:r.rows[0] };
+  });
+
+  app.delete('/api/admin/identities/:id/roles/:role', { preHandler: requireRole('admin') }, async (req, reply) => {
+    const { id } = req.params as { id:string };
+    const role = grantableRole.parse((req.params as { role:string }).role);
+    const r = await pool.query(
+      `update identity_role_grants set active=false,updated_at=now() where identity_id=$1 and role=$2 and active=true returning id`,
+      [id, role]
+    );
+    if (!r.rowCount) return reply.code(404).send({ error:'role_grant_not_found' });
+    await audit(req.principal, 'revoke_identity_role', 'principal_identity', id, role, {});
+    return { revoked:true };
   });
 
   app.post('/api/admin/testing/customer-session', { preHandler: requireRole('admin') }, async (req, reply) => adminTestSession(req,reply,'customer'));

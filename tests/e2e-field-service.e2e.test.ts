@@ -45,6 +45,17 @@ describe('field service on-site assessment', () => {
     return caseId;
   }
 
+  // Operators cannot waive customer consent, so every operator-assessed executable decision goes
+  // through the case customer's real authorization before it can start.
+  async function authorizeAsCustomer(caseId: string, decisionId: string) {
+    const res = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/${decisionId}/authorize`,
+      headers: actorHeaders('customer', customerActorId), payload: { approved: true }
+    });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).decision.status).toBe('authorized');
+  }
+
   it('is registered, computes a deterministic action, and records/retrieves the decision', async () => {
     const demandRes = await app.inject({
       method: 'POST', url: '/api/demands', headers: actorHeaders('customer', customerActorId),
@@ -129,20 +140,18 @@ describe('field service on-site assessment', () => {
       payload: { active: true, repairClasses: ['battery'] }
     });
 
-    // customerAuthorizationRequired:false -> action is directly executable from 'proposed', no
-    // customer authorize step in the loop.
     const assessRes = await app.inject({
       method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/assess`, headers: actorHeaders('tow', towActorId),
       payload: {
         operatorActorId: towActorId, summary: 'Dead battery, on-site swap possible',
-        repairClass: 'battery', drivability: 'drivable', confidence: 0.9, safety: {},
-        customerAuthorizationRequired: false
+        repairClass: 'battery', drivability: 'drivable', confidence: 0.9, safety: {}
       }
     });
     expect(assessRes.statusCode).toBe(201);
     const decision = JSON.parse(assessRes.body).decision;
     expect(decision.action).toBe('field_repair');
-    expect(decision.status).toBe('proposed');
+    expect(decision.status).toBe('authorization_required');
+    await authorizeAsCustomer(caseId, decision.id);
 
     const startRes = await app.inject({
       method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/${decision.id}/start`, headers: actorHeaders('tow', towActorId)
@@ -162,7 +171,7 @@ describe('field service on-site assessment', () => {
     expect(completeRes.statusCode).toBe(200);
     expect(JSON.parse(completeRes.body).decision.status).toBe('completed');
 
-    // Once completed, 'start' must not revive it (it's no longer 'proposed' or 'authorized').
+    // Once completed, 'start' must not revive it (it's no longer 'authorized').
     const restartAfterCompleteRes = await app.inject({
       method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/${decision.id}/start`, headers: actorHeaders('tow', towActorId)
     });
@@ -287,7 +296,7 @@ describe('field service on-site assessment', () => {
       payload: {
         operatorActorId: towActorId, summary: 'Dead battery, on-site swap possible',
         repairClass: 'battery', drivability: 'drivable', confidence: 0.9, safety: {},
-        customerAuthorizationRequired: false, partsAvailable: true,
+        partsAvailable: true,
         requiredParts: [{ sku: `no-stock-sku-${caseId}`, quantity: 1 }]
       }
     });
@@ -317,7 +326,6 @@ describe('field service on-site assessment', () => {
       payload: {
         operatorActorId: towActorId, summary: 'Dead battery, brake pad replacement possible on site',
         repairClass: 'battery', drivability: 'drivable', confidence: 0.9, safety: {},
-        customerAuthorizationRequired: false,
         requiredParts: [{ sku, quantity: 2 }]
       }
     });
@@ -325,6 +333,7 @@ describe('field service on-site assessment', () => {
     const decision = JSON.parse(assessRes.body).decision;
     expect(decision.action).toBe('field_repair');
     expect(decision.metadata.fulfillingSupplierActorId).toBe(supplierActorId);
+    await authorizeAsCustomer(caseId, decision.id);
 
     const startRes = await app.inject({
       method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/${decision.id}/start`, headers: actorHeaders('tow', towActorId)
@@ -365,13 +374,13 @@ describe('field service on-site assessment', () => {
         payload: {
           operatorActorId: towActorId, summary: 'Ignition coil failure, on-site swap possible',
           repairClass: 'ignition', drivability: 'drivable', confidence: 0.9, safety: {},
-          customerAuthorizationRequired: false,
           requiredParts: [{ sku, quantity: 1 }]
         }
       });
       expect(assessRes.statusCode).toBe(201);
       const decision = JSON.parse(assessRes.body).decision;
       expect(decision.action).toBe('field_repair');
+      await authorizeAsCustomer(caseId, decision.id);
       return { caseId, decision };
     }
 
@@ -427,14 +436,14 @@ describe('field service on-site assessment', () => {
       method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/assess`, headers: actorHeaders('tow', towActorId),
       payload: {
         operatorActorId: towActorId, summary: 'Suspension damage limits safe speed; can be stabilized on site',
-        repairClass: 'minor_mechanical', drivability: 'limited', confidence: 0.9, safety: {},
-        customerAuthorizationRequired: false
+        repairClass: 'minor_mechanical', drivability: 'limited', confidence: 0.9, safety: {}
       }
     });
     expect(assessRes.statusCode).toBe(201);
     const decision = JSON.parse(assessRes.body).decision;
     expect(decision.action).toBe('temporary_stabilization');
-    expect(decision.status).toBe('proposed');
+    expect(decision.status).toBe('authorization_required');
+    await authorizeAsCustomer(caseId, decision.id);
 
     const startRes = await app.inject({
       method: 'POST', url: `/api/maintenance/cases/${caseId}/field-service/${decision.id}/start`, headers: actorHeaders('tow', towActorId)

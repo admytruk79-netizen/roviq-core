@@ -96,6 +96,11 @@ export async function createRepairOrder(principal:Principal,input:{
     await assertCaseBelongsToShop(principal,input.serviceCaseId,scope.organizationId,client);
     await assertActorScope(input.advisorActorId,scope.organizationId,scope.locationId,client);
     await assertActorScope(input.primaryTechnicianActorId,scope.organizationId,scope.locationId,client);
+    // A repair order opened for a case works on that case's vehicle unless one is named explicitly.
+    if(!input.customerVehicleId&&input.serviceCaseId){
+      const caseVehicle=await client.query(`select vehicle_id from service_cases where id=$1`,[input.serviceCaseId]);
+      input={...input,customerVehicleId:caseVehicle.rows[0]?.vehicle_id??null};
+    }
     if(input.appointmentId){
       const appointment=await client.query(`select organization_id,location_id,service_case_id,appointment_status from roviq_appointments where id=$1`,[input.appointmentId]);
       if(!appointment.rowCount) throw httpError('appointment_not_found',404);

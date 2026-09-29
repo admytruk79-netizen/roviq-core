@@ -81,6 +81,30 @@ jobs:
       - name: Record accessibility baseline and enforce performance budget
         run: node scripts/check-portal-evidence.mjs ${{ matrix.directory }}
 
+  service-app-build:
+    name: service-app-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            service/package-lock.json
+            diagnostic/package-lock.json
+            tow/package-lock.json
+            partner/package-lock.json
+            parts-portal/package-lock.json
+            fleet/package-lock.json
+      - name: Build the Service shell and every role workspace
+        env:
+          VITE_API_BASE_URL: https://roviq-core.admytruk79.workers.dev
+        run: node scripts/build-service-app.mjs
+      - name: Record accessibility baseline and enforce performance budget
+        run: node scripts/check-portal-evidence.mjs service
+
   system-acceptance:
     runs-on: ubuntu-latest
     timeout-minutes: 30

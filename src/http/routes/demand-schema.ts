@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { newVehicleSchema } from '../../services/case-vehicle.js';
 
 const requestedServiceAtSchema = z.string().datetime();
 
@@ -8,8 +9,14 @@ export const createDemandSchema = z.object({
   location: z.object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) }).optional(),
   urgency: z.enum(['normal','urgent','emergency']).default('normal'),
   requestedServiceAt: requestedServiceAtSchema.optional(),
+  // The vehicle: one of the customer's saved vehicles, or a new one added during intake.
+  vehicleId: z.string().uuid().optional(),
+  vehicle: newVehicleSchema.optional(),
   attributes: z.record(z.unknown()).default({})
 }).superRefine((value,ctx)=>{
+  if(value.vehicleId&&value.vehicle){
+    ctx.addIssue({code:z.ZodIssueCode.custom,path:['vehicle'],message:'Send either vehicleId or vehicle, not both'});
+  }
   const legacy=value.attributes.requestedServiceAt;
   if(legacy===undefined)return;
   const parsed=requestedServiceAtSchema.safeParse(legacy);

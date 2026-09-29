@@ -87,6 +87,8 @@ Production requests use signed JWT identity. Development/bootstrap headers can b
 
 Authorization middleware enforces actor ownership server-side; clients cannot gain access by supplying another actor ID.
 
+One sign-in can hold several workspace roles. An identity keeps its primary role and an admin can grant it more non-admin roles, each bound to its own actor (`PUT`/`DELETE /api/admin/identities/:id/roles/:role`). Login returns the roles the sign-in can open, `GET /api/auth/roles` lists them, and `POST /api/auth/switch-role` issues a token scoped to one role and its actor. A granted role's tokens are rejected on the next request once the grant, the identity or that actor is deactivated.
+
 ## Core route groups
 
 - `GET /health`
@@ -171,6 +173,28 @@ npm run build
 ```
 
 Deploys to Cloudflare Pages (`roviq-ops.pages.dev`) via `.github/workflows/deploy-ops.yml` on every push to `main` that touches `ops/`. It has no access control of its own beyond the admin-role login — anyone who reaches the URL can attempt to sign in, so treat the URL as sensitive until real staff accounts (not the bootstrap admin) and, ideally, a Cloudflare Access policy are in front of it.
+
+## Case vehicle
+
+Every maintenance case can carry the vehicle it is about, stored in `customer_vehicles` (the same record Shop OS repair orders, deferred service and connected devices use). The customer keeps a garage of saved vehicles (`GET`/`POST /api/me/vehicles`, `PATCH`/`DELETE /api/me/vehicles/:id`) and picks one, or adds one, when opening a case (`POST /api/demands` with `vehicleId` or `vehicle`). The assigned diagnostic, the shop or an admin confirms it on site (`POST /api/maintenance/cases/:id/vehicle/confirm`: corrections, VIN, odometer), which marks it verified; the customer can switch vehicles only until then (`PUT /api/maintenance/cases/:id/vehicle`).
+
+`GET /api/maintenance/cases/:id/vehicle` returns the vehicle reduced to the caller's role: customer, shop, diagnostic and admin see everything; tow sees what it needs to find and load the vehicle (no VIN or odometer); parts sees what it needs for fitment (no plate, color or odometer); mobility sees nothing. Tow's job queue carries the same tow view on every dispatch, and a repair order opened for a case uses the case vehicle unless one is named.
+
+## Dealership inventory sharing
+
+A dealership's or shop's stock is private by default; ROVIQ never assumes cross-dealer inventory access or transfer rights. Each business sets an inventory disclosure policy per resource (`PUT /api/partners/me/inventory-policies/:resourceType`, visibility `private` | `same_organization` | `named_partners` | `network`, with `availability_only` or `quantity` detail) and grants named partners view and/or transfer-request rights (`PUT`/`DELETE /api/partners/me/transfer-permissions/:granteeActorId/:resourceType`, optional expiry). Admins can do the same for any actor under `/api/admin/actors/:actorId/...`. `GET /api/network/parts?sku=` returns only the stock the caller may see.
+
+Automatic sourcing (parts supplier auto-assignment and on-site field repair) uses dealership stock only for the business doing the work, or under an active transfer permission from the owner; dedicated parts suppliers are always eligible. The Shop portal's "Network sharing" panel manages these settings.
+
+## Service app
+
+`service/` is the single app for the service network: sign in once and swipe between a tab for each role the account holds (Diagnostic, Tow, Shop, Parts, Mobility). Each tab runs that role's existing portal, unchanged, in its own same-origin frame with a token scoped to that one role, so the tabs keep the same separation as separate logins. Signing in with the admin account opens every tab through clearly labelled admin test accounts. If any tab's sign-in expires or its role is revoked, the whole app signs out together.
+
+```
+node scripts/build-service-app.mjs   # shell at /, portals at /diagnostic/ /tow/ /partner/ /parts/ /fleet/
+```
+
+Deploys to Cloudflare Pages (`roviq-service`) via `.github/workflows/deploy-service.yml` on every push to `main` that touches the shell or any of those portals. The standalone portal sites keep deploying as before.
 
 ## Remaining work
 

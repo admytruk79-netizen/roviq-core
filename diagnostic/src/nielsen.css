@@ -10,3 +10,6 @@
 @media(max-height:560px) and (orientation:landscape){.case-spatial .live-map-wrap{height:58vh!important;min-height:230px!important}.case-spatial .local-head{padding:8px 10px!important}.spatial-grid>div{min-height:56px!important}}
 @media(prefers-reduced-motion:reduce){.queue-card{transition:none!important;transform:none!important}*{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
 @media(forced-colors:active){.case-spatial,.queue-card,.form{border:1px solid CanvasText!important}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid Highlight!important}}
+
+/* On-site vehicle confirmation. */
+.vehicle-confirm{margin-top:12px!important}.vehicle-confirm .form-head{align-items:flex-start}.vehicle-confirm .form-head h2{margin:4px 0}.vehicle-confirm .form-head p{margin:0;font-size:13px;color:var(--roviq-muted)}.vehicle-confirm form{margin-top:10px}.vehicle-confirm .hint{margin:0 0 8px;font-size:13px;color:var(--roviq-muted)}

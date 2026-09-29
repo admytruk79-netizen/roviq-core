@@ -75,3 +75,23 @@ export type PaymentIntent = {
   authorized_at: string | null;
   captured_at: string | null;
 };
+
+/** A customer's vehicle as the customer sees it (GET /api/me/vehicles, GET /api/maintenance/cases/:id/vehicle). */
+export type CustomerVehicle = {
+  id: string;
+  verified: boolean;
+  year: number | null;
+  make: string | null;
+  model: string | null;
+  trim: string | null;
+  vin?: string | null;
+  nickname?: string | null;
+  color?: string | null;
+  licensePlate?: string | null;
+  plateRegion?: string | null;
+  drivetrain?: string | null;
+  fuelType?: string | null;
+  engine?: string | null;
+  odometerValue?: number | null;
+  odometerUnit?: string;
+};
