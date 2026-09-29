@@ -42,6 +42,10 @@ for (const feed of FEEDS.filter(feed => feed.condition === 'used')) {
     if (dryRun) {
       console.log(`${feed.sourceKey}: scanned ${scanned}, would publish ${vehicles.length}`);
       for (const v of vehicles) console.log(`  ${v.year} ${v.make} ${v.model} ${v.trim} | ${v.mileage} mi | $${v.priceCents / 100} | ${v.vin} | MSRP ${v.raw?.msrp ?? '-'}`);
+      // One JSON line per truck (dealer, listing link, specs) for quotes and audits.
+      for (const v of vehicles) console.log('ROW ' + JSON.stringify({ feed: feed.sourceKey, dealer: v.dealerName, url: v.dealerUrl ?? null, vin: v.vin, year: v.year,
+        make: v.make, model: v.model, trim: v.trim, mileage: v.mileage, dealerPrice: v.priceCents / 100, msrp: v.raw?.msrp || null,
+        engine: v.raw?.engine ?? null, drivetrain: v.drivetrain ?? null, color: v.exteriorColor ?? null, stock: v.raw?.stock ?? null, image: v.images?.[0] ?? null }));
       continue;
     }
     const result = await publishWithRetry(feed, vehicles);
