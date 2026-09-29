@@ -34,7 +34,8 @@ async function publishWithRetry(feed, vehicles, attempts = 3) {
 }
 
 let failures = 0;
-for (const feed of FEEDS.filter(feed => feed.condition === 'used')) {
+// Only used trucks are published; the dry run also previews new-truck feeds for quotes.
+for (const feed of FEEDS.filter(feed => dryRun || feed.condition === 'used')) {
   try {
     const { scanned, vehicles } = await fetchFeedWithRetry(feed);
     // Never publish an empty snapshot: that would wipe the dealer's trucks.
@@ -42,6 +43,10 @@ for (const feed of FEEDS.filter(feed => feed.condition === 'used')) {
     if (dryRun) {
       console.log(`${feed.sourceKey}: scanned ${scanned}, would publish ${vehicles.length}`);
       for (const v of vehicles) console.log(`  ${v.year} ${v.make} ${v.model} ${v.trim} | ${v.mileage} mi | $${v.priceCents / 100} | ${v.vin} | MSRP ${v.raw?.msrp ?? '-'}`);
+      // One JSON line per truck (dealer, listing link, specs) for quotes and audits.
+      for (const v of vehicles) console.log('ROW ' + JSON.stringify({ feed: feed.sourceKey, condition: v.condition, dealer: v.dealerName, url: v.dealerUrl ?? null, vin: v.vin, year: v.year,
+        make: v.make, model: v.model, trim: v.trim, mileage: v.mileage, dealerPrice: v.priceCents / 100, msrp: v.raw?.msrp || null,
+        engine: v.raw?.engine ?? null, drivetrain: v.drivetrain ?? null, color: v.exteriorColor ?? null, stock: v.raw?.stock ?? null, image: v.images?.[0] ?? null }));
       continue;
     }
     const result = await publishWithRetry(feed, vehicles);
