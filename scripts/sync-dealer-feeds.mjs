@@ -15,7 +15,7 @@ for (const feed of FEEDS) {
     if (!vehicles.length) throw new Error(`no_matching_trucks (scanned ${scanned})`);
     if (dryRun) {
       console.log(`${feed.sourceKey}: scanned ${scanned}, would publish ${vehicles.length}`);
-      for (const v of vehicles) console.log(`  ${v.year} ${v.make} ${v.model} ${v.trim} | ${v.mileage} mi | $${v.priceCents / 100} | ${v.vin} | ${JSON.stringify(v.raw?.priceFields ?? {})} | ${v.dealerUrl ?? ''}`);
+      for (const v of vehicles) console.log(`  ${v.year} ${v.make} ${v.model} ${v.trim} | ${v.mileage} mi | $${v.priceCents / 100} | ${v.vin} | MSRP ${v.raw?.msrp ?? '-'}`);
       continue;
     }
     const result = await publishToCore(feed, vehicles, { baseUrl, email, password });
