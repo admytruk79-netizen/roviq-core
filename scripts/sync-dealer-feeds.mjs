@@ -21,6 +21,18 @@ async function fetchFeedWithRetry(feed, attempts = 3) {
   }
 }
 
+async function publishWithRetry(feed, vehicles, attempts = 3) {
+  for (let i = 1; ; i++) {
+    try { return await publishToCore(feed, vehicles, { baseUrl, email, password }); }
+    catch (error) {
+      const message=String(error?.message||error);
+      if (i >= attempts || !/core_login_429|core_sync_429/.test(message)) throw error;
+      console.error(JSON.stringify({ feed: feed.sourceKey, publishRetry: i, error: message }));
+      await new Promise(r => setTimeout(r, 15000 * i));
+    }
+  }
+}
+
 let failures = 0;
 for (const feed of FEEDS.filter(feed => feed.condition === 'used')) {
   try {
@@ -32,7 +44,7 @@ for (const feed of FEEDS.filter(feed => feed.condition === 'used')) {
       for (const v of vehicles) console.log(`  ${v.year} ${v.make} ${v.model} ${v.trim} | ${v.mileage} mi | $${v.priceCents / 100} | ${v.vin} | MSRP ${v.raw?.msrp ?? '-'}`);
       continue;
     }
-    const result = await publishToCore(feed, vehicles, { baseUrl, email, password });
+    const result = await publishWithRetry(feed, vehicles);
     console.log(JSON.stringify({ feed: feed.sourceKey, scanned, published: vehicles.length, result }));
   } catch (error) {
     failures++;
