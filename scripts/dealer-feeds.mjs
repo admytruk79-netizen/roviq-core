@@ -409,13 +409,28 @@ async function fetchJazelFeed(feed, fetcher) {
   return { scanned: seen.size, vehicles };
 }
 
+// The search settings are dealership-wide and appear on several pages; if the
+// first page comes back without them (bot check, redesign), try the others and
+// report what the dealer actually served.
+export async function loadSearchConfig(feed, fetcher = fetch) {
+  const origin = new URL(feed.pageUrl).origin;
+  const pages = [...new Set([feed.pageUrl, `${origin}/`, `${origin}/new-vehicles/`, `${origin}/used-vehicles/`])];
+  const seen = [];
+  for (const url of pages) {
+    const res = await fetcher(url, { headers: { 'user-agent': PAGE_USER_AGENT } });
+    const html = res.ok ? await res.text() : '';
+    try { if (res.ok) return readSearchConfig(html); } catch {}
+    const title = (html.match(/<title[^>]*>([^<]{0,80})/i)?.[1] || '').trim();
+    seen.push(`${new URL(url).pathname}=${res.status}${title ? `:${title}` : ''}`);
+  }
+  throw new Error(`search_config_not_found (${seen.join(', ')})`);
+}
+
 export async function fetchFeed(feed, fetcher = fetch) {
   if (feed.platform === 'dealer-com') return fetchDealerComFeed(feed, fetcher);
   if (feed.platform === 'dealeron') return fetchDealerOnFeed(feed, fetcher);
   if (feed.platform === 'jazel') return fetchJazelFeed(feed, fetcher);
-  const page = await fetcher(feed.pageUrl, { headers: { 'user-agent': PAGE_USER_AGENT } });
-  if (!page.ok) throw new Error(`dealer_page_${page.status}`);
-  const cfg = readSearchConfig(await page.text());
+  const cfg = await loadSearchConfig(feed, fetcher);
   const listings = [];
   for (let n = 1; n <= 20; n++) {
     const res = await fetcher(cfg.search + '/search', {

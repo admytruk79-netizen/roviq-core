@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FEEDS, dealerOnSellingPrice, readDealerOnPriceLibrary, USED_MAX_MILES, dealerComToFeedVehicle, dealerOnToFeedVehicle, fetchFeed, jazelToFeedVehicle, publishToCore, readDealerComVehicles, readDealerOnIds, readJazelVehicles, readSearchConfig, toFeedVehicle } from './dealer-feeds.mjs';
+import { FEEDS, loadSearchConfig, dealerOnSellingPrice, readDealerOnPriceLibrary, USED_MAX_MILES, dealerComToFeedVehicle, dealerOnToFeedVehicle, fetchFeed, jazelToFeedVehicle, publishToCore, readDealerComVehicles, readDealerOnIds, readJazelVehicles, readSearchConfig, toFeedVehicle } from './dealer-feeds.mjs';
 
 const feed = FEEDS[0];
 const page = `<script>var SEARCH_SERVICE = {"apiUrl":"https://websites-search.api.carscommerce.inc","ccid":"6067995","apiKey":"public-key","search":"https://websites-search.api.carscommerce.inc/api/v1/listings/6067995","visibleStatusValues":["publish","modified","pend-sale"]}; var SEARCH_SERVICE_FIELD_MAP = {"requestedFields":["vin","pricing"]}; var other = 1;</script>`;
@@ -305,5 +305,21 @@ describe('DealerOn selling price comes from the dealer price sheet, not the stic
     expect(readDealerOnPriceLibrary('not base64 ;;')).toEqual({});
     expect(dealerOnSellingPrice(card({ VehicleInternetPrice: '$64,980' }))).toBe(64980);
     expect(dealerOnSellingPrice(card())).toBe(85895);
+  });
+});
+
+describe('search settings fallback', () => {
+  const cfgPage = '<script>var SEARCH_SERVICE = {"search":"https://s.example","apiKey":"k","visibleStatusValues":["publish"]}; var x=1;</script>';
+  it('tries the dealer homepage when the configured page lacks the settings', async () => {
+    const urls = [];
+    const fetcher = async url => { urls.push(url); return new Response(url.endsWith('.com/') ? cfgPage : '<title>Just a moment...</title>'); };
+    const cfg = await loadSearchConfig({ pageUrl: 'https://www.dealer.com/new-vehicles/' }, fetcher);
+    expect(cfg).toMatchObject({ search: 'https://s.example', apiKey: 'k' });
+    expect(urls).toEqual(['https://www.dealer.com/new-vehicles/', 'https://www.dealer.com/']);
+  });
+  it('names what each page returned when none has the settings', async () => {
+    const fetcher = async url => url.includes('used') ? new Response('', { status: 403 }) : new Response('<title>Just a moment...</title>');
+    await expect(loadSearchConfig({ pageUrl: 'https://www.dealer.com/new-vehicles/' }, fetcher))
+      .rejects.toThrow('search_config_not_found (/new-vehicles/=200:Just a moment..., /=200:Just a moment..., /used-vehicles/=403)');
   });
 });
