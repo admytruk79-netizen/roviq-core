@@ -8,6 +8,7 @@ import { exceptionRoutes } from './routes/exceptions.js';
 import { coherenceRoutes } from './routes/coherence.js';
 import { caseVehicleRoutes } from './routes/case-vehicle.js';
 import { networkInventoryRoutes } from './routes/network-inventory.js';
+import { integrationsStatusRoutes } from './routes/integrations-status.js';
 import { fieldServiceRoutes } from './routes/field-service.js';
 import { meRoutes } from './routes/me.js';
 import { servicePlanRoutes } from './routes/service-plans.js';
@@ -61,7 +62,7 @@ const routeModules: RouteModule[] = [
   { name: 'shop-os', plugins: [shopOsRoutes, shopOsDeferredAppointmentChoiceRoutes, shopOsFloorRoutes] },
   { name: 'financial-and-communications', plugins: [paymentWebhookRoutes, paymentRoutes, commerceRoutes, notificationRoutes] },
   { name: 'integration-and-observability', plugins: [integrationRoutes, analyticsRoutes, localRoutes, pilotRoutes, inventoryRoutes] },
-  { name: 'actor-surfaces', plugins: [partnerRoutes, adminRoutes] }
+  { name: 'actor-surfaces', plugins: [partnerRoutes, adminRoutes, integrationsStatusRoutes] }
 ];
 
 export async function registerPublicRoutes(app: FastifyInstance) {

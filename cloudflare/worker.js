@@ -28,6 +28,20 @@ function authorized(request, env) {
   return Boolean(env.ADMIN_API_KEY && supplied && supplied === env.ADMIN_API_KEY);
 }
 
+async function edgeAdmin(request, env) {
+  if (authorized(request, env)) return true;
+  const auth = request.headers.get('authorization');
+  if (!auth || !auth.startsWith('Bearer ') || !env.CORE_API_URL) return false;
+  try {
+    const response = await fetch(new URL('/api/auth/roles', env.CORE_API_URL), { headers: { authorization: auth } });
+    if (!response.ok) return false;
+    const body = await response.json();
+    return body?.active?.role === 'admin';
+  } catch {
+    return false;
+  }
+}
+
 function safetyRules(symptoms = '', observations = {}) {
   const text = `${symptoms} ${JSON.stringify(observations)}`.toLowerCase();
   const rules = [
@@ -502,6 +516,24 @@ export default {
         const sql = await sqlFor(env);
         const rows = await sql`select now() as database_time, current_database() as database_name, current_user as database_user`;
         return json({ ok: true, service: 'roviq-core', database: 'reachable', ...rows[0], aiBinding: Boolean(env.AI), scheduledOperations: 'cloudflare-cron' });
+      }
+
+      // Which notification services this Worker can use (it sends texts, email and push from the
+      // scheduled operations sweep). Presence only, never values. Admin only: an admin API key, or a
+      // bearer token that Core confirms is an active admin sign-in.
+      if (url.pathname === '/api/edge/integrations' && request.method === 'GET') {
+        if (!(await edgeAdmin(request, env))) return json({ error: 'unauthorized' }, 401);
+        const set = (name) => Boolean(env[name] && String(env[name]).trim());
+        return json({
+          runtime: 'cloudflare-worker',
+          deployRevision: env.DEPLOY_REVISION || null,
+          sms: { twilio: set('TWILIO_ACCOUNT_SID') && set('TWILIO_AUTH_TOKEN') && set('TWILIO_FROM_NUMBER') },
+          email: { resend: set('RESEND_API_KEY') && set('RESEND_FROM_EMAIL') },
+          push: { vapid: set('VAPID_PUBLIC_KEY') && set('VAPID_PRIVATE_KEY') && set('VAPID_SUBJECT') },
+          database: set('DATABASE_URL'),
+          coreApiUrl: set('CORE_API_URL'),
+          aiBinding: Boolean(env.AI)
+        });
       }
 
       if (url.pathname === '/api/core/status') {
