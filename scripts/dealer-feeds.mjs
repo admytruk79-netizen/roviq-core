@@ -154,7 +154,8 @@ export function toFeedVehicle(listing, feed) {
     dealerUrl: listing.vdp_url || undefined,
     raw: {
       source: 'cars-commerce-search', certified, stock: listing.stock, style, engine: listing.mechanical?.engine,
-      msrp: p.msrp, dealerPrice: price, statusLabel: listing.extra_fields?.lightning?.statusLabel
+      msrp: p.msrp, dealerPrice: price, statusLabel: listing.extra_fields?.lightning?.statusLabel,
+      priceFields: { ...priceFields(p), ...Object.fromEntries(Object.entries(p || {}).filter(([k, v]) => v && typeof v === 'object').map(([k, v]) => [k, JSON.stringify(v).slice(0, 300)])) }
     }
   };
 }
@@ -198,6 +199,16 @@ export function readDealerComVehicles(html) {
 // Ford VINs carry the cab in position 5: "W" is SuperCrew / Crew Cab.
 const fordCrewVin = (make, vin) => /^ford$/i.test(String(make || '')) && String(vin || '')[4] === 'W';
 
+// Every price-like field a dealer publishes for a listing, kept with the truck so the
+// chosen price can be audited against the dealer's page.
+export function priceFields(obj) {
+  const out = {};
+  for (const [k, v] of Object.entries(obj || {})) {
+    if (/price|msrp|discount|rebate|saving|incentive|adjust/i.test(k) && (typeof v === 'string' || typeof v === 'number') && String(v).trim()) out[k] = v;
+  }
+  return out;
+}
+
 const money = v => Number(String(v ?? '').replace(/[^0-9.]/g, '')) || 0;
 
 // GM model codes end in 43 for crew cabs (CK10543, CK10743, CK20743, TK10543 ...);
@@ -225,7 +236,8 @@ export function dealerComToFeedVehicle(v, feed) {
     images: (v.images || []).map(i => i?.uri).filter(u => typeof u === 'string').slice(0, 24),
     priceCents: Math.round(price * 100), dealerName: feed.dealerName,
     dealerUrl: v.link ? new URL(v.link, base).href : undefined,
-    raw: { source: 'dealer-com-widget', stock: v.stockNumber, modelCode: v.modelCode, msrp: money(v.pricing?.retailPrice) || undefined, dealerPrice: price }
+    raw: { source: 'dealer-com-widget', stock: v.stockNumber, modelCode: v.modelCode, msrp: money(v.pricing?.retailPrice) || undefined, dealerPrice: price,
+      priceFields: { retailPrice: v.pricing?.retailPrice, ...Object.fromEntries(dp.map(d => [`${d.type}:${d.label}${d.isFinalPrice ? '*' : ''}`, d.value])) } }
   };
 }
 
@@ -283,7 +295,7 @@ export function dealerOnToFeedVehicle(card, feed) {
     fuelType: card.VehicleFuelType || undefined, bodyStyle: card.VehicleBodyStyle || 'Crew Cab Pickup',
     images: [...new Set(photos)].filter(u => typeof u === 'string').map(u => new URL(u, origin).href).slice(0, 24),
     priceCents: Math.round(price * 100), dealerName: feed.dealerName, dealerUrl: card.VehicleDetailUrl || undefined,
-    raw: { source: 'dealeron-cards', stock: card.VehicleStockNumber, modelCode: card.VehicleModelCode, engine: card.VehicleEngine, msrp: money(card.VehicleMsrp) || undefined, dealerPrice: price }
+    raw: { source: 'dealeron-cards', stock: card.VehicleStockNumber, modelCode: card.VehicleModelCode, engine: card.VehicleEngine, msrp: money(card.VehicleMsrp) || undefined, dealerPrice: price, priceFields: priceFields(card) }
   };
 }
 
@@ -351,7 +363,7 @@ export function jazelToFeedVehicle(d, feed) {
     exteriorColor: d.exterior_color || undefined, drivetrain: d.drivetrain || undefined, fuelType: d.fuelType || undefined,
     bodyStyle: f150 ? 'SuperCrew' : 'Crew Cab', images: d.image ? [d.image] : [],
     priceCents: Math.round(price * 100), dealerName: feed.dealerName, dealerUrl: undefined,
-    raw: { source: 'jazel-listing', stock: d.stockNumber, dealerPrice: price }
+    raw: { source: 'jazel-listing', stock: d.stockNumber, dealerPrice: price, priceFields: priceFields(d) }
   };
 }
 
