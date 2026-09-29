@@ -1,0 +1,66 @@
+name: Check ROVIQ Integrations
+
+# Reports which external services production can use -- Stripe on Core, and texts, email and push
+# on the Worker that sends notifications. Prints yes/no and Stripe's test/live mode only; no key or
+# secret value is ever returned by the endpoints or printed here.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      EDGE_URL: https://roviq-core.admytruk79.workers.dev
+      ADMIN_EMAIL: ${{ secrets.BOOTSTRAP_ADMIN_EMAIL }}
+      ADMIN_PASSWORD: ${{ secrets.BOOTSTRAP_ADMIN_PASSWORD }}
+    steps:
+      - name: Report production integrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$ADMIN_EMAIL" && test -n "$ADMIN_PASSWORD" || { echo "BOOTSTRAP_ADMIN_EMAIL / BOOTSTRAP_ADMIN_PASSWORD repository secrets are required"; exit 1; }
+
+          # Render's free plan sleeps; wake Core before signing in.
+          for attempt in $(seq 1 12); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 25 "$EDGE_URL/api/auth/roles" || true)"
+            [[ "$code" == "401" ]] && break
+            sleep 10
+          done
+
+          token="$(jq -n --arg e "$ADMIN_EMAIL" --arg p "$ADMIN_PASSWORD" '{email:$e,password:$p}' \
+            | curl -sS --fail-with-body -H 'content-type: application/json' --data @- "$EDGE_URL/api/auth/login" \
+            | jq -r '.accessToken')"
+          echo "::add-mask::$token"
+
+          core="$(curl -sS --fail-with-body -H "authorization: Bearer $token" "$EDGE_URL/api/admin/integrations/status")"
+          edge="$(curl -sS --fail-with-body -H "authorization: Bearer $token" "$EDGE_URL/api/edge/integrations")"
+          echo "Core:";   echo "$core" | jq .
+          echo "Worker:"; echo "$edge" | jq .
+
+          yn() { [[ "$1" == "true" ]] && echo "✅ yes" || echo "❌ no"; }
+          {
+            echo "## ROVIQ production integrations"
+            echo
+            echo "| Service | Where | Configured |"
+            echo "|---|---|---|"
+            echo "| Stripe secret key | Core (Render) | $(yn "$(jq -r .stripe.secretKey <<<"$core")") — mode: $(jq -r '.stripe.mode // "none"' <<<"$core") |"
+            echo "| Stripe webhook secret | Core (Render) | $(yn "$(jq -r .stripe.webhookSecret <<<"$core")") |"
+            echo "| Stripe publishable key | Core (Render) | $(yn "$(jq -r .stripe.publishableKey <<<"$core")") |"
+            echo "| Texts (Twilio) | Worker (Cloudflare) | $(yn "$(jq -r .sms.twilio <<<"$edge")") |"
+            echo "| Email (Resend) | Worker (Cloudflare) | $(yn "$(jq -r .email.resend <<<"$edge")") |"
+            echo "| Push (VAPID) | Worker (Cloudflare) | $(yn "$(jq -r .push.vapid <<<"$edge")") |"
+            echo "| Push public key for apps | Core (Render) | $(yn "$(jq -r .push.vapid <<<"$core")") |"
+            echo "| Workers AI binding | Worker (Cloudflare) | $(yn "$(jq -r .aiBinding <<<"$edge")") |"
+            echo
+            echo "Notification channels enabled in the database:"
+            echo
+            jq -r '.notificationChannels[] | "- \(.channel): \(.provider) (\(if .enabled then "enabled" else "disabled" end))"' <<<"$core"
+            echo
+            echo "Core revision: $(jq -r '.revision // "unknown"' <<<"$core")"
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"
