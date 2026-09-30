@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { pool } from '../../db/pool.js';
 import { requireRole } from '../middleware/principal.js';
-import { stripeKeyShape, stripeSecretKey } from '../../services/stripe-config.js';
+import { stripeKeyHint, stripeKeyShape, stripeSecretKey } from '../../services/stripe-config.js';
 
 // Which external services this Core deployment can actually use. Reports presence and mode only --
 // never a key, token or secret value -- so an admin can confirm production wiring without access
@@ -54,6 +54,7 @@ export async function integrationsStatusRoutes(app: FastifyInstance) {
         publishableKey: set('STRIPE_PUBLISHABLE_KEY'),
         mode: stripeMode(),
         keyShape: stripeKeyShape(stripeSecretKey()),
+        keyHint: stripeKeyHint(stripeSecretKey()),
         check: await stripeReachable()
       },
       sms: { twilio: set('TWILIO_ACCOUNT_SID') && set('TWILIO_AUTH_TOKEN') && set('TWILIO_FROM_NUMBER') },

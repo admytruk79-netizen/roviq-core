@@ -49,7 +49,7 @@ jobs:
             echo "| Service | Where | Configured |"
             echo "|---|---|---|"
             echo "| Stripe secret key | Core (Render) | $(yn "$(jq -r .stripe.secretKey <<<"$core")") — mode: $(jq -r '.stripe.mode // "none"' <<<"$core") |"
-            echo "| Stripe key type | Core (Render) | $(jq -r '.stripe.keyShape // "none"' <<<"$core") |"
+            echo "| Stripe key type | Core (Render) | $(jq -r '.stripe.keyShape // "none"' <<<"$core") (starts with: $(jq -r '.stripe.keyHint.prefix // "no prefix"' <<<"$core"), $(jq -r '.stripe.keyHint.length // 0' <<<"$core") characters) |"
             echo "| Stripe accepts the key | Stripe API | $(yn "$(jq -r '.stripe.check.ok // false' <<<"$core")") $(jq -r 'if .stripe.check.error then "— " + .stripe.check.error else "" end' <<<"$core") |"
             echo "| Stripe webhook secret | Core (Render) | $(yn "$(jq -r .stripe.webhookSecret <<<"$core")") |"
             echo "| Stripe publishable key | Core (Render) | $(yn "$(jq -r .stripe.publishableKey <<<"$core")") |"

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cleanStripeSecret, stripeKeyShape } from './stripe-config.js';
+import { cleanStripeSecret, stripeKeyHint, stripeKeyShape } from './stripe-config.js';
 
 describe('Stripe secret key cleanup', () => {
   const key = 'sk_test_51AbcDEF123';
@@ -25,5 +25,12 @@ describe('Stripe secret key cleanup', () => {
     expect(stripeKeyShape('pk_test_123')).toBe('publishable');
     expect(stripeKeyShape('mk_123')).toBe('unrecognized');
     expect(stripeKeyShape(cleanStripeSecret('   '))).toBeNull();
+  });
+
+  it('hints at what was pasted without revealing it', () => {
+    expect(stripeKeyHint('mk_1AbC')).toEqual({ prefix: 'mk_', length: 7 });
+    expect(stripeKeyHint('whsec_x')).toEqual({ prefix: 'whsec_', length: 7 });
+    expect(stripeKeyHint('Reveal test key')).toEqual({ prefix: null, length: 15 });
+    expect(stripeKeyHint(null)).toBeNull();
   });
 });
