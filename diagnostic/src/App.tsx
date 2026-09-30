@@ -1,6 +1,7 @@
 import {useEffect,useRef,useState,type FormEvent} from 'react';
 import {CoreCasePanel} from './CoreCasePanel';
 import {VehicleConfirmPanel} from './VehicleConfirmPanel';
+import roviqLogo from './brand/roviq-lockup-dark.svg';
 
 type Principal={role:string;actorId?:string|null};
 type QueueItem={offer_id:string;case_id?:string;demand_id:string;demand_type:string;urgency:number;outcome:'offered'|'accepted';location?:unknown;attributes?:unknown};
@@ -75,5 +76,5 @@ export default function App(){
 }
 
 function Login(p:any){return <div className="shell login"><form className="panel login-card" onSubmit={p.login} aria-busy={p.loginBusy}><Brand/><span className="eyebrow">Diagnostic portal</span><h1>Sign in</h1><p>Travel to the vehicle, verify the issue and hand the evidence back to ROVIQ Core.</p><label>Email<input type="email" autoComplete="email" required value={p.email} onChange={(e:any)=>p.setEmail(e.target.value)}/></label><label>Password<div className="password"><input type={p.show?'text':'password'} autoComplete="current-password" required value={p.password} onChange={(e:any)=>p.setPassword(e.target.value)}/><button type="button" aria-label={p.show?'Hide password':'Show password'} onClick={()=>p.setShow(!p.show)}>{p.show?'Hide':'Show'}</button></div></label>{p.error&&<div className="error" role="alert">{p.error}</div>}<button className="primary wide" disabled={p.loginBusy} aria-busy={p.loginBusy}>{p.loginBusy?'Signing in…':'Enter diagnostic work'}</button></form></div>}
-function Brand(){return <div className="brand" aria-label="ROVIQ"><span className="mark" aria-hidden="true">R</span><span>ROVIQ</span></div>}
-function Shell({logout,children}:any){return <div className="shell"><header className="app-header"><Brand/><div className="header-actions"><span className="portal-label">Diagnostic</span><button className="secondary" onClick={logout}>Sign out</button></div></header><main>{children}</main></div>}
+function Brand(){return <div className="brand"><img className="roviq-logo" src={roviqLogo} alt="ROVIQ" /></div>}
+function Shell({logout,children}:any){return <div className="shell"><header className="app-header"><Brand/><div className="header-actions"><span className="portal-label">Diagnostic</span><button className="secondary embed-signout" onClick={logout}>Sign out</button></div></header><main>{children}</main></div>}

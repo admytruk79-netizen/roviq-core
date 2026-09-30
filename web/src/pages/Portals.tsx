@@ -1,3 +1,4 @@
+import roviqLogo from '../brand/roviq-lockup-dark.svg';
 const portals = [
   {
     name: 'Customer',
@@ -43,7 +44,7 @@ export function Portals() {
       <main className="mx-auto max-w-6xl">
         <div className="mb-9 flex flex-col justify-between gap-5 md:flex-row md:items-end">
           <div>
-            <div className="roviq-brand mb-7"><span className="roviq-mark"><span>R</span></span><span>ROVIQ</span></div>
+            <div className="roviq-brand mb-7"><img className="roviq-logo" src={roviqLogo} alt="ROVIQ" /></div>
             <p className="roviq-kicker">ROVIQ network</p>
             <h1 className="mt-2 text-4xl font-black tracking-[-0.035em] sm:text-5xl">All portals. One Core.</h1>
             <p className="roviq-muted mt-3 max-w-2xl text-base leading-7">Choose the operating surface you need. Each portal connects to the same coordinated ROVIQ backend and case lifecycle.</p>
