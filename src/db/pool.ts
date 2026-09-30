@@ -1,8 +1,14 @@
 import pg from 'pg';
 import { env } from '../config/env.js';
 
+// pg treats sslmode=prefer/require/verify-ca as verify-full and logs a security warning on every
+// start. Name the mode it actually uses so the connection behaves the same and the warning stops.
+export function normalizeSslMode(url: string) {
+  return url.replace(/([?&]sslmode=)(prefer|require|verify-ca)(?=&|$)/i, '$1verify-full');
+}
+
 export const pool = new pg.Pool({
-  connectionString: env.DATABASE_URL,
+  connectionString: normalizeSslMode(env.DATABASE_URL),
   max: 10,
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 10_000,
