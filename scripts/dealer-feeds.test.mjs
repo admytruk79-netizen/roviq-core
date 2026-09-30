@@ -40,7 +40,8 @@ describe('Kendall Ford of Vancouver feed', () => {
     expect(toFeedVehicle(listing({ type: 'New' }), feed)).toBeNull();
     expect(toFeedVehicle(listing({ mileage: 40000 }), feed)).toBeNull();
     expect(toFeedVehicle(listing({ mileage: 39999 }), feed)).toMatchObject({ mileage: 39999 });
-    expect(toFeedVehicle(listing({ mileage: 250 }), feed)).toMatchObject({ condition: 'used', mileage: 250 });
+    expect(toFeedVehicle(listing({ mileage: 250 }), feed)).toBeNull();
+    expect(toFeedVehicle(listing({ mileage: 500 }), feed)).toMatchObject({ condition: 'used', mileage: 500 });
     expect(toFeedVehicle(listing({ pricing: {} }), feed)).toBeNull();
   });
 
@@ -268,12 +269,13 @@ describe('used low-mileage trucks from every dealer (under 40,000 miles)', () =>
     expect(USED_MAX_MILES).toBe(40000);
   });
 
-  it('DealerOn used: used and certified stock, any make, 200 miles counts, 40,000 does not', () => {
+  it('DealerOn used: used and certified stock, any make, 2,200 miles counts, under 500 and 40,000 do not', () => {
     const feed = byKey('buick-gmc-beaverton-used-trucks');
     const card = o => ({ VehicleVin: '1FTFW1E57NKF17052', VehicleType: 'Used', VehicleYear: '2023', VehicleMake: 'Ford', VehicleModel: 'F-150',
-      VehicleTrim: 'XLT', VehicleBodyStyle: 'Pickup', VehicleInternetPrice: '$41,995', VehicleMileage: '220', ...o });
-    expect(dealerOnToFeedVehicle(card(), feed)).toMatchObject({ condition: 'used', make: 'Ford', model: 'F-150', trim: 'XLT SuperCrew', mileage: 220 });
-    expect(dealerOnToFeedVehicle(card({ VehicleType: 'Certified' }), feed)).toMatchObject({ mileage: 220 });
+      VehicleTrim: 'XLT', VehicleBodyStyle: 'Pickup', VehicleInternetPrice: '$41,995', VehicleMileage: '2200', ...o });
+    expect(dealerOnToFeedVehicle(card(), feed)).toMatchObject({ condition: 'used', make: 'Ford', model: 'F-150', trim: 'XLT SuperCrew', mileage: 2200 });
+    expect(dealerOnToFeedVehicle(card({ VehicleType: 'Certified' }), feed)).toMatchObject({ mileage: 2200 });
+    expect(dealerOnToFeedVehicle(card({ VehicleMileage: '220' }), feed)).toBeNull();
     expect(dealerOnToFeedVehicle(card({ VehicleMileage: '40000' }), feed)).toBeNull();
     expect(dealerOnToFeedVehicle(card({ VehicleMileage: '0' }), feed)).toBeNull();
     expect(dealerOnToFeedVehicle(card({ VehicleVin: '1FTFX1E57NKF17052' }), feed)).toBeNull(); // SuperCab

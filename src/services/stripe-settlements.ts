@@ -1,4 +1,5 @@
 import { pool } from '../db/pool.js';
+import { stripeSecretKey } from './stripe-config.js';
 import type { Principal } from '../types/principal.js';
 import { createPayout, updatePayoutState } from './payment-core.js';
 
@@ -35,7 +36,7 @@ export async function createStripePartnerSettlement(principal:Principal,input:{
   idempotencyKey:string;
   metadata?:Record<string,unknown>;
 }){
-  const secret=process.env.STRIPE_SECRET_KEY;
+  const secret=stripeSecretKey();
   if(!secret) throw new Error('stripe_not_configured');
   const currency=(input.currency??'USD').toUpperCase();
   const destination=await connectedAccountId(input.counterpartyActorId);

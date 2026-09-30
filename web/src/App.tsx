@@ -1,4 +1,4 @@
-import { BrowserRouter, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider } from './lib/auth';
 import { Layout } from './components/Layout';
 import { ProtectedRoute } from './components/ProtectedRoute';
@@ -7,7 +7,6 @@ import { Cases } from './pages/Cases';
 import { NewDemand } from './pages/NewDemand';
 import { CaseDetail } from './pages/CaseDetail';
 import { Local } from './pages/Local';
-import { Inventory } from './pages/Inventory';
 import { UkraineInventory } from './pages/UkraineInventory';
 import { NotFound } from './pages/NotFound';
 import { CoreCases } from './pages/CoreCases';
@@ -20,9 +19,8 @@ function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/ukraine" element={<UkraineInventory />} />
-          <Route element={<Layout />}>
-            <Route path="/inventory" element={<Inventory />} />
-          </Route>
+          {/* The truck inventory lives on its own page; old links go there. */}
+          <Route path="/inventory" element={<Navigate to="/ukraine" replace />} />
           <Route element={<ProtectedRoute />}>
             <Route element={<Layout />}>
               <Route path="/" element={<Cases />} />
