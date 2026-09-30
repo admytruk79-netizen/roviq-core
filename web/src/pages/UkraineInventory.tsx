@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import { Inventory } from './Inventory';
+import roviqLogo from '../brand/roviq-lockup-dark.svg';
 
 export function UkraineInventory() {
   return (
@@ -7,8 +8,8 @@ export function UkraineInventory() {
       <header className="roviq-header">
         <div className="roviq-header-inner mx-auto max-w-6xl px-4 sm:px-6">
           <Link to="/ukraine" className="roviq-brand" aria-label="ROVIQ vehicle export">
-            <span className="roviq-mark"><span>R</span></span>
-            <span>ROVIQ Vehicle Export</span>
+            <img className="roviq-logo" src={roviqLogo} alt="ROVIQ" />
+            <span className="roviq-logo-label">Vehicle Export</span>
           </Link>
           <div className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--roviq-muted)]">U.S. trucks for Ukraine</div>
         </div>

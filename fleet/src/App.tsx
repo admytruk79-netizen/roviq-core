@@ -1,3 +1,4 @@
+import roviqLogo from './brand/roviq-lockup-dark.svg';
 import{useEffect,useMemo,useState,type FormEvent}from'react';
 
 type Principal={role:string;actorId?:string|null};
@@ -59,7 +60,7 @@ export default function App(){
 
  if(!principal)return <div className="shell login"><form className="panel login-card" onSubmit={login}><Brand/><span className="eyebrow">Fleet & Mobility</span><h1>Sign in</h1><p>Manage mobility allocations and the ROVIQ Cases assigned to your operation.</p><label>Email<input required type="email" autoComplete="email" value={email} onChange={e=>setEmail(e.target.value)}/></label><label>Password<div className="password"><input required type={show?'text':'password'} autoComplete="current-password" value={password} onChange={e=>setPassword(e.target.value)}/><button type="button" onClick={()=>setShow(v=>!v)}>{show?'Hide':'Show'}</button></div></label>{error&&<div className="error">{human(error)}</div>}<button className="primary wide" disabled={loginBusy}>{loginBusy?'Signing in…':'Enter Fleet workspace'}</button></form></div>;
 
- return <div className="shell"><header><Brand/><div><span>Fleet & Mobility</span><button className="secondary" onClick={()=>setRefresh(v=>v+1)}>Refresh</button><button className="secondary" onClick={logout}>Sign out</button></div></header><main>
+ return <div className="shell"><header><Brand/><div><span>Fleet & Mobility</span><button className="secondary" onClick={()=>setRefresh(v=>v+1)}>Refresh</button><button className="secondary embed-signout" onClick={logout}>Sign out</button></div></header><main>
    <section className="hero"><div><span className="eyebrow">ROVIQ Core</span><h1>Fleet & Mobility Workspace</h1><p>One operational surface for assigned mobility work and universal Core Cases.</p></div><div className="metric"><b>{allocations.length}</b><span>active allocations</span></div></section>
    {error&&<div className="error">{human(error)}</div>}{notice&&<div className="notice">{notice}</div>}
 
@@ -71,4 +72,4 @@ export default function App(){
    <div className="panel detail">{!selectedCase?<div className="empty"><p>Select an assigned Case.</p></div>:<><div className="card-top"><div><span className="eyebrow">{human(selectedCase.case_type)} Case</span><h3>Case {selectedCase.id.slice(0,8)}</h3><p>Priority {human(selectedCase.priority)} · Core v{selectedCase.version}</p></div>{badge(selectedCase.state)}</div><h4>Available Case actions</h4><div className="actions">{actions?.transitions.map(a=>{const ok=!a.approvalRecommended||approved.has(a.action);return <button key={a.to} className="secondary" disabled={Boolean(busy)||!ok} onClick={()=>void move(a)}>{busy===`case:${a.to}`?'Applying…':human(a.to)}{!ok?' · approval required':''}</button>})}{actions&&actions.transitions.length===0&&<span className="muted">No transitions available.</span>}</div><h4>Approval records</h4><div className="approval-list">{approvals.length===0?<p className="muted">No approvals.</p>:approvals.map(a=><div key={a.id} className="approval"><div><strong>{human(a.approval_type)}</strong><span>{human(a.action)}</span></div>{badge(a.state)}</div>)}</div></>}</div></div></section>
  </main></div>
 }
-function Brand(){return <div className="brand"><span className="mark">R</span><span>ROVIQ</span></div>}
+function Brand(){return <div className="brand"><img className="roviq-logo" src={roviqLogo} alt="ROVIQ" /></div>}

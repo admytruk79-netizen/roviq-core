@@ -33,3 +33,12 @@ export function stripeKeyShape(key: string | null): StripeKeyShape | null {
   if (m[1] === 'pk') return 'publishable';
   return `${m[1] === 'sk' ? 'secret' : 'restricted'}_${m[2]}` as StripeKeyShape;
 }
+
+// What the stored value starts with (up to the first underscore) and how long it is. Neither reveals
+// the key, but together they tell a mis-paste apart: a key ID (mk_), the publishable key (pk_),
+// a webhook secret (whsec_), or a cut-off key.
+export function stripeKeyHint(key: string | null): { prefix: string | null; length: number } | null {
+  if (!key) return null;
+  const prefix = key.match(/^[A-Za-z]{2,6}_/)?.[0] ?? null;
+  return { prefix, length: key.length };
+}

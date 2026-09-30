@@ -3,7 +3,9 @@ html, body, #root { margin: 0; height: 100%; }
 body { background: var(--roviq-navy-deep); color: var(--roviq-porcelain); }
 button, input { font: inherit; }
 
-.brand { margin: 0; white-space: nowrap; font-weight: 900; letter-spacing: .16em; font-size: 16px; }
+.brand { margin: 0; display: flex; align-items: center; gap: 10px; white-space: nowrap; font-weight: 900; letter-spacing: .16em; font-size: 16px; }
+.roviq-logo { display: block; height: 26px; width: auto; }
+.roviq-logo-mark { display: none; height: 24px; width: auto; }
 .brand span { color: var(--roviq-copper); letter-spacing: .08em; font-weight: 800; }
 
 /* Sign-in */
@@ -37,7 +39,9 @@ button, input { font: inherit; }
 @media (max-width: 520px) {
   .topbar { padding-left: 12px; padding-right: 12px; }
   .topbar-row { gap: 8px; }
-  .brand { font-size: 14px; letter-spacing: .12em; }
+  .brand { font-size: 14px; letter-spacing: .12em; gap: 8px; }
+  .roviq-logo { display: none; }
+  .roviq-logo-mark { display: block; }
   .test-badge { font-size: 10px; padding: 3px 7px; }
   .signout { padding: 0 12px; font-size: 14px; }
   /* Up to five tabs share the width on a phone rather than scrolling off-screen. */

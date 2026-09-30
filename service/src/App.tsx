@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type TouchEvent } from 'react';
 import { isTabSignOut, lastTab, rememberTab, restoreSession, signIn, signInMessage, signOut, workspaceFor, type Role, type ServiceSession } from './session';
+import roviqLogo from './brand/roviq-lockup-dark.svg';
+import roviqMark from './brand/roviq-mark-dark.svg';
 
 const SWIPE_MIN_PX = 60;
 
@@ -26,7 +28,7 @@ function SignIn({ onSignedIn, notice }: { onSignedIn: (session: ServiceSession) 
   return (
     <main className="signin">
       <form className="signin-card" onSubmit={submit} aria-busy={busy}>
-        <p className="brand">ROVIQ <span>Service</span></p>
+        <p className="brand"><img className="roviq-logo" src={roviqLogo} alt="ROVIQ" /><img className="roviq-logo-mark" src={roviqMark} alt="ROVIQ" /><span>Service</span></p>
         <h1>Sign in to your workspaces</h1>
         <p className="hint">One sign-in opens every role your business holds: Diagnostic, Tow, Shop, Parts or Mobility.</p>
         {notice && <p className="notice" role="status">{notice}</p>}
@@ -97,7 +99,7 @@ function Workspaces({ session, onSignOut }: { session: ServiceSession; onSignOut
     <div className="shell">
       <header className="topbar" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
         <div className="topbar-row">
-          <p className="brand">ROVIQ <span>Service</span></p>
+          <p className="brand"><img className="roviq-logo" src={roviqLogo} alt="ROVIQ" /><img className="roviq-logo-mark" src={roviqMark} alt="ROVIQ" /><span>Service</span></p>
           {session.testMode && <span className="test-badge" title="Every tab uses an admin test account, not a real business">Test mode</span>}
           <button type="button" className="signout" onClick={() => onSignOut()}>Sign out</button>
         </div>

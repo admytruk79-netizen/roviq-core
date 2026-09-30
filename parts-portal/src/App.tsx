@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { CoreCasePanel } from './CoreCasePanel';
+import roviqLogo from './brand/roviq-lockup-dark.svg';
 
 type Principal = { role: string; actorId?: string | null };
 type Order = { id: string; case_id: string; status: string; needed_by?: string; created_at?: string };
@@ -378,5 +379,5 @@ function Login(props: any) {
   );
 }
 
-function Brand() { return <div className="brand"><span className="mark">R</span><span>ROVIQ</span></div>; }
-function Header({ logout }: any) { return <header><Brand /><div><span>Parts</span><button className="secondary" onClick={logout}>Sign out</button></div></header>; }
+function Brand() { return <div className="brand"><img className="roviq-logo" src={roviqLogo} alt="ROVIQ" /></div>; }
+function Header({ logout }: any) { return <header><Brand /><div><span>Parts</span><button className="secondary embed-signout" onClick={logout}>Sign out</button></div></header>; }
