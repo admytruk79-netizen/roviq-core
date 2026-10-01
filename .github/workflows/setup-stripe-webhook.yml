@@ -1,0 +1,44 @@
+name: Set Up Stripe Webhook
+
+# Asks production Core to register its own Stripe webhook with the Stripe key it already has.
+# Stripe's signing secret stays inside Core; this prints only what was done.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      EDGE_URL: https://roviq-core.admytruk79.workers.dev
+      ADMIN_EMAIL: ${{ secrets.BOOTSTRAP_ADMIN_EMAIL }}
+      ADMIN_PASSWORD: ${{ secrets.BOOTSTRAP_ADMIN_PASSWORD }}
+    steps:
+      - name: Register Core's Stripe webhook
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$ADMIN_EMAIL" && test -n "$ADMIN_PASSWORD" || { echo "BOOTSTRAP_ADMIN_EMAIL / BOOTSTRAP_ADMIN_PASSWORD repository secrets are required"; exit 1; }
+          for attempt in $(seq 1 12); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 25 "$EDGE_URL/api/auth/roles" || true)"
+            [[ "$code" == "401" ]] && break
+            sleep 10
+          done
+          token="$(jq -n --arg e "$ADMIN_EMAIL" --arg p "$ADMIN_PASSWORD" '{email:$e,password:$p}' \
+            | curl -sS --fail-with-body -H 'content-type: application/json' --data @- "$EDGE_URL/api/auth/login" \
+            | jq -r '.accessToken')"
+          echo "::add-mask::$token"
+          result="$(curl -sS --fail-with-body -X POST -H "authorization: Bearer $token" "$EDGE_URL/api/admin/integrations/stripe-webhook")"
+          echo "$result" | jq .
+          {
+            echo "## Stripe webhook"
+            echo
+            echo "- Result: **$(jq -r .status <<<"$result")**"
+            echo "- Endpoint: $(jq -r .endpointId <<<"$result")"
+            echo "- URL: $(jq -r .url <<<"$result")"
+            echo "- Events: $(jq -r '.events | join(", ")' <<<"$result")"
+          } >> "$GITHUB_STEP_SUMMARY"
