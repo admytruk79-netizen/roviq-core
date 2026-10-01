@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { pool } from '../../db/pool.js';
 import { requireRole } from '../middleware/principal.js';
 import { stripeKeyHint, stripeKeyShape, stripeSecretKey } from '../../services/stripe-config.js';
+import { ensureStripeWebhook, stripeWebhookRegistered, stripeWebhookSecrets, stripeWebhookUrl } from '../../services/stripe-webhook-setup.js';
 
 // Which external services this Core deployment can actually use. Reports presence and mode only --
 // never a key, token or secret value -- so an admin can confirm production wiring without access
@@ -50,7 +51,9 @@ export async function integrationsStatusRoutes(app: FastifyInstance) {
       revision: process.env.RENDER_GIT_COMMIT ?? process.env.GITHUB_SHA ?? null,
       stripe: {
         secretKey: Boolean(stripeSecretKey()),
-        webhookSecret: set('STRIPE_WEBHOOK_SECRET'),
+        webhookSecret: (await stripeWebhookSecrets()).length > 0,
+        webhookRegisteredByCore: Boolean(await stripeWebhookRegistered()),
+        webhookUrl: stripeWebhookUrl(),
         publishableKey: set('STRIPE_PUBLISHABLE_KEY'),
         mode: stripeMode(),
         keyShape: stripeKeyShape(stripeSecretKey()),
@@ -63,5 +66,16 @@ export async function integrationsStatusRoutes(app: FastifyInstance) {
       customerWebUrl: process.env.CUSTOMER_WEB_URL ?? null,
       notificationChannels: channels.rows.map((r) => ({ channel: r.channel, provider: r.provider, enabled: r.enabled }))
     };
+  });
+
+  // Registers Core's Stripe webhook with the configured key. Returns what was done, never the secret.
+  app.post('/api/admin/integrations/stripe-webhook', { preHandler: requireRole('admin') }, async (_req, reply) => {
+    try { return await ensureStripeWebhook(); }
+    catch (e) {
+      const m = e instanceof Error ? e.message : 'stripe_webhook_setup_failed';
+      if (m === 'stripe_not_configured') return reply.code(503).send({ error: m });
+      if (['stripe_request_failed', 'stripe_unreachable'].includes(m)) return reply.code(502).send({ error: m });
+      throw e;
+    }
   });
 }

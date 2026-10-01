@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { applyPaymentWebhook, verifyPaymentWebhook } from '../../services/payment-webhook-gateway.js';
 import { applyStripeWebhook, verifyStripeWebhook } from '../../services/stripe-webhook.js';
+import { stripeWebhookSecrets } from '../../services/stripe-webhook-setup.js';
 
 const eventSchema=z.object({
   id:z.string().min(1).max(255),
@@ -41,7 +42,7 @@ export async function paymentWebhookRoutes(app:FastifyInstance){
     const body=rawBody(req.body);
     const signature=String(req.headers['stripe-signature']??'');
     try{
-      const event=verifyStripeWebhook(body,signature);
+      const event=verifyStripeWebhook(body,signature,Date.now(),await stripeWebhookSecrets());
       const payment=await applyStripeWebhook(event);
       return {received:true,payment};
     }catch(error){

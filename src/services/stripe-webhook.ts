@@ -46,17 +46,20 @@ function parseStripeSignature(header:string){
   return {timestamp,signatures};
 }
 
-export function verifyStripeWebhook(rawBody:string,signatureHeader:string,now=Date.now()){
-  const secret=process.env.STRIPE_WEBHOOK_SECRET;
-  if(!secret) throw new Error('stripe_webhook_not_configured');
+// secrets: the signing secrets to accept (the environment variable and the one Core registered
+// itself); defaults to the environment variable alone.
+export function verifyStripeWebhook(rawBody:string,signatureHeader:string,now=Date.now(),secrets?:string[]){
+  const candidates=(secrets??[process.env.STRIPE_WEBHOOK_SECRET]).filter((s):s is string=>Boolean(s));
+  if(!candidates.length) throw new Error('stripe_webhook_not_configured');
   const {timestamp,signatures}=parseStripeSignature(signatureHeader);
   if(!Number.isSafeInteger(timestamp)||Math.abs(now-timestamp*1000)>5*60*1000) throw new Error('stripe_webhook_timestamp_invalid');
-  const expected=createHmac('sha256',secret).update(`${timestamp}.${rawBody}`).digest('hex');
-  const expectedBuffer=Buffer.from(expected,'hex');
-  const valid=signatures.some(signature=>{
-    if(!/^[a-f0-9]{64}$/i.test(signature)) return false;
-    const actual=Buffer.from(signature,'hex');
-    return actual.length===expectedBuffer.length&&timingSafeEqual(expectedBuffer,actual);
+  const valid=candidates.some(secret=>{
+    const expectedBuffer=Buffer.from(createHmac('sha256',secret).update(`${timestamp}.${rawBody}`).digest('hex'),'hex');
+    return signatures.some(signature=>{
+      if(!/^[a-f0-9]{64}$/i.test(signature)) return false;
+      const actual=Buffer.from(signature,'hex');
+      return actual.length===expectedBuffer.length&&timingSafeEqual(expectedBuffer,actual);
+    });
   });
   if(!valid) throw new Error('stripe_webhook_signature_invalid');
   let event:StripeEvent;
