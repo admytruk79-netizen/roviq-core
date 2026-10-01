@@ -98,7 +98,7 @@ export function PaymentHandoff() {
         provider: 'manual',
         metadata: { source: 'ops_case_control' }
       });
-      setMessage('Payment intent created. It can now be captured to complete the case.');
+      setMessage('Payment requested. The customer can now pay by card from their case page, which completes the case. Use “Mark paid” only for a payment taken outside ROVIQ.');
       await load();
     } catch (err) {
       const text = err instanceof ApiError && err.status === 409
@@ -117,12 +117,12 @@ export function PaymentHandoff() {
     setError(null);
     try {
       await api.post(`/api/admin/payments/${latestPayment.id}/state`, { state: 'captured' });
-      setMessage('Payment captured. Core has completed the case and updated the customer journey.');
+      setMessage('Payment marked as paid. Core has completed the case and updated the customer journey.');
       await load();
     } catch (err) {
       const text = err instanceof ApiError && err.status === 409
         ? 'This payment can no longer move directly to captured.'
-        : 'Could not capture the payment.';
+        : 'Could not mark the payment as paid.';
       setError(text);
     } finally {
       setCapturing(false);
@@ -174,7 +174,7 @@ export function PaymentHandoff() {
       {latestPayment && (
         <div className="mt-4 flex flex-col justify-between gap-3 rounded-md border border-slate-200 p-3 sm:flex-row sm:items-center">
           <div><p className="text-sm font-semibold">Payment {latestPayment.id.slice(0, 8)}</p><p className="mt-1 text-sm text-slate-500">{formatAmount(latestPayment.amount, latestPayment.currency)} · {humanizeToken(latestPayment.state)}</p></div>
-          {!['captured', 'cancelled', 'failed', 'refunded', 'partially_refunded'].includes(latestPayment.state) && <button type="button" disabled={capturing} onClick={() => void capturePayment()} className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50">{capturing ? 'Capturing…' : 'Capture & complete case'}</button>}
+          {!['captured', 'cancelled', 'failed', 'refunded', 'partially_refunded'].includes(latestPayment.state) && <button type="button" disabled={capturing} onClick={() => void capturePayment()} className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50">{capturing ? 'Saving…' : 'Mark paid (outside ROVIQ)'}</button>}
           {latestPayment.state === 'captured' && <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700">Captured</span>}
         </div>
       )}

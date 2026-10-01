@@ -23,7 +23,7 @@ Run **Actions → Check ROVIQ Integrations → Run workflow** (branch `main`). I
 
 | Row | Needed for | If it says ❌ |
 |---|---|---|
-| Stripe secret key + webhook secret, **mode: test** | Customer card payment (step 5.4) | Skip payment; the case stops at "payment requested". Add the keys in Render → roviq-core → Environment. |
+| Stripe secret key, **mode: test**, and **Stripe accepts the key ✅** | Customer card payment (step 5.8) | Skip payment; the case stops at "payment requested". Add the keys in Render → roviq-core → Environment. The webhook secret is optional for the test run: Core also confirms the payment with Stripe when the customer returns. |
 | Stripe **mode: live** | — | **Stop.** Do not test payments with a live key. Swap to test keys in Render first. |
 | Texts (Twilio) | Customer SMS updates | Updates still appear in the apps; no texts arrive. Add the keys in Cloudflare → Workers → roviq-core → Settings → Variables. |
 | Email (Resend) | Customer email updates | Same as above, for email. |
@@ -121,10 +121,9 @@ Everyone runs the steps in order. After each step, the person named checks the *
 5. **Customer:** refresh the case, review the quote and tap **Approve**.
 6. **Shop:** complete the repair in the Shop OS workspace: start, quality check, complete.
 7. **Ops:** tap **Request payment**, then **Create payment**.
-8. **Customer:** tap **Pay now**. On Stripe's page, use test card **4242 4242 4242 4242**, any future expiry date, any 3-digit CVC and any ZIP code. Only do this when step 1.2 showed **mode: test**.
-9. **Ops:** tap **Capture & complete case**.
+8. **Customer:** refresh the case and tap **Pay now**. On Stripe's page, use test card **4242 4242 4242 4242**, any future expiry date, any 3-digit CVC and any ZIP code. Only do this when step 1.2 showed **mode: test**.
 
-**Expect:** the customer's case shows the service complete, with the payment listed.
+**Expect:** Stripe returns the customer to the case with **Payment received**. The payment shows as captured and the case completes without anyone in Ops marking it paid. (**Mark paid (outside ROVIQ)** in Ops is only for a payment taken some other way.)
 
 ---
 
