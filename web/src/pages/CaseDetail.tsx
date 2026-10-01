@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import { formatAmount, formatDateTime, formatMinorAmount, humanizeToken } from '../lib/format';
 import { StatusBadge } from '../components/StatusBadge';
@@ -149,6 +149,8 @@ export function CaseDetail() {
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [payingId, setPayingId] = useState<string | null>(null);
   const [payError, setPayError] = useState<string | null>(null);
+  const [payNotice, setPayNotice] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -194,6 +196,22 @@ export function CaseDetail() {
   }, [id]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Back from Stripe Checkout: Core checks with Stripe and records the payment, then the case reloads.
+  useEffect(() => {
+    const outcome = searchParams.get('payment');
+    if (!outcome) return;
+    const paymentId = searchParams.get('payment_id');
+    const sessionId = searchParams.get('session_id');
+    setSearchParams({}, { replace: true });
+    if (outcome === 'cancelled') { setPayNotice('Payment was not completed. You can try again when you are ready.'); return; }
+    if (outcome !== 'success' || !paymentId || !sessionId) return;
+    setPayNotice('Confirming your payment…');
+    void api.post<{ paid: boolean }>(`/api/customers/me/payments/${paymentId}/checkout-session/confirm`, { sessionId })
+      .then((r) => setPayNotice(r.paid ? 'Payment received. Thank you!' : 'Your payment is processing. This page will update when it clears.'))
+      .catch(() => setPayNotice('We could not confirm your payment yet. If you were charged, it will appear here shortly.'))
+      .finally(() => { void load(); });
+  }, [searchParams, setSearchParams, load]);
   useEffect(() => {
     const interval = window.setInterval(() => void loadLive(), 10000);
     const onFocus = () => void loadLive();
@@ -251,7 +269,7 @@ export function CaseDetail() {
       const res = await api.post<{ checkoutUrl: string }>(`/api/customers/me/payments/${paymentId}/checkout-session`);
       window.location.href = res.checkoutUrl;
     } catch {
-      setPayError('Could not start checkout. Please try again.');
+      setPayError('Could not open the payment page. Please try again.');
       setPayingId(null);
     }
   }
@@ -420,6 +438,7 @@ export function CaseDetail() {
 
       <section>
         <h2 className="text-sm font-semibold text-slate-800">Payments</h2>
+        {payNotice && <p className="mt-2 text-sm text-slate-700" role="status">{payNotice}</p>}
         {payError && <p className="mt-2 text-sm text-red-600">{payError}</p>}
         <ul className="mt-3 divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white">
           {payments.length === 0 && <li className="px-4 py-3 text-sm text-slate-400">No payment is due yet.</li>}
