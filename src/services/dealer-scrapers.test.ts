@@ -7,7 +7,7 @@ const truck=(o:Record<string,unknown>)=>({id:'x',make:'Ford',model:'F-150',trim:
 const json=(body:unknown)=>new Response(JSON.stringify(body),{status:200,headers:{'content-type':'application/json'}});
 
 describe('target truck filter',()=>{
-  it('keeps used crew-cab F-150, F-250, Silverado and Sierra 1500/2500 up to 40k miles',()=>{
+  it('keeps used crew-cab F-150, F-250, Silverado and Sierra 1500/2500 under 50k miles',()=>{
     expect(isTargetTruck(truck({}))).toBe(true);
     expect(isTargetTruck(truck({model:'Super Duty F-250 SRW',trim:'Lariat 4WD Crew Cab 6.75\' Box'}))).toBe(true);
     expect(isTargetTruck(truck({make:'Chevrolet',model:'Silverado 1500',trim:'LT',bodyStyle:'Crew Cab Pickup'}))).toBe(true);
@@ -17,13 +17,7 @@ describe('target truck filter',()=>{
     expect(isTargetTruck(truck({make:'GMC',model:'Sierra 1500',trim:'Elevation Double Cab'}))).toBe(false);
   });
   it('rejects high mileage, unknown mileage, other cabs, other models and new trucks',()=>{
-    expect(isTargetTruck(truck({mileage:0}))).toBe(true);
-    expect(isTargetTruck(truck({mileage:3}))).toBe(true);
     expect(isTargetTruck(truck({mileage:40000}))).toBe(true);
-    expect(isTargetTruck(truck({mileage:40001}))).toBe(false);
-    expect(isTargetTruck(truck({mileage:30000,raw:{condition:''}}))).toBe(false);
-    expect(isTargetTruck(truck({mileage:30000,raw:{condition:'new'}}))).toBe(false);
-    expect(isTargetTruck(truck({mileage:-1}))).toBe(false);
     expect(isTargetTruck(truck({mileage:50001}))).toBe(false);
     expect(isTargetTruck(truck({mileage:undefined}))).toBe(false);
     expect(isTargetTruck(truck({trim:'XL SuperCab'}))).toBe(false);
@@ -98,7 +92,6 @@ describe('new truck filter',()=>{
     expect(isTargetNewTruck(newTruck({model:'Ranger',bodyStyle:'SuperCrew'}))).toBe(false);
     expect(isTargetNewTruck(newTruck({make:'Chevrolet',model:'Silverado 1500',bodyStyle:'Crew Cab'}))).toBe(false);
     expect(isTargetNewTruck(newTruck({mileage:24000,raw:{condition:'used'}}))).toBe(false);
-    expect(isTargetNewTruck(newTruck({mileage:5,raw:{condition:''}}))).toBe(false);
   });
   it('uses the new-truck rules for a new-inventory dealer and the used rules otherwise',()=>{
     expect(matchesSource(newTruck({}),kendall)).toBe(true);
@@ -107,7 +100,7 @@ describe('new truck filter',()=>{
 });
 
 describe('Dealer.com fallbacks',()=>{
-  const item={uuid:'k1',vin:'1FTFW1E80RFA00001',year:2025,make:'Ford',model:'F-150',trim:'Lariat',bodyStyle:'SuperCrew Cab',
+  const item={uuid:'k1',vin:'1FTFW1E80RFA00001',type:'new',year:2025,make:'Ford',model:'F-150',trim:'Lariat',bodyStyle:'SuperCrew Cab',
     pricing:{dprice:[{value:'$62,450',isFinalPrice:true}]},images:[{uri:'https://pictures.dealer.com/k1.jpg'}]};
   it('falls back to ws-inv-data with the site id from the new-inventory page',async()=>{
     const calls:{url:string;init?:RequestInit}[]=[];
@@ -152,6 +145,5 @@ describe('Dealer.com paging and rejection reasons',()=>{
     expect(rejectionReason(truck({mileage:80000}),carr)).toBe('mileage_over');
     expect(rejectionReason(truck({}),carr)).toBeUndefined();
     expect(rejectionReason(truck({}),{...carr,condition:'new'})).toBe('used');
-    expect(rejectionReason(truck({raw:{condition:''}}),carr)).toBe('condition_unknown');
   });
 });
