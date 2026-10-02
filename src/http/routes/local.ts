@@ -9,9 +9,25 @@ export async function localRoutes(app:FastifyInstance){
   app.get('/api/local/health',async()=>({local:await getLocalHealth()}));
 
   app.get('/api/local/route',async(req)=>{
-    const query=z.object({fromLat:z.coerce.number(),fromLng:z.coerce.number(),toLat:z.coerce.number(),toLng:z.coerce.number()}).parse(req.query);
-    const from=point.parse({lat:query.fromLat,lng:query.fromLng});
-    const to=point.parse({lat:query.toLat,lng:query.toLng});
+    const query=z.object({
+      fromLat:z.coerce.number().optional(),fromLng:z.coerce.number().optional(),
+      toLat:z.coerce.number().optional(),toLng:z.coerce.number().optional(),
+      from:z.string().optional(),to:z.string().optional()
+    }).parse(req.query);
+    const parsePair=(value:string|undefined)=>{
+      if(!value)return null;
+      const [lngRaw,latRaw,...rest]=value.split(',');
+      if(rest.length||latRaw===undefined)return null;
+      const lat=Number(latRaw),lng=Number(lngRaw);
+      return Number.isFinite(lat)&&Number.isFinite(lng)?point.safeParse({lat,lng}).data??null:null;
+    };
+    const from=query.fromLat!==undefined&&query.fromLng!==undefined
+      ?point.parse({lat:query.fromLat,lng:query.fromLng})
+      :parsePair(query.from);
+    const to=query.toLat!==undefined&&query.toLng!==undefined
+      ?point.parse({lat:query.toLat,lng:query.toLng})
+      :parsePair(query.to);
+    if(!from||!to)throw new z.ZodError([{code:z.ZodIssueCode.custom,path:['route'],message:'Provide fromLat/fromLng/toLat/toLng or from=lng,lat&to=lng,lat'}]);
     return getLocalRoute(from,to);
   });
 
