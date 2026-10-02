@@ -100,7 +100,7 @@ describe('new truck filter',()=>{
 });
 
 describe('Dealer.com fallbacks',()=>{
-  const item={uuid:'k1',vin:'1FTFW1E80RFA00001',year:2025,make:'Ford',model:'F-150',trim:'Lariat',bodyStyle:'SuperCrew Cab',
+  const item={uuid:'k1',vin:'1FTFW1E80RFA00001',type:'new',year:2025,make:'Ford',model:'F-150',trim:'Lariat',bodyStyle:'SuperCrew Cab',
     pricing:{dprice:[{value:'$62,450',isFinalPrice:true}]},images:[{uri:'https://pictures.dealer.com/k1.jpg'}]};
   it('falls back to ws-inv-data with the site id from the new-inventory page',async()=>{
     const calls:{url:string;init?:RequestInit}[]=[];
