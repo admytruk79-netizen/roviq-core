@@ -1,4 +1,4 @@
-import { BrowserRouter, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, HashRouter, Route, Routes } from 'react-router-dom';
 import { AuthProvider } from './lib/auth';
 import { Layout } from './components/Layout';
 import { ProtectedRoute } from './components/ProtectedRoute';
@@ -37,8 +37,9 @@ function CaseControl() {
 }
 
 function App() {
+  const Router = import.meta.env.BASE_URL === '/' ? BrowserRouter : HashRouter;
   return (
-    <BrowserRouter>
+    <Router>
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
@@ -59,7 +60,7 @@ function App() {
           </Route>
         </Routes>
       </AuthProvider>
-    </BrowserRouter>
+    </Router>
   );
 }
 

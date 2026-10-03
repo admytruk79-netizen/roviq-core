@@ -15,7 +15,7 @@ export function Login() {
     e.preventDefault();
     try {
       await login(email.trim(), password);
-      window.location.replace('/');
+      window.location.replace(import.meta.env.BASE_URL);
     } catch { /* surfaced by auth state */ }
   }
 

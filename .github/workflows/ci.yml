@@ -93,6 +93,8 @@ jobs:
           cache: npm
           cache-dependency-path: |
             service/package-lock.json
+            web/package-lock.json
+            ops/package-lock.json
             diagnostic/package-lock.json
             tow/package-lock.json
             partner/package-lock.json
