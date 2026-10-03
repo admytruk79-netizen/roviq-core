@@ -17,11 +17,13 @@ import { PilotReadinessPage } from './pages/PilotReadiness';
 import { CommandCenter } from './pages/CommandCenter';
 import { CoreCases } from './pages/CoreCases';
 import { CoreCaseWorkspace } from './pages/CoreCaseWorkspace';
+import { AiFirstRead } from './pages/AiFirstRead';
 
 function CaseControl() {
   return (
     <div className="space-y-4">
       <CaseActionView />
+      <AiFirstRead />
       <details open className="rounded-xl border border-slate-200 bg-white">
         <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-700">Case tools & details</summary>
         <div className="border-t border-slate-200 p-4">

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import { VehiclePicker, type VehicleChoice } from '../components/VehiclePicker';
 import type { ServiceCase } from '../lib/types';
+import { IntakeChat, type IntakeDraft } from '../components/IntakeChat';
 
 const ISSUE_TYPES: { value: string; label: string }[] = [
   { value: 'brake_repair', label: 'Brakes' },
@@ -45,6 +46,7 @@ export function NewDemand() {
   const [manualLocation, setManualLocation] = useState('');
   const [gpsAttempted, setGpsAttempted] = useState(false);
   const [vehicle, setVehicle] = useState<VehicleChoice>(null);
+  const [intake, setIntake] = useState<IntakeDraft | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
@@ -85,6 +87,7 @@ export function NewDemand() {
       }
       const attributes: Record<string, unknown> = {};
       if (description.trim()) attributes.description = description.trim();
+      if (intake) attributes.intake = { source: 'chat', likelyArea: intake.likelyArea, drivable: intake.drivable, safetyFlags: intake.safetyFlags };
       if (!intakeLocation && manualLocation.trim()) attributes.locationNote = manualLocation.trim();
       const res = await api.post<{ case: ServiceCase }>('/api/demands', {
         domain: 'maintenance',
@@ -109,6 +112,7 @@ export function NewDemand() {
   return (
     <div className="max-w-lg space-y-4">
       <h1 className="text-lg font-semibold">Report a new issue</h1>
+      <IntakeChat onDraft={(draft) => { setIntake(draft); setIssueType(draft.issueType); setDescription(draft.description); setUrgency(draft.urgency); }} />
       <form onSubmit={handleSubmit} className="space-y-4 rounded-lg border border-slate-200 bg-white p-6">
         <VehiclePicker onChange={setVehicle} />
         <div>
