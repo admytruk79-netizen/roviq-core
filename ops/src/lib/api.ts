@@ -1,5 +1,5 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
-const TOKEN_KEY = 'roviq_access_token';
+const TOKEN_KEY = 'roviq_ops_token';
 export const SESSION_EXPIRED_EVENT = 'roviq:session-expired';
 
 export class ApiError extends Error {
