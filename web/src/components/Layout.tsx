@@ -19,7 +19,7 @@ export function Layout() {
               <Link to="/" className="roviq-nav-link">My cases</Link>
               <Link to="/core-cases" className="roviq-nav-link">Coordinated cases</Link>
               <Link to="/cases/new" className="roviq-nav-link roviq-nav-primary">Start service</Link>
-              <button onClick={logout} className="roviq-nav-link roviq-account-action" type="button" aria-label="Sign out">Sign out</button>
+              <button onClick={logout} className="roviq-nav-link roviq-account-action embed-signout" type="button" aria-label="Sign out">Sign out</button>
             </nav>
           )}
         </div>

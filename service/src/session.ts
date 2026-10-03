@@ -149,3 +149,17 @@ export function signInMessage(error: unknown) {
   }
   return 'Could not reach ROVIQ. Check your connection and try again.';
 }
+
+/**
+ * A link that reopens a workspace at a page inside it, used when an outside service sends the user
+ * back (Stripe Checkout returns to `/?open=customer&at=/cases/<id>?payment=success...`). Only a tab
+ * this session holds, and only an in-app route, is accepted.
+ */
+export function deepLink(search: string, session: ServiceSession): { role: Role; route: string } | null {
+  const params = new URLSearchParams(search);
+  const role = params.get('open') as Role | null;
+  const route = params.get('at');
+  if (!role || !route || !session.roles.includes(role)) return null;
+  if (!/^\/(?!\/)[A-Za-z0-9/_-]*(\?[A-Za-z0-9_=&%.-]*)?$/.test(route)) return null;
+  return { role, route };
+}

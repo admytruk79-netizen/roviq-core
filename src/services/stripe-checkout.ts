@@ -46,15 +46,37 @@ function toMinor(amount: number, currency: string) {
   return Math.round(amount * minorFactor(currency));
 }
 
-// Where Stripe sends the customer back. Only known customer-app origins are accepted, so the
-// endpoint cannot be used to bounce someone to another site.
-export function customerReturnOrigin(requestOrigin: string | undefined) {
-  const allowed = new Set([DEFAULT_CUSTOMER_ORIGIN, ...(process.env.CUSTOMER_APP_ORIGINS ?? '').split(',').map((o) => o.trim()).filter(Boolean)]);
-  if (process.env.ALLOW_DEV_HEADERS === 'true') {
-    if (requestOrigin && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(requestOrigin)) return requestOrigin;
-  }
+// Where Stripe sends the customer back. Only known ROVIQ origins are accepted, so the endpoint cannot
+// be used to bounce someone to another site.
+//  - 'customer': the standalone customer app, at /cases/<id>
+//  - 'app': the unified ROVIQ app, which reopens its customer tab at that case (?open=customer&at=...)
+export type CheckoutSurface = 'customer' | 'app';
+const DEFAULT_APP_ORIGIN = 'https://roviq-service.pages.dev';
+
+function allowedOrigin(requestOrigin: string | undefined, fallback: string, envList: string | undefined) {
+  const allowed = new Set([fallback, ...(envList ?? '').split(',').map((o) => o.trim()).filter(Boolean)]);
+  if (process.env.ALLOW_DEV_HEADERS === 'true' && requestOrigin && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(requestOrigin)) return requestOrigin;
   if (requestOrigin && allowed.has(requestOrigin)) return requestOrigin;
-  return DEFAULT_CUSTOMER_ORIGIN;
+  return fallback;
+}
+
+export function customerReturnOrigin(requestOrigin: string | undefined) {
+  return allowedOrigin(requestOrigin, DEFAULT_CUSTOMER_ORIGIN, process.env.CUSTOMER_APP_ORIGINS);
+}
+
+export function checkoutReturnUrls(surface: CheckoutSurface, requestOrigin: string | undefined, caseId: string, paymentId: string) {
+  const success = `/cases/${caseId}?payment=success&payment_id=${paymentId}&session_id=`;
+  const cancel = `/cases/${caseId}?payment=cancelled`;
+  if (surface === 'app') {
+    const origin = allowedOrigin(requestOrigin, DEFAULT_APP_ORIGIN, process.env.APP_ORIGINS);
+    // Stripe fills in {CHECKOUT_SESSION_ID}; it stays outside the encoded route so Stripe sees it.
+    return {
+      successUrl: `${origin}/?open=customer&at=${encodeURIComponent(success)}{CHECKOUT_SESSION_ID}`,
+      cancelUrl: `${origin}/?open=customer&at=${encodeURIComponent(cancel)}`
+    };
+  }
+  const origin = customerReturnOrigin(requestOrigin);
+  return { successUrl: `${origin}${success}{CHECKOUT_SESSION_ID}`, cancelUrl: `${origin}${cancel}` };
 }
 
 async function loadCustomerPayment(principal: Principal, paymentId: string): Promise<PaymentRow> {
@@ -98,7 +120,7 @@ async function stripe(path: string, init: { method?: 'GET' | 'POST'; body?: URLS
   return json;
 }
 
-export async function createCustomerCheckout(principal: Principal, paymentId: string, requestOrigin?: string) {
+export async function createCustomerCheckout(principal: Principal, paymentId: string, requestOrigin?: string, surface: CheckoutSurface = 'customer') {
   const p = await loadCustomerPayment(principal, paymentId);
   if (!PAYABLE_STATES.includes(p.state)) throw new Error('payment_not_payable');
   // A payment Ops already opened as a Stripe PaymentIntent is paid through that intent, not Checkout.
@@ -107,19 +129,19 @@ export async function createCustomerCheckout(principal: Principal, paymentId: st
   if (!(amount > 0)) throw new Error('payment_not_payable');
 
   const metadata = p.metadata ?? {};
-  const open = metadata.checkoutSession as { id?: string; url?: string; expiresAt?: number } | undefined;
-  if (open?.url && open.expiresAt && open.expiresAt * 1000 > Date.now() + 2 * 60 * 1000) {
+  const open = metadata.checkoutSession as { id?: string; url?: string; expiresAt?: number; surface?: CheckoutSurface } | undefined;
+  // Reuse an open session only if it returns to the same app the customer is paying from.
+  if (open?.url && open.expiresAt && open.expiresAt * 1000 > Date.now() + 2 * 60 * 1000 && (open.surface ?? 'customer') === surface) {
     return { checkoutUrl: open.url, sessionId: open.id };
   }
 
-  const origin = customerReturnOrigin(requestOrigin);
-  const caseUrl = `${origin}/cases/${p.case_id}`;
+  const { successUrl, cancelUrl } = checkoutReturnUrls(surface, requestOrigin, p.case_id, p.id);
   const currency = p.currency.toLowerCase();
   const body = new URLSearchParams({
     mode: 'payment',
     client_reference_id: p.id,
-    success_url: `${caseUrl}?payment=success&payment_id=${p.id}&session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${caseUrl}?payment=cancelled`,
+    success_url: successUrl,
+    cancel_url: cancelUrl,
     'line_items[0][quantity]': '1',
     'line_items[0][price_data][currency]': currency,
     'line_items[0][price_data][unit_amount]': String(toMinor(amount, p.currency)),
@@ -139,7 +161,7 @@ export async function createCustomerCheckout(principal: Principal, paymentId: st
             metadata = coalesce(metadata,'{}'::jsonb) || $2::jsonb,
             updated_at = now()
       where id = $1`,
-    [p.id, JSON.stringify({ checkoutAttempts: attempt, checkoutSession: { id: session.id, url: session.url, expiresAt: session.expires_at ?? null } })]
+    [p.id, JSON.stringify({ checkoutAttempts: attempt, checkoutSession: { id: session.id, url: session.url, expiresAt: session.expires_at ?? null, surface } })]
   );
   return { checkoutUrl: session.url, sessionId: session.id };
 }
