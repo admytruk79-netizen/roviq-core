@@ -11,6 +11,7 @@ function SignIn({ onSignedIn, notice }: { onSignedIn: (session: ServiceSession) 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [view, setView] = useState<'home' | 'sign-in'>('home');
+  const [showPassword, setShowPassword] = useState(false);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -28,30 +29,47 @@ function SignIn({ onSignedIn, notice }: { onSignedIn: (session: ServiceSession) 
 
   return (
     <div className="shell">
-      <header className="topbar">
-        <div className="topbar-row"><p className="brand"><img className="roviq-logo" src={roviqLogo} alt="ROVIQ" /><img className="roviq-logo-mark" src={roviqMark} alt="ROVIQ" /></p></div>
-        <nav className="tabs" aria-label="Public navigation">
-          <button type="button" className={view === 'home' ? 'tab active' : 'tab'} onClick={() => setView('home')}>Home</button>
-          <button type="button" className={view === 'sign-in' ? 'tab active' : 'tab'} onClick={() => setView('sign-in')}>Sign in</button>
-        </nav>
+      <a className="skip-link" href="#main-content">Skip to content</a>
+      <header className="topbar guest-topbar">
+        <div className="topbar-row">
+          <p className="brand"><img className="roviq-logo" src={roviqLogo} alt="ROVIQ" /><img className="roviq-logo-mark" src={roviqMark} alt="ROVIQ" /></p>
+          <nav className="guest-nav" aria-label="Public navigation">
+            <button type="button" aria-current={view === 'home' ? 'page' : undefined} onClick={() => setView('home')}>Home</button>
+            <button type="button" className={view === 'sign-in' ? 'guest-nav-action active' : 'guest-nav-action'} aria-current={view === 'sign-in' ? 'page' : undefined} onClick={() => setView('sign-in')}>Sign in</button>
+          </nav>
+        </div>
       </header>
       {view === 'home' ? (
-        <main className="guest-home">
-          <p className="eyebrow">ROVIQ Core</p>
-          <h1>One place for your service journey.</h1>
-          <p>Customers, service teams and operations use the same ROVIQ app. Sign in to open the workspaces your account can access.</p>
-          <button type="button" className="primary" onClick={() => setView('sign-in')}>Open my workspaces</button>
+        <main id="main-content" className="guest-home">
+          <div className="guest-content">
+            <div className="guest-copy">
+              <p className="eyebrow">One ROVIQ app</p>
+              <h1>Your service, connected.</h1>
+              <p>Book and follow a request as a customer. Coordinate diagnostics, towing, repairs, parts and mobility as a team. Your account opens the right workspace after sign in.</p>
+              <button type="button" className="primary" onClick={() => setView('sign-in')}>Sign in to continue <span aria-hidden="true">→</span></button>
+              <p className="guest-note">No account? Contact your ROVIQ team for access.</p>
+            </div>
+            <div className="guest-preview" aria-label="How ROVIQ works">
+              <p className="preview-label">A connected service flow</p>
+              <ol>
+                <li><span className="preview-number">01</span><span><strong>Request</strong><small>Start and track service</small></span></li>
+                <li><span className="preview-number">02</span><span><strong>Coordinate</strong><small>Route work to the right team</small></span></li>
+                <li><span className="preview-number">03</span><span><strong>Resolve</strong><small>Keep everyone informed</small></span></li>
+              </ol>
+              <p className="preview-foot">Workspaces appear according to your account access.</p>
+            </div>
+          </div>
         </main>
       ) : (
-        <main className="signin">
+        <main id="main-content" className="signin">
           <form className="signin-card" onSubmit={submit} aria-busy={busy}>
             <h1>Sign in to ROVIQ</h1>
             <p className="hint">Your account opens only the tabs you are allowed to use.</p>
             {notice && <p className="notice" role="status">{notice}</p>}
             <label>Email<input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} /></label>
-            <label>Password<input type="password" autoComplete="current-password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} /></label>
+            <label>Password<span className="password-row"><input type={showPassword ? 'text' : 'password'} autoComplete="current-password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} /><button type="button" className="password-toggle" aria-label={showPassword ? 'Hide password' : 'Show password'} aria-pressed={showPassword} onClick={() => setShowPassword(!showPassword)}>{showPassword ? 'Hide' : 'Show'}</button></span></label>
             {error && <p className="error" role="alert">{error}</p>}
-            <button className="primary" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
+            <button className="primary" disabled={busy}>{busy ? 'Signing in…' : 'Open my workspaces'}</button>
           </form>
         </main>
       )}
@@ -118,6 +136,7 @@ function Workspaces({ session, onSignOut }: { session: ServiceSession; onSignOut
       <header className="topbar" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
         <div className="topbar-row">
           <p className="brand"><img className="roviq-logo" src={roviqLogo} alt="ROVIQ" /><img className="roviq-logo-mark" src={roviqMark} alt="ROVIQ" /><span>Core</span></p>
+          <span className="account-label" title={session.email}>{session.email}</span>
           {session.testMode && <span className="test-badge" title="Customer and service workspaces use admin test accounts">Test mode</span>}
           <button type="button" className="signout" onClick={() => onSignOut()}>Sign out</button>
         </div>
@@ -142,7 +161,7 @@ function Workspaces({ session, onSignOut }: { session: ServiceSession; onSignOut
           </div>
         )}
       </header>
-      <main className="panels">
+      <main id="main-content" className="panels">
         {opened.map((role) => {
           const workspace = workspaceFor(role);
           return (
