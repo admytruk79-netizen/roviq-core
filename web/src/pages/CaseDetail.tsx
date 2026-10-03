@@ -266,8 +266,11 @@ export function CaseDetail() {
     setPayingId(paymentId);
     setPayError(null);
     try {
-      const res = await api.post<{ checkoutUrl: string }>(`/api/customers/me/payments/${paymentId}/checkout-session`);
-      window.location.href = res.checkoutUrl;
+      // Inside the ROVIQ app this page runs in a frame, which Stripe's page refuses to load in, so
+      // Checkout opens in the whole window and Stripe returns to this case inside the app.
+      const embedded = window.self !== window.top;
+      const res = await api.post<{ checkoutUrl: string }>(`/api/customers/me/payments/${paymentId}/checkout-session`, { surface: embedded ? 'app' : 'customer' });
+      (embedded && window.top ? window.top : window).location.href = res.checkoutUrl;
     } catch {
       setPayError('Could not open the payment page. Please try again.');
       setPayingId(null);

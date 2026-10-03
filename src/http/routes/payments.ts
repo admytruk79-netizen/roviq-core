@@ -86,7 +86,8 @@ export async function paymentRoutes(app: FastifyInstance) {
   app.post('/api/customers/me/payments/:id/checkout-session', { preHandler: requireRole('customer') }, async (req, reply) => {
     const { id } = z.object({ id:z.string().uuid() }).parse(req.params);
     const origin = typeof req.headers.origin === 'string' ? req.headers.origin : undefined;
-    try { return await createCustomerCheckout(req.principal, id, origin); }
+    const { surface } = z.object({ surface:z.enum(['customer','app']).default('customer') }).parse(req.body ?? {});
+    try { return await createCustomerCheckout(req.principal, id, origin, surface); }
     catch (e) {
       const m = errorMessage(e, 'checkout_error');
       if (m === 'forbidden') return reply.code(403).send({ error:m });

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type TouchEvent } from 'react';
-import { isTabSignOut, lastTab, rememberTab, restoreSession, signIn, signInMessage, signOut, workspaceFor, type Role, type ServiceSession } from './session';
+import { deepLink, isTabSignOut, lastTab, rememberTab, restoreSession, signIn, signInMessage, signOut, workspaceFor, type Role, type ServiceSession } from './session';
 import roviqLogo from './brand/roviq-lockup-dark.svg';
 import roviqMark from './brand/roviq-mark-dark.svg';
 
@@ -78,9 +78,14 @@ function SignIn({ onSignedIn, notice }: { onSignedIn: (session: ServiceSession) 
 }
 
 function Workspaces({ session, onSignOut }: { session: ServiceSession; onSignOut: (notice?: string) => void }) {
-  const [active, setActive] = useState<Role>(() => lastTab(session));
+  // Arriving from a link such as Stripe's return (?open=customer&at=/cases/...) opens that tab at that page.
+  const [link] = useState(() => deepLink(window.location.search, session));
+  const [active, setActive] = useState<Role>(() => link?.role ?? lastTab(session));
   // Frames mount on first visit and then stay mounted, so switching tabs keeps each tab's place.
-  const [opened, setOpened] = useState<Role[]>(() => [lastTab(session)]);
+  const [opened, setOpened] = useState<Role[]>(() => [link?.role ?? lastTab(session)]);
+  useEffect(() => {
+    if (window.location.search) window.history.replaceState(null, '', window.location.pathname);
+  }, []);
   const tabRefs = useRef<Partial<Record<Role, HTMLButtonElement | null>>>({});
   const touchStart = useRef<{ x: number; y: number } | null>(null);
 
@@ -173,7 +178,7 @@ function Workspaces({ session, onSignOut }: { session: ServiceSession; onSignOut
               className="panel"
               hidden={role !== active}
             >
-              <iframe title={`${workspace.label} workspace`} src={`${import.meta.env.BASE_URL}${workspace.path}`} allow="geolocation; camera" />
+              <iframe title={`${workspace.label} workspace`} src={`${import.meta.env.BASE_URL}${workspace.path}${link?.role === role ? `#${link.route}` : ''}`} allow="geolocation; camera" />
             </section>
           );
         })}

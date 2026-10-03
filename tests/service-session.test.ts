@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { restoreSession, signIn, signOut } from '../service/src/session';
+import { deepLink, restoreSession, signIn, signOut } from '../service/src/session';
 
 const jwt = (role: string) => `header.${btoa(JSON.stringify({ role, exp: Math.floor(Date.now() / 1000) + 3600 }))}.signature`;
 const response = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
@@ -52,3 +52,24 @@ describe('unified app role tabs', () => {
     expect(restoreSession()?.roles).toEqual(session.roles);
   });
 });
+
+describe('unified app deep links', () => {
+  const session = { roles: ['customer', 'tow'] as const, testMode: false, email: 'a@b.c' } as unknown as Parameters<typeof deepLink>[1];
+  const stripeReturn = '?open=customer&at=%2Fcases%2F11111111-2222-3333-4444-555555555555%3Fpayment%3Dsuccess%26payment_id%3D66666666-7777-8888-9999-000000000000%26session_id%3Dcs_test_a1B2';
+
+  it('reopens a held tab at the page Stripe returns to', () => {
+    expect(deepLink(stripeReturn, session)).toEqual({
+      role: 'customer',
+      route: '/cases/11111111-2222-3333-4444-555555555555?payment=success&payment_id=66666666-7777-8888-9999-000000000000&session_id=cs_test_a1B2'
+    });
+  });
+
+  it('ignores tabs the session does not hold and anything that is not an in-app route', () => {
+    expect(deepLink('?open=admin&at=%2Fcases%2Fx', session)).toBeNull();
+    expect(deepLink('?open=customer&at=https%3A%2F%2Fevil.example', session)).toBeNull();
+    expect(deepLink('?open=customer&at=%2F%2Fevil.example', session)).toBeNull();
+    expect(deepLink('?open=customer&at=%2Fcases%2F%3Cscript%3E', session)).toBeNull();
+    expect(deepLink('', session)).toBeNull();
+  });
+});
+

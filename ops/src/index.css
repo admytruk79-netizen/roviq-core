@@ -6,3 +6,6 @@
 .roviq-logo{display:block;height:30px;width:auto;flex:none}
 .roviq-logo-label{font-size:.72rem;font-weight:800;letter-spacing:.16em;text-transform:uppercase;color:var(--roviq-muted,#a8b4c2)}
 @media (max-width:640px){.roviq-logo{height:24px}}
+
+/* Inside the ROVIQ app the shell shows the logo and one Sign out for every tab. */
+.in-service .roviq-brand,.in-service .embed-signout{display:none!important}

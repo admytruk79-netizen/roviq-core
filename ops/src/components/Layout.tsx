@@ -53,7 +53,7 @@ export function Layout() {
                   <Link to="/map" className={navClass('/map')}>Map</Link>
                 </nav>
               </details>
-              {principal && <button onClick={handleLogout} className="roviq-btn-secondary shrink-0 text-sm">Sign out</button>}
+              {principal && <button onClick={handleLogout} className="roviq-btn-secondary embed-signout shrink-0 text-sm">Sign out</button>}
             </div>
           </div>
         </div>

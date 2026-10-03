@@ -101,6 +101,23 @@ describe('customer card payment through Stripe Checkout', () => {
     expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1);
   });
 
+  it('inside the ROVIQ app, returns to the app’s customer tab at the case', async () => {
+    const { caseId, paymentId } = await newCaseWithPayment(20);
+    vi.stubGlobal('fetch', stripeStub(sessions, calls));
+    const res = await app.inject({ method: 'POST', url: `/api/customers/me/payments/${paymentId}/checkout-session`, headers: { ...as('customer', customerId), origin: 'https://roviq-service.pages.dev' }, payload: { surface: 'app' } });
+    expect(res.statusCode).toBe(200);
+    const successUrl = calls.find((c) => c.method === 'POST')!.body.get('success_url')!;
+    expect(successUrl.startsWith('https://roviq-service.pages.dev/?open=customer&at=')).toBe(true);
+    // What the app receives once Stripe fills in the session id.
+    const returned = new URL(successUrl.replace('{CHECKOUT_SESSION_ID}', 'cs_test_abc'));
+    expect(returned.searchParams.get('at')).toBe(`/cases/${caseId}?payment=success&payment_id=${paymentId}&session_id=cs_test_abc`);
+
+    // Paying from the standalone customer app instead opens a new session that returns there.
+    const standalone = await app.inject({ method: 'POST', url: `/api/customers/me/payments/${paymentId}/checkout-session`, headers: as('customer', customerId), payload: { surface: 'customer' } });
+    expect(standalone.json().checkoutUrl).not.toBe(res.json().checkoutUrl);
+    expect(calls.filter((c) => c.method === 'POST').at(-1)!.body.get('success_url')).toContain(`https://roviq-core-customer.pages.dev/cases/${caseId}?payment=success`);
+  });
+
   it('is only for the customer who owes the payment', async () => {
     const { paymentId } = await newCaseWithPayment(40);
     vi.stubGlobal('fetch', stripeStub(sessions, calls));
