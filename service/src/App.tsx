@@ -1,9 +1,7 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type TouchEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { deepLink, isTabSignOut, lastTab, rememberTab, restoreSession, signIn, signInMessage, signOut, workspaceFor, type Role, type ServiceSession } from './session';
 import roviqLogo from './brand/roviq-lockup-dark.svg';
 import roviqMark from './brand/roviq-mark-dark.svg';
-
-const SWIPE_MIN_PX = 60;
 
 function SignIn({ onSignedIn, notice }: { onSignedIn: (session: ServiceSession) => void; notice: string }) {
   const [email, setEmail] = useState('');
@@ -87,7 +85,6 @@ function Workspaces({ session, onSignOut }: { session: ServiceSession; onSignOut
     if (window.location.search) window.history.replaceState(null, '', window.location.pathname);
   }, []);
   const tabRefs = useRef<Partial<Record<Role, HTMLButtonElement | null>>>({});
-  const touchStart = useRef<{ x: number; y: number } | null>(null);
 
   function open(role: Role, focus = false) {
     setActive(role);
@@ -110,20 +107,6 @@ function Workspaces({ session, onSignOut }: { session: ServiceSession; onSignOut
     else if (event.key === 'End') { event.preventDefault(); open(session.roles[session.roles.length - 1], true); }
   }
 
-  function onTouchStart(event: TouchEvent) {
-    const t = event.touches[0];
-    touchStart.current = { x: t.clientX, y: t.clientY };
-  }
-
-  function onTouchEnd(event: TouchEvent) {
-    const start = touchStart.current;
-    touchStart.current = null;
-    if (!start || session.roles.length < 2) return;
-    const t = event.changedTouches[0];
-    const dx = t.clientX - start.x;
-    if (Math.abs(dx) >= SWIPE_MIN_PX && Math.abs(dx) > Math.abs(t.clientY - start.y) * 1.5) step(dx < 0 ? 1 : -1);
-  }
-
   useEffect(() => {
     // A tab whose sign-in expires or is revoked clears its token; sign out of every tab together
     // rather than leaving the others signed in behind a tab that shows its own login screen.
@@ -138,33 +121,42 @@ function Workspaces({ session, onSignOut }: { session: ServiceSession; onSignOut
 
   return (
     <div className="shell">
-      <header className="topbar" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+      <header className="topbar workspace-topbar">
         <div className="topbar-row">
           <p className="brand"><img className="roviq-logo" src={roviqLogo} alt="ROVIQ" /><img className="roviq-logo-mark" src={roviqMark} alt="ROVIQ" /><span>Core</span></p>
           <span className="account-label" title={session.email}>{session.email}</span>
           {session.testMode && <span className="test-badge" title="Customer and service workspaces use admin test accounts">Test mode</span>}
           <button type="button" className="signout" onClick={() => onSignOut()}>Sign out</button>
         </div>
-        {!single && (
-          <div className="tabs" role="tablist" aria-label="Your workspaces" onKeyDown={onTabKey}>
-            {session.roles.map((role) => (
-              <button
-                key={role}
-                ref={(el) => { tabRefs.current[role] = el; }}
-                type="button"
-                role="tab"
-                id={`tab-${role}`}
-                aria-selected={role === active}
-                aria-controls={`panel-${role}`}
-                tabIndex={role === active ? 0 : -1}
-                className={role === active ? 'tab active' : 'tab'}
-                onClick={() => open(role)}
-              >
-                {workspaceFor(role).label}
-              </button>
-            ))}
-          </div>
-        )}
+        <div className="workspace-heading">
+          <span className="workspace-kicker">Your workspaces</span>
+          <span className="workspace-current">{workspaceFor(active).label}{!single && <span className="workspace-count"> · {session.roles.indexOf(active) + 1} of {session.roles.length}</span>}</span>
+        </div>
+        {!single ? (
+          <nav className="workspace-nav" aria-label="Workspace navigation">
+            <button type="button" className="nav-arrow" aria-label="Previous workspace" onClick={() => step(-1, true)}>‹</button>
+            <div className="tabs" role="tablist" aria-label="Your workspaces" onKeyDown={onTabKey}>
+              {session.roles.map((role, index) => (
+                <button
+                  key={role}
+                  ref={(el) => { tabRefs.current[role] = el; }}
+                  type="button"
+                  role="tab"
+                  id={`tab-${role}`}
+                  aria-selected={role === active}
+                  aria-controls={`panel-${role}`}
+                  tabIndex={role === active ? 0 : -1}
+                  className={role === active ? 'tab active' : 'tab'}
+                  onClick={() => open(role)}
+                >
+                  <span className="tab-number" aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>
+                  <span>{workspaceFor(role).label}</span>
+                </button>
+              ))}
+            </div>
+            <button type="button" className="nav-arrow" aria-label="Next workspace" onClick={() => step(1, true)}>›</button>
+          </nav>
+        ) : <div className="single-workspace">{workspaceFor(active).label}</div>}
       </header>
       <main id="main-content" className="panels">
         {opened.map((role) => {
