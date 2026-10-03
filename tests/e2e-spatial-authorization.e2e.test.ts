@@ -105,14 +105,25 @@ describe('spatial authorization and role projection', () => {
     expect(forbiddenLocation.statusCode).toBe(403);
     expect(JSON.parse(forbiddenLocation.body).error).toBe('dispatch_forbidden');
 
+    const originalFetch=globalThis.fetch;
+    globalThis.fetch=async(input)=>{
+      const url=String(input);
+      if(url.includes('/api/route?')) return new Response(JSON.stringify({
+        route:{geometry:{type:'LineString',coordinates:[[-122.671,45.521],[-122.67,45.52]]},distance:3218.688,duration:720,steps:[]}
+      }),{status:200,headers:{'content-type':'application/json'}});
+      return originalFetch(input);
+    };
     const liveLocation = await app.inject({
       method: 'POST',
       url: `/api/transport/${dispatchId}/location`,
       headers: actorHeaders('tow', towActorId),
       payload: { lat: 45.521, lng: -122.671, heading: 90, speed: 8 }
     });
+    globalThis.fetch=originalFetch;
     expect(liveLocation.statusCode).toBe(200);
-    expect(JSON.parse(liveLocation.body).transportLocation.dispatchId).toBe(dispatchId);
+    const liveBody=JSON.parse(liveLocation.body);
+    expect(liveBody.transportLocation.dispatchId).toBe(dispatchId);
+    expect(liveBody.routeContext).toMatchObject({distanceMiles:2,etaMinutes:12,routePhase:'to_pickup',dispatchId,source:'roviq_local'});
 
     const towSpatialRes = await app.inject({
       method: 'GET',
@@ -125,7 +136,10 @@ describe('spatial authorization and role projection', () => {
     expect(towSpatial.current_vehicle).toBeTruthy();
     expect(towSpatial.destination).toBeTruthy();
     expect(towSpatial.transport_location.dispatchId).toBe(dispatchId);
-    expect(towSpatial.route_context.etaMinutes).toBe(13);
+    expect(towSpatial.route_context.etaMinutes).toBe(12);
+    expect(towSpatial.route_context.distanceMiles).toBe(2);
+    expect(towSpatial.route_context.dispatchId).toBe(dispatchId);
+    expect(towSpatial.route_context.routePhase).toBe('to_pickup');
     expect(towSpatial).not.toHaveProperty('diagnostic_location');
     expect(towSpatial).not.toHaveProperty('provider_location');
     expect(towSpatial).not.toHaveProperty('parts_origin');

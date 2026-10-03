@@ -7,6 +7,7 @@ import { resolveTransportLocations } from '../../services/transport-spatial.js';
 import { projectVehicle, type VehicleRow } from '../../services/case-vehicle.js';
 import { assertAdminCaseScope, getAdminActorScope } from '../../services/admin-case-scope.js';
 import { withIdempotency } from '../../services/orchestration.js';
+import { getLocalRoute } from '../../services/local-adapter.js';
 
 const location = z.record(z.unknown()).optional();
 const status = z.enum(['accepted','en_route','arrived','vehicle_loaded','in_transit','delivered','declined','cancelled','failed']);
@@ -207,7 +208,48 @@ export async function transportRoutes(app: FastifyInstance) {
        returning transport_location`,
       [d.case_id,JSON.stringify(point),id]
     );
-    if(written.rowCount) return { ok:true,accepted:true,transportLocation:written.rows[0].transport_location };
+    if(written.rowCount) {
+      // Route computation belongs to Core's constrained Local adapter, not to an actor frontend.
+      // Persist only the shared route summary here; route_context.candidates remains the private
+      // routing-engine input used during provider selection and is preserved by jsonb concatenation.
+      const effective=await pool.query(
+        `${effectiveDispatchSelect} where td.id=$1`,
+        [id]
+      );
+      const dispatch=effective.rows[0];
+      const target=LIVE_LOCATION_STATUSES.has(dispatch?.status)&&['assigned','accepted','en_route','arrived'].includes(dispatch?.status)
+        ? dispatch?.pickup_location
+        : dispatch?.dropoff_location;
+      const targetPoint=spatialPoint(target);
+      if(targetPoint){
+        try{
+          const routed=await getLocalRoute({lat:body.lat,lng:body.lng},targetPoint);
+          const distanceMiles=Number.isFinite(routed.route?.distance)?Number((routed.route.distance/1609.344).toFixed(2)):null;
+          const etaMinutes=Number.isFinite(routed.route?.duration)?Math.max(1,Math.round(routed.route.duration/60)):null;
+          if(distanceMiles!==null&&etaMinutes!==null){
+            const routeSummary={
+              distanceMiles,etaMinutes,
+              routePhase:['assigned','accepted','en_route','arrived'].includes(dispatch.status)?'to_pickup':'to_destination',
+              dispatchId:id,
+              computedAt:new Date().toISOString(),
+              source:'roviq_local'
+            };
+            await pool.query(
+              `update case_spatial_context
+                  set route_context=coalesce(route_context,'{}'::jsonb) || $2::jsonb,updated_at=now()
+                where case_id=$1
+                  and transport_location->>'dispatchId'=$3`,
+              [d.case_id,JSON.stringify(routeSummary),id]
+            );
+            return { ok:true,accepted:true,transportLocation:written.rows[0].transport_location,routeContext:routeSummary };
+          }
+        }catch{
+          // Live GPS is authoritative even when Local routing is degraded. Keep the location write
+          // and allow the next GPS sample to retry route enrichment instead of rejecting telemetry.
+        }
+      }
+      return { ok:true,accepted:true,transportLocation:written.rows[0].transport_location };
+    }
     const current=await pool.query(`select transport_location from case_spatial_context where case_id=$1`,[d.case_id]);
     return { ok:true,accepted:false,transportLocation:current.rows[0]?.transport_location ?? point };
   });
@@ -229,4 +271,11 @@ export async function transportRoutes(app: FastifyInstance) {
       throw e;
     }
   });
+}
+
+function spatialPoint(value:unknown){
+  if(!value||typeof value!=='object')return null;
+  const v=value as Record<string,unknown>;
+  const lat=Number(v.lat??v.latitude),lng=Number(v.lng??v.lon??v.longitude);
+  return Number.isFinite(lat)&&Number.isFinite(lng)&&Math.abs(lat)<=90&&Math.abs(lng)<=180?{lat,lng}:null;
 }
