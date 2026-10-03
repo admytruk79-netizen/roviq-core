@@ -1,5 +1,6 @@
 import { buildPushPayload } from '@block65/webcrypto-web-push';
 import { handleLocalCoreRequest, isLocalCorePath } from './local-adapter.js';
+import { intakeTurn, signedInAs, triageInputFromDemand } from './assist.js';
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -499,7 +500,7 @@ async function runScheduledOperations(env) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type,x-admin-api-key,authorization,cache-control', 'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS' } });
     const url = new URL(request.url);
 
@@ -546,6 +547,14 @@ export default {
         return json({ ok: true, service: 'roviq-core', counts: rows[0] });
       }
 
+      // Customer intake conversation (see assist.js). Signed-in customers only.
+      if (url.pathname === '/api/assist/intake' && request.method === 'POST') {
+        if (!(await signedInAs(request, env, ['customer']))) return json({ error: 'unauthorized' }, 401);
+        const body = await request.json().catch(() => ({}));
+        const result = await intakeTurn(env, body?.messages);
+        return result.error ? json({ error: result.error }, result.status) : json(result);
+      }
+
       if (url.pathname === '/api/triage/run' && request.method === 'POST') {
         if (!authorized(request, env)) return json({ error: 'unauthorized' }, 401);
         if (!env.AI) return json({ error: 'workers_ai_not_bound' }, 503);
@@ -571,13 +580,23 @@ export default {
       if (url.pathname.startsWith('/api/')) {
         if (!env.CORE_API_URL) return json({ error: 'core_api_not_configured' }, 503);
         const upstream = new URL(url.pathname + url.search, env.CORE_API_URL);
+        const requestBytes = ['GET', 'HEAD'].includes(request.method) ? undefined : await request.clone().arrayBuffer();
         const upstreamRequest = new Request(upstream, {
           method: request.method,
           headers: request.headers,
-          body: ['GET', 'HEAD'].includes(request.method) ? undefined : await request.clone().arrayBuffer()
+          body: requestBytes
         });
         const upstreamResponse = await fetch(upstreamRequest);
         const responseBody = await upstreamResponse.arrayBuffer();
+        // Every new case gets the AI's first read automatically, after the customer already has
+        // their answer. It is a suggestion for Ops; it never routes or dispatches anything.
+        if (url.pathname === '/api/demands' && request.method === 'POST' && upstreamResponse.status === 201 && env.AI && ctx?.waitUntil) {
+          try {
+            const decode = (bytes) => JSON.parse(new TextDecoder().decode(bytes));
+            const input = triageInputFromDemand(decode(requestBytes), decode(responseBody));
+            if (input) ctx.waitUntil(runTriage(env, input).catch((error) => console.error(JSON.stringify({ event: 'auto_triage_failed', caseId: input.caseId, error: String(error?.message || error) }))));
+          } catch { /* not JSON: nothing to triage */ }
+        }
         return new Response(responseBody, {
           status: upstreamResponse.status,
           headers: {
