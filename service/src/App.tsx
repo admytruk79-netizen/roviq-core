@@ -10,6 +10,7 @@ function SignIn({ onSignedIn, notice }: { onSignedIn: (session: ServiceSession) 
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [view, setView] = useState<'home' | 'sign-in'>('home');
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -26,18 +27,35 @@ function SignIn({ onSignedIn, notice }: { onSignedIn: (session: ServiceSession) 
   }
 
   return (
-    <main className="signin">
-      <form className="signin-card" onSubmit={submit} aria-busy={busy}>
-        <p className="brand"><img className="roviq-logo" src={roviqLogo} alt="ROVIQ" /><img className="roviq-logo-mark" src={roviqMark} alt="ROVIQ" /><span>Service</span></p>
-        <h1>Sign in to your workspaces</h1>
-        <p className="hint">One sign-in opens every role your business holds: Diagnostic, Tow, Shop, Parts or Mobility.</p>
-        {notice && <p className="notice" role="status">{notice}</p>}
-        <label>Email<input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} /></label>
-        <label>Password<input type="password" autoComplete="current-password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} /></label>
-        {error && <p className="error" role="alert">{error}</p>}
-        <button className="primary" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
-      </form>
-    </main>
+    <div className="shell">
+      <header className="topbar">
+        <div className="topbar-row"><p className="brand"><img className="roviq-logo" src={roviqLogo} alt="ROVIQ" /><img className="roviq-logo-mark" src={roviqMark} alt="ROVIQ" /></p></div>
+        <nav className="tabs" aria-label="Public navigation">
+          <button type="button" className={view === 'home' ? 'tab active' : 'tab'} onClick={() => setView('home')}>Home</button>
+          <button type="button" className={view === 'sign-in' ? 'tab active' : 'tab'} onClick={() => setView('sign-in')}>Sign in</button>
+        </nav>
+      </header>
+      {view === 'home' ? (
+        <main className="guest-home">
+          <p className="eyebrow">ROVIQ Core</p>
+          <h1>One place for your service journey.</h1>
+          <p>Customers, service teams and operations use the same ROVIQ app. Sign in to open the workspaces your account can access.</p>
+          <button type="button" className="primary" onClick={() => setView('sign-in')}>Open my workspaces</button>
+        </main>
+      ) : (
+        <main className="signin">
+          <form className="signin-card" onSubmit={submit} aria-busy={busy}>
+            <h1>Sign in to ROVIQ</h1>
+            <p className="hint">Your account opens only the tabs you are allowed to use.</p>
+            {notice && <p className="notice" role="status">{notice}</p>}
+            <label>Email<input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} /></label>
+            <label>Password<input type="password" autoComplete="current-password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} /></label>
+            {error && <p className="error" role="alert">{error}</p>}
+            <button className="primary" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
+          </form>
+        </main>
+      )}
+    </div>
   );
 }
 
@@ -99,12 +117,12 @@ function Workspaces({ session, onSignOut }: { session: ServiceSession; onSignOut
     <div className="shell">
       <header className="topbar" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
         <div className="topbar-row">
-          <p className="brand"><img className="roviq-logo" src={roviqLogo} alt="ROVIQ" /><img className="roviq-logo-mark" src={roviqMark} alt="ROVIQ" /><span>Service</span></p>
-          {session.testMode && <span className="test-badge" title="Every tab uses an admin test account, not a real business">Test mode</span>}
+          <p className="brand"><img className="roviq-logo" src={roviqLogo} alt="ROVIQ" /><img className="roviq-logo-mark" src={roviqMark} alt="ROVIQ" /><span>Core</span></p>
+          {session.testMode && <span className="test-badge" title="Customer and service workspaces use admin test accounts">Test mode</span>}
           <button type="button" className="signout" onClick={() => onSignOut()}>Sign out</button>
         </div>
         {!single && (
-          <div className="tabs" role="tablist" aria-label="Workspaces" onKeyDown={onTabKey}>
+          <div className="tabs" role="tablist" aria-label="Your workspaces" onKeyDown={onTabKey}>
             {session.roles.map((role) => (
               <button
                 key={role}
