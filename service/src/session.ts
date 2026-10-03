@@ -1,16 +1,18 @@
-// One sign-in for every service workspace. The shell signs in once, obtains a token scoped to each
+// One sign-in for every ROVIQ workspace. The shell signs in once, obtains a token scoped to each
 // role the account holds, and hands each tab its token under the storage keys that role's app
 // already reads. Each tab's app then runs exactly as it does standalone, with one role's access.
 
-export type Role = 'diagnostic' | 'tow' | 'partner' | 'parts' | 'fleet';
+export type Role = 'customer' | 'diagnostic' | 'tow' | 'partner' | 'parts' | 'fleet' | 'admin';
 export type Workspace = { role: Role; label: string; path: string; tokenKey: string; principalKey: string };
 
 export const WORKSPACES: readonly Workspace[] = [
+  { role: 'customer', label: 'My service', path: 'customer/', tokenKey: 'roviq_access_token', principalKey: 'roviq_principal' },
   { role: 'diagnostic', label: 'Diagnostic', path: 'diagnostic/', tokenKey: 'roviq_diagnostic_token', principalKey: 'roviq_diagnostic_principal' },
   { role: 'tow', label: 'Tow', path: 'tow/', tokenKey: 'roviq_tow_token', principalKey: 'roviq_tow_principal' },
   { role: 'partner', label: 'Shop', path: 'partner/', tokenKey: 'roviq_partner_token', principalKey: 'roviq_partner_principal' },
   { role: 'parts', label: 'Parts', path: 'parts/', tokenKey: 'roviq_parts_token', principalKey: 'roviq_parts_principal' },
-  { role: 'fleet', label: 'Mobility', path: 'fleet/', tokenKey: 'roviq_fleet_token', principalKey: 'roviq_fleet_principal' }
+  { role: 'fleet', label: 'Mobility', path: 'fleet/', tokenKey: 'roviq_fleet_token', principalKey: 'roviq_fleet_principal' },
+  { role: 'admin', label: 'Ops', path: 'ops/', tokenKey: 'roviq_ops_token', principalKey: 'roviq_ops_principal' }
 ];
 
 const SESSION_KEY = 'roviq_service_session';
@@ -53,9 +55,9 @@ export function workspaceFor(role: Role) {
 }
 
 /**
- * Sign in and prepare a token for every workspace the account can open. A business account gets
- * the roles it has been granted; the ROVIQ admin gets every workspace through clearly labelled
- * admin test accounts, never through real businesses' identities.
+ * Sign in and prepare a token for every workspace the account can open. A customer or business account gets
+ * the roles it has been granted; the ROVIQ admin uses Ops directly and clearly labelled
+ * test accounts for customer and service workspaces, never real businesses' identities.
  */
 export async function signIn(email: string, password: string): Promise<ServiceSession> {
   signOut();
@@ -64,7 +66,9 @@ export async function signIn(email: string, password: string): Promise<ServiceSe
   const opened: Role[] = [];
 
   if (login.principal.role === 'admin') {
-    for (const workspace of WORKSPACES) {
+    storeTab(workspaceFor('admin'), login);
+    opened.push('admin');
+    for (const workspace of WORKSPACES.filter((w) => w.role !== 'admin')) {
       const test = await call<TokenResponse>(`/api/admin/testing/${workspace.role}-session`, { method: 'POST', body: '{}', token: login.accessToken });
       storeTab(workspace, test);
       opened.push(workspace.role);
@@ -132,7 +136,7 @@ export function rememberTab(role: Role) {
 export function signInMessage(error: unknown) {
   if (error instanceof ApiError) {
     if (error.code === 'invalid_credentials') return 'Email or password is incorrect.';
-    if (error.code === 'no_service_workspace') return 'This account has no service workspace. Customers sign in at the ROVIQ customer app.';
+    if (error.code === 'no_service_workspace') return 'This account has no active ROVIQ workspace.';
     if (error.status === 429) return 'Too many sign-in attempts. Wait a minute and try again.';
     return `Sign-in failed (${error.code}). Try again.`;
   }
