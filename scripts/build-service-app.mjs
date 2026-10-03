@@ -1,5 +1,5 @@
 // Builds the ROVIQ Service app: the tabbed shell at `/` plus each role's existing portal under its
-// own folder (`/diagnostic/`, `/tow/`, `/partner/`, `/parts/`, `/fleet/`), all on one origin so the
+// own folder (`/customer/`, `/diagnostic/`, `/tow/`, `/partner/`, `/parts/`, `/fleet/`, `/ops/`), all on one origin so the
 // shell's single sign-in reaches every tab. Output: service/dist.
 import { spawnSync } from 'node:child_process';
 import { existsSync, rmSync } from 'node:fs';
@@ -11,11 +11,13 @@ const dist = path.join(root, 'service', 'dist');
 
 // Portal directory -> folder it is served from inside the Service app (see service/src/session.ts).
 const tabs = [
+  ['web', 'customer'],
   ['diagnostic', 'diagnostic'],
   ['tow', 'tow'],
   ['partner', 'partner'],
   ['parts-portal', 'parts'],
-  ['fleet', 'fleet']
+  ['fleet', 'fleet'],
+  ['ops', 'ops']
 ];
 
 function run(cwd, args) {
