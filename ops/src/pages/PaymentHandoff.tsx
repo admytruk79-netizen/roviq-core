@@ -101,9 +101,12 @@ export function PaymentHandoff() {
       setMessage('Payment requested. The customer can now pay by card from their case page, which completes the case. Use “Mark paid” only for a payment taken outside ROVIQ.');
       await load();
     } catch (err) {
-      const text = err instanceof ApiError && err.status === 409
-        ? 'The customer must approve the current quote before payment can be created.'
-        : 'Could not create the payment intent.';
+      const code = err instanceof ApiError && err.status === 409 ? err.message : '';
+      const text = code === 'payment_exceeds_approved_quote'
+        ? 'That is more than the customer approved. Payments on a case cannot exceed the approved quote; revise the quote for the customer to approve first.'
+        : code === 'quote_not_approved'
+          ? 'The customer must approve the current quote before payment can be created.'
+          : code ? 'This payment conflicts with the case’s current quote or payments. Refresh and try again.' : 'Could not create the payment intent.';
       setError(text);
     } finally {
       setCreating(false);
