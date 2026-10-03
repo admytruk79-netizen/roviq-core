@@ -1,4 +1,4 @@
-import type {AscendProductionStatus} from "./ascend-production";
+import type {AscendProductionStatus} from "./ascend-production.js";
 export interface ManufacturingEvent {
  eventId:string;jobId:string;occurredAt:string;from:AscendProductionStatus;to:AscendProductionStatus;
  actorId:string;idempotencyKey:string;metadata:Readonly<Record<string,string>>;
