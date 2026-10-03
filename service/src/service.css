@@ -60,3 +60,53 @@ button, input { font: inherit; }
   .tabs { overflow-x: auto; }
   .tab { flex: 0 0 auto; min-width: 80px; padding: 0 10px; }
 }
+
+/* Unified entry and workspace navigation. */
+.skip-link { position: absolute; z-index: 10; top: -60px; left: 16px; padding: 10px 14px; border-radius: 8px; background: var(--roviq-copper); color: #fff; font-weight: 800; }
+.skip-link:focus { top: 12px; }
+.guest-topbar { padding: 12px clamp(16px, 4vw, 48px); }
+.guest-topbar .topbar-row { max-width: 1320px; margin: auto; }
+.guest-nav { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.guest-nav button { min-height: 44px; padding: 0 16px; border: 1px solid transparent; border-radius: 9px; background: transparent; color: var(--roviq-muted); font-weight: 750; cursor: pointer; }
+.guest-nav button[aria-current="page"] { color: var(--roviq-porcelain); }
+.guest-nav .guest-nav-action { border-color: var(--roviq-copper); color: var(--roviq-porcelain); }
+.guest-nav .guest-nav-action:hover, .guest-nav .guest-nav-action.active { background: var(--roviq-copper); color: #fff; }
+.guest-nav button:focus-visible, .password-toggle:focus-visible { outline: 3px solid rgba(228,111,53,.62); outline-offset: 2px; }
+.guest-home { width: 100%; max-width: 1320px; padding: clamp(32px, 7vh, 88px) clamp(20px, 5vw, 64px); }
+.guest-content { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(300px, .8fr); align-items: center; gap: clamp(32px, 7vw, 112px); width: 100%; }
+.guest-copy { max-width: 650px; }
+.guest-home h1 { max-width: 650px; font-size: clamp(44px, 5.4vw, 76px); line-height: 1.03; letter-spacing: -.035em; }
+.guest-home p:not(.eyebrow) { font-size: 17px; }
+.guest-home .primary { display: inline-flex; align-items: center; justify-content: center; gap: 22px; margin-top: 22px; padding: 0 22px; }
+.guest-home .guest-note { margin-top: 16px; font-size: 13px !important; }
+.guest-preview { padding: clamp(22px, 3vw, 36px); border: 1px solid var(--roviq-line); border-radius: 24px; background: linear-gradient(150deg, rgba(228,111,53,.14), transparent 43%), var(--roviq-panel); box-shadow: 0 24px 70px rgba(0,0,0,.16); }
+.preview-label { margin: 0 0 20px !important; color: var(--roviq-copper) !important; font-size: 12px !important; font-weight: 850; letter-spacing: .13em; text-transform: uppercase; }
+.guest-preview ol { list-style: none; margin: 0; padding: 0; }
+.guest-preview li { display: flex; align-items: center; gap: 18px; padding: 20px 0; border-top: 1px solid var(--roviq-line); }
+.preview-number { color: var(--roviq-copper); font-size: 13px; font-weight: 850; letter-spacing: .06em; }
+.guest-preview li strong, .guest-preview li small { display: block; }
+.guest-preview li strong { font-size: 19px; }
+.guest-preview li small { margin-top: 4px; color: var(--roviq-muted); font-size: 13px; }
+.guest-preview .preview-foot { margin: 14px 0 0; font-size: 13px !important; }
+.signin-card { box-shadow: 0 20px 70px rgba(0,0,0,.22); }
+.password-row { position: relative; display: block; }
+.password-row input { width: 100%; padding-right: 70px; }
+.password-toggle { position: absolute; top: 0; right: 0; min-height: 44px; padding: 0 12px; border: 0; background: transparent; color: var(--roviq-porcelain); font-size: 13px; font-weight: 800; cursor: pointer; }
+.account-label { margin-left: auto; color: var(--roviq-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: min(28vw, 240px); }
+.account-label + .test-badge { flex: none; }
+.account-label ~ .signout { margin-left: 0; }
+@media (max-width: 760px) {
+  .guest-content { grid-template-columns: 1fr; gap: 36px; }
+  .guest-home { justify-content: flex-start; }
+  .guest-preview { width: 100%; }
+}
+@media (max-width: 520px) {
+  .guest-topbar { padding: 8px 16px; }
+  .guest-nav { gap: 0; }
+  .guest-nav button { padding: 0 10px; font-size: 13px; }
+  .guest-home { padding: 38px 20px 48px; }
+  .guest-home h1 { font-size: clamp(42px, 12vw, 58px); }
+  .guest-home p:not(.eyebrow) { font-size: 15px; }
+  .guest-preview { padding: 22px; }
+  .account-label { display: none; }
+}
