@@ -53,7 +53,7 @@ export async function paymentRoutes(app: FastifyInstance) {
       if (message==='forbidden') return reply.code(403).send({ error:message });
       if (message==='case_not_found') return reply.code(404).send({ error:message });
       if (['currency_precision_unsupported','invalid_financial_amount'].includes(message)) return reply.code(422).send({ error:message });
-      if (['quote_not_approved','provider_intent_conflict','payment_request_conflict'].includes(message)) return reply.code(409).send({ error:message });
+      if (['quote_not_approved','provider_intent_conflict','payment_request_conflict','payment_exceeds_approved_quote','payment_currency_differs_from_quote'].includes(message)) return reply.code(409).send({ error:message });
       throw e;
     }
   });
@@ -75,7 +75,7 @@ export async function paymentRoutes(app: FastifyInstance) {
       if(message==='forbidden') return reply.code(403).send({error:message});
       if(message==='case_not_found') return reply.code(404).send({error:message});
       if(['currency_precision_unsupported','invalid_financial_amount'].includes(message)) return reply.code(422).send({error:message});
-      if(['quote_not_approved','payment_request_conflict','provider_intent_conflict','payment_request_terminal'].includes(message)) return reply.code(409).send({error:message});
+      if(['quote_not_approved','payment_request_conflict','provider_intent_conflict','payment_request_terminal','payment_exceeds_approved_quote','payment_currency_differs_from_quote'].includes(message)) return reply.code(409).send({error:message});
       if(message==='stripe_not_configured') return reply.code(503).send({error:message});
       if(['stripe_request_failed','stripe_payment_create_failed'].includes(message)) return reply.code(502).send({error:message});
       throw error;

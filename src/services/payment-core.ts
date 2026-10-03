@@ -22,7 +22,7 @@ async function insertFinancialAudit(client:Pick<PoolClient,'query'>,principal:Pr
 
 export async function createPaymentIntent(principal:Principal,input:{caseId:string;amount:number;currency?:string;description?:string;provider?:string;providerIntentId?:string;clientRequestId?:string;metadata?:Record<string,unknown>}){
   const normalizedCurrency=normalizeFinancialCurrency(input.currency),normalizedProvider=normalizeProvider(input.provider);assertFinancialAmount(input.amount,normalizedCurrency);const client=await pool.connect();
-  try{await client.query('begin');const c=await client.query('select * from service_cases where id=$1 for update',[input.caseId]);if(!c.rowCount) throw new Error('case_not_found');await assertFinancialCaseAccess(principal,input.caseId,client);const customerActorId=c.rows[0].customer_actor_id??null;const plan=await client.query('select id,current_revision from service_plans where case_id=$1',[input.caseId]);if(plan.rowCount){const approval=await client.query(`select state from case_approvals where case_id=$1 and service_plan_id=$2 and revision=$3 and approval_type='quote' order by created_at desc limit 1`,[input.caseId,plan.rows[0].id,plan.rows[0].current_revision]);if(!approval.rowCount||approval.rows[0].state!=='approved') throw new Error('quote_not_approved');}
+  try{await client.query('begin');const c=await client.query('select * from service_cases where id=$1 for update',[input.caseId]);if(!c.rowCount) throw new Error('case_not_found');await assertFinancialCaseAccess(principal,input.caseId,client);const customerActorId=c.rows[0].customer_actor_id??null;const plan=await client.query('select id,current_revision from service_plans where case_id=$1',[input.caseId]);let approvedQuote:{amount_minor:string|null;currency:string}|null=null;if(plan.rowCount){const approval=await client.query(`select state,amount_minor,currency from case_approvals where case_id=$1 and service_plan_id=$2 and revision=$3 and approval_type='quote' order by created_at desc limit 1`,[input.caseId,plan.rows[0].id,plan.rows[0].current_revision]);if(!approval.rowCount||approval.rows[0].state!=='approved') throw new Error('quote_not_approved');approvedQuote=approval.rows[0];}
     if(input.clientRequestId){
       const existingRequest=await client.query(
         `select * from payment_intents where provider=$1 and client_request_id=$2`,
@@ -36,6 +36,14 @@ export async function createPaymentIntent(principal:Principal,input:{caseId:stri
       }
     }
     if(input.providerIntentId){const existing=await client.query(`select * from payment_intents where provider=$1 and provider_intent_id=$2`,[normalizedProvider,input.providerIntentId]);if(existing.rowCount){const row=existing.rows[0];if(row.case_id!==input.caseId||!amountEquals(row.amount,input.amount)||row.currency!==normalizedCurrency) throw new Error('provider_intent_conflict');await client.query('commit');return row;}}
+    // Never request more than the customer approved: all live payments on the case together stay
+    // within the approved quote, net of refunds. Asking for less (a deposit, a partial payment) is fine.
+    if(approvedQuote?.amount_minor!=null){
+      if(String(approvedQuote.currency).toUpperCase()!==normalizedCurrency) throw new Error('payment_currency_differs_from_quote');
+      const factor=ZERO_DECIMAL_CURRENCIES.has(normalizedCurrency)?1:100;
+      const live=await client.query(`select coalesce(sum(p.amount),0)-coalesce((select sum(e.amount) from payment_events e join payment_intents r on r.id=e.payment_intent_id where r.case_id=$1 and e.event_type='REFUND'),0) as total from payment_intents p where p.case_id=$1 and p.state not in ('failed','cancelled')`,[input.caseId]);
+      if(Math.round((Number(live.rows[0].total)+input.amount)*factor)>Number(approvedQuote.amount_minor)) throw new Error('payment_exceeds_approved_quote');
+    }
     const r=await client.query(`insert into payment_intents(case_id,customer_actor_id,provider,provider_intent_id,client_request_id,amount,currency,description,metadata) values($1,$2,$3,$4,$5,$6,$7,$8,$9) returning *`,[input.caseId,customerActorId,normalizedProvider,input.providerIntentId??null,input.clientRequestId??null,input.amount,normalizedCurrency,input.description??null,JSON.stringify(input.metadata??{})]);const p=r.rows[0];await appendCaseEvent(input.caseId,'PAYMENT_INTENT_CREATED',principal,{paymentIntentId:p.id,amount:p.amount,currency:p.currency},client);await insertFinancialAudit(client,principal,'create_payment_intent','payment_intent',p.id,'case_payment',{caseId:input.caseId,amount:input.amount});await client.query('commit');return p;
   }catch(error){await client.query('rollback');throw error;}finally{client.release();}
 }
