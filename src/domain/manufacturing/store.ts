@@ -1,6 +1,6 @@
 import type {PoolClient} from "pg";
-import type {ManufacturingEvent} from "./ascend-events";
-import {appendManufacturingTransition} from "./ascend-events";
+import type {ManufacturingEvent} from "./ascend-events.js";
+import {appendManufacturingTransition} from "./ascend-events.js";
 
 export async function persistManufacturingTransition(client:PoolClient,event:ManufacturingEvent){
  appendManufacturingTransition(event);
