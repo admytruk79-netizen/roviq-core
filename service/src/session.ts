@@ -98,7 +98,14 @@ export function restoreSession(): ServiceSession | null {
     if (!raw) return null;
     const session = JSON.parse(raw) as ServiceSession;
     if (!Array.isArray(session.roles) || !session.roles.length) return null;
-    if (!session.roles.every((role) => tokenUsable(localStorage.getItem(workspaceFor(role).tokenKey)))) {
+    if (!session.roles.every((role) => {
+      const workspace = WORKSPACES.find((w) => w.role === role);
+      if (!workspace || !tokenUsable(localStorage.getItem(workspace.tokenKey))) return false;
+      try {
+        const principal = JSON.parse(localStorage.getItem(workspace.principalKey) ?? 'null');
+        return principal?.role === role && (role === 'admin' || Boolean(principal?.actorId));
+      } catch { return false; }
+    })) {
       signOut();
       return null;
     }
