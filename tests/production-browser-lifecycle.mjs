@@ -202,7 +202,7 @@ async function productionLifecycle(browser) {
   log('3/10 Ops: move the case through triage, request diagnosis, and dispatch the test diagnostic provider.');
   const opsContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const ops = await opsContext.newPage();
-  await setPortalSession(ops, PORTALS.ops, 'roviq_access_token', 'roviq_principal', admin);
+  await setPortalSession(ops, PORTALS.ops, 'roviq_ops_token', 'roviq_ops_principal', admin);
   await gotoStable(ops, `${PORTALS.ops}/cases/${caseId}`);
 
   let liveCase = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken });
