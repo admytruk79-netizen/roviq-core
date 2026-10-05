@@ -85,6 +85,17 @@ describe('automatic parts-supplier assignment', () => {
     );
     try {
       const { orderId, caseId } = await createOrder();
+      const preview = await app.inject({ method: 'GET', url: `/api/admin/parts-orders/${orderId}/supplier-plan`, headers: adminHeaders() });
+      expect(preview.statusCode).toBe(200);
+      const plan = JSON.parse(preview.body);
+      expect(plan.policyRequired).toBe(false);
+      expect(plan.candidateCount).toBe(3);
+      expect(plan.recommendedActorId).toBe(cheapestSupplierId);
+      expect(plan.ranked[0].signals.price).toBe(2);
+      const beforeAssignment = await pool.query('select status,supplier_actor_id from parts_orders where id=$1', [orderId]);
+      expect(beforeAssignment.rows[0]).toMatchObject({ status:'requested', supplier_actor_id:null });
+      const forbiddenPreview = await app.inject({ method:'GET', url:`/api/admin/parts-orders/${orderId}/supplier-plan`, headers:actorHeaders('parts',cheapestSupplierId) });
+      expect(forbiddenPreview.statusCode).toBe(403);
       const outcome = await autoAssignPartsSupplier({ role: 'admin' }, orderId);
       expect(outcome.policyRequired).toBe(false);
       expect(outcome.result).not.toBeNull();
