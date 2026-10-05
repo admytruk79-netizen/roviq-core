@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { deepLink, restoreSession, signIn, signOut } from '../service/src/session';
 
-const jwt = (role: string) => `header.${btoa(JSON.stringify({ role, exp: Math.floor(Date.now() / 1000) + 3600 }))}.signature`;
+// One expiry for the whole file: a token built a second later must still equal the one stored.
+const EXP = Math.floor(Date.now() / 1000) + 3600;
+const jwt = (role: string) => `header.${btoa(JSON.stringify({ role, exp: EXP }))}.signature`;
 const response = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 
 beforeEach(() => {
