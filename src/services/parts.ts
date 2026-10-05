@@ -186,14 +186,6 @@ async function loadPartsSupplierCandidates(items:{sku:string;quantity:number}[],
   return result.rows as { actor_id:string; fulfillment_ratio:number|null; total_price:string|number|null; avg_rating:number|null; on_time_rate:number|null }[];
 }
 
-/**
- * Automatic parts-supplier assignment, mirroring autoRouteNewDemand's shape for repair: reuses the
- * same coordination engine and the same fail-closed convention (an active 'parts_supplier_default'
- * routing_policies row is required, same as every other automatic routing decision in this
- * codebase). Also callable directly by an admin (POST /api/admin/parts-orders/:id/auto-assign-
- * supplier) regardless of the AUTO_ASSIGN_PARTS_SUPPLIER flag, the same way manual demand routing
- * works independent of AUTO_ROUTE_NEW_DEMANDS.
- */
 /** Read-only supplier plan. Inventory and policy may change; reserveOrderInventory remains the commit gate. */
 export async function previewPartsSupplierPlan(orderId:string) {
   const orderResult = await pool.query(
@@ -232,7 +224,7 @@ export async function previewPartsSupplierPlan(orderId:string) {
   };
 }
 
-/** Commit a fresh recommendation. Assignment and later reservation recheck live state. */
+/** Commit a fresh recommendation. Assignment rechecks actor state; reservation checks live stock. */
 export async function autoAssignPartsSupplier(principal: Principal, orderId:string) {
   const plan = await previewPartsSupplierPlan(orderId);
   if (plan.policyRequired) return { result:null, policyRequired:true, ranked:plan.ranked };
