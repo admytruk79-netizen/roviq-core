@@ -8,3 +8,14 @@
 
 /* Inside the ROVIQ Service app the shell shows the logo and one Sign out for every tab. */
 .in-service .brand,.in-service .embed-signout{display:none!important}
+
+/* Ask ROVIQ assistant panel. */
+.assistant{padding:16px;margin-top:16px}.assistant-head{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:6px}.assistant-head .eyebrow{margin:0}.assistant-hint{font-size:12px;color:var(--roviq-muted)}
+.assistant-log{display:grid;gap:8px;margin-top:10px;max-height:340px;overflow-y:auto}.assistant-log p{margin:0}
+.assistant-me p{margin-left:auto;width:fit-content;max-width:85%;background:var(--roviq-copper);color:#fff;border-radius:14px;padding:8px 12px}
+.assistant-roviq>p{width:fit-content;max-width:92%;background:rgba(244,242,237,.06);border:1px solid var(--roviq-line);color:#f4f2ed;border-radius:14px;padding:8px 12px}
+.assistant-jobs{list-style:none;margin:6px 0 0;padding:0;display:grid;gap:6px}.assistant-jobs li{display:flex;align-items:center;justify-content:space-between;gap:8px;border:1px solid var(--roviq-line);border-radius:12px;padding:8px 10px;font-size:14px}.assistant-jobs button{min-height:40px;padding:0 12px}
+.assistant-roviq>button{margin-top:6px}.assistant-done{color:#4fb477!important;background:none!important;border:0!important;padding:4px 0!important}
+.assistant-suggestions{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.assistant-suggestions button{min-height:40px;padding:0 12px;font-size:13px}
+.assistant-input{display:flex;gap:8px;margin-top:10px}.assistant-input input{flex:1;min-height:44px}.assistant-input button{min-height:44px;padding:0 16px}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
