@@ -1,8 +1,8 @@
 name: Check ROVIQ Assistant
 
-# Talks to the production intake assistant with a sample complaint, as an admin test customer
-# session, and prints the assistant's replies and the case draft it builds. Proves the live AI
-# answers; creates no case.
+# Talks to the production assistants: the customer intake assistant (as an admin test customer
+# session) with a sample complaint, and the diagnostic work assistant (as an admin test diagnostic
+# session). Prints the replies and the case draft. Proves the live AI answers; changes nothing.
 
 on:
   workflow_dispatch:
@@ -64,5 +64,22 @@ jobs:
             echo '```json'
             jq '{ready, safetyFlags, draft}' <<<"$turn"
             echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # The diagnostic technician's work assistant, as the admin test diagnostic session.
+          tech="$(curl -sS --fail-with-body -X POST -H "authorization: Bearer $admin" -H 'content-type: application/json' --data '{}' "$EDGE_URL/api/admin/testing/diagnostic-session" | jq -r .accessToken)"
+          echo "::add-mask::$tech"
+          {
+            echo
+            echo "## Diagnostic work assistant"
+            echo
+            for question in "show me the nearest cases" "anything urgent?" "take the closest one"; do
+              answer="$(jq -n --arg m "$question" '{message:$m,location:{lat:45.52,lng:-122.68}}' \
+                | curl -sS --fail-with-body -H "authorization: Bearer $tech" -H 'content-type: application/json' --data @- "$EDGE_URL/api/assist/work")"
+              echo "**Technician:** $question"
+              echo
+              echo "**ROVIQ ($(jq -r '.reader // "n/a"' <<<"$answer")):** $(jq -r .reply <<<"$answer")"
+              echo
+            done
           } >> "$GITHUB_STEP_SUMMARY"
           cat "$GITHUB_STEP_SUMMARY"

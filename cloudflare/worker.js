@@ -1,6 +1,7 @@
 import { buildPushPayload } from '@block65/webcrypto-web-push';
 import { handleLocalCoreRequest, isLocalCorePath } from './local-adapter.js';
 import { intakeTurn, signedInAs, triageInputFromDemand } from './assist.js';
+import { workTurn } from './work-assist.js';
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -552,6 +553,12 @@ export default {
         if (!(await signedInAs(request, env, ['customer']))) return json({ error: 'unauthorized' }, 401);
         const body = await request.json().catch(() => ({}));
         const result = await intakeTurn(env, body?.messages);
+        return result.error ? json({ error: result.error }, result.status) : json(result);
+      }
+
+      // Work assistant for service roles (see work-assist.js). Answers come from the person's own data.
+      if (url.pathname === '/api/assist/work' && request.method === 'POST') {
+        const result = await workTurn(request, env);
         return result.error ? json({ error: result.error }, result.status) : json(result);
       }
 
