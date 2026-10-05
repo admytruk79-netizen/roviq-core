@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { pool } from '../src/db/pool.js';
 import { createShopResource } from '../src/services/shop-os-resources.js';
-import { addRepairOrderLine, createRepairOrder, updateRepairOrder, updateRepairOrderLine } from '../src/services/shop-os-repair-orders.js';
+import { addRepairOrderLine, createRepairOrder, getRepairOrder, listRepairOrders, updateRepairOrder, updateRepairOrderLine } from '../src/services/shop-os-repair-orders.js';
 import {
   addDviEvidence, addDviFinding, clockTechnicianIn, clockTechnicianOut, createDviInspection,
   createWorkItem, getShopFloor, submitDviInspection, updateWorkItem
@@ -98,6 +98,23 @@ describe('Shop OS DVI, WIP and technician time',()=>{
     expect(floor.summary.urgentFindings).toBe(1);
     expect(floor.summary.openWorkItems).toBe(0);
     expect(floor.summary.activeClocks).toBe(0);
+  });
+
+  it('opens direct shop work without a ROVIQ case and keeps it within the shop',async()=>{
+    const shopA=await setupShop();
+    const shopB=await setupShop();
+    const partnerA={role:'partner',actorId:shopA.actorId} as const;
+    const partnerB={role:'partner',actorId:shopB.actorId} as const;
+    const order=await createRepairOrder(partnerA,{customerConcern:'Walk-in brake inspection',odometer:41200});
+    expect(order.service_case_id).toBeNull();
+    expect(order.organization_id).toBe(shopA.orgId);
+    expect(order.status).toBe('draft');
+    const added=await addRepairOrderLine(partnerA,order.id,{lineType:'labor',description:'Inspect front brakes',quantity:1,unitPrice:95});
+    expect(added.repairOrder.subtotal_amount).toBe('95.00');
+    const detail=await getRepairOrder(partnerA,order.id);
+    expect(detail.lines.map(line=>line.description)).toContain('Inspect front brakes');
+    expect((await listRepairOrders(partnerA,{})).repairOrders.some(row=>row.id===order.id)).toBe(true);
+    await expect(getRepairOrder(partnerB,order.id)).rejects.toMatchObject({message:'forbidden',statusCode:403});
   });
 
   it('prevents one technician from being clocked into two work items at once',async()=>{
