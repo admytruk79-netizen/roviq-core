@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { pool } from '../../db/pool.js';
 import { requireRole } from '../middleware/principal.js';
-import { assignSupplier, autoAssignPartsSupplier, createPartsOrder, getPartsOrder, markPartsOrderStatus, reserveOrderInventory, upsertInventory } from '../../services/parts.js';
+import { assignSupplier, autoAssignPartsSupplier, previewPartsSupplierPlan, createPartsOrder, getPartsOrder, markPartsOrderStatus, reserveOrderInventory, upsertInventory } from '../../services/parts.js';
 import { loadCaseForPrincipal } from '../../services/case-access.js';
 import { withIdempotency } from '../../services/orchestration.js';
 
@@ -65,6 +65,19 @@ export async function partsRoutes(app: FastifyInstance) {
     catch (e) {
       const message = e instanceof Error ? e.message : 'assignment_failed';
       if (message === 'supplier_not_available' || message === 'invalid_supplier_type') return reply.code(400).send({ error:message });
+      if (message === 'order_not_assignable') return reply.code(409).send({ error:message });
+      throw e;
+    }
+  });
+
+  // Planning is read-only. Ops can inspect the ranked, currently fulfillable suppliers
+  // before assignment; a preview never reserves stock or changes the order.
+  app.get('/api/admin/parts-orders/:id/supplier-plan', { preHandler: requireRole('admin') }, async (req, reply) => {
+    const { id } = req.params as { id:string };
+    try { return await previewPartsSupplierPlan(id); }
+    catch (e) {
+      const message = e instanceof Error ? e.message : 'supplier_plan_failed';
+      if (message === 'order_not_found') return reply.code(404).send({ error:message });
       if (message === 'order_not_assignable') return reply.code(409).send({ error:message });
       throw e;
     }

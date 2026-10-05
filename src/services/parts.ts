@@ -186,15 +186,8 @@ async function loadPartsSupplierCandidates(items:{sku:string;quantity:number}[],
   return result.rows as { actor_id:string; fulfillment_ratio:number|null; total_price:string|number|null; avg_rating:number|null; on_time_rate:number|null }[];
 }
 
-/**
- * Automatic parts-supplier assignment, mirroring autoRouteNewDemand's shape for repair: reuses the
- * same coordination engine and the same fail-closed convention (an active 'parts_supplier_default'
- * routing_policies row is required, same as every other automatic routing decision in this
- * codebase). Also callable directly by an admin (POST /api/admin/parts-orders/:id/auto-assign-
- * supplier) regardless of the AUTO_ASSIGN_PARTS_SUPPLIER flag, the same way manual demand routing
- * works independent of AUTO_ROUTE_NEW_DEMANDS.
- */
-export async function autoAssignPartsSupplier(principal: Principal, orderId:string) {
+/** Read-only supplier plan. Inventory and policy may change; reserveOrderInventory remains the commit gate. */
+export async function previewPartsSupplierPlan(orderId:string) {
   const orderResult = await pool.query(
     `select po.*, sc.domain_id, coalesce(sc.selected_actor_id, sc.current_owner_actor_id) as repairing_actor_id
        from parts_orders po join service_cases sc on sc.id=po.case_id where po.id=$1`,
@@ -204,12 +197,16 @@ export async function autoAssignPartsSupplier(principal: Principal, orderId:stri
   if (!order) throw new Error('order_not_found');
   if (!['requested','supplier_assigned'].includes(order.status)) throw new Error('order_not_assignable');
 
+  const observedAt = new Date().toISOString();
   const policy = await loadActiveRoutingPolicy(order.domain_id,'parts_supplier_default');
-  if (!policy) return { result:null, policyRequired:true, ranked:[] as unknown[] };
+  if (!policy) return {
+    orderId, caseId:order.case_id as string, observedAt, policyRequired:true,
+    policyVersion:null, candidateCount:0, ranked:[] as ReturnType<typeof rankCoordinationCandidates>,
+    recommendedActorId:null as string|null
+  };
 
   const items = await pool.query('select sku,quantity from parts_order_items where order_id=$1',[orderId]);
   const candidates = await loadPartsSupplierCandidates(items.rows, order.repairing_actor_id ?? null);
-
   const eligible:CoordinationCandidate[] = candidates.map(candidate=>({
     actorId:candidate.actor_id,
     signals:{
@@ -220,17 +217,29 @@ export async function autoAssignPartsSupplier(principal: Principal, orderId:stri
     }
   }));
   const ranked = rankCoordinationCandidates(eligible,policy.configuration,orderId);
-  const recommended = ranked[0]?.actorId ?? null;
+  return {
+    orderId, caseId:order.case_id as string, observedAt, policyRequired:false,
+    policyVersion:policy.version, candidateCount:candidates.length,
+    ranked, recommendedActorId:ranked[0]?.actorId??null
+  };
+}
+
+/** Commit a fresh recommendation. Assignment rechecks actor state; reservation checks live stock. */
+export async function autoAssignPartsSupplier(principal: Principal, orderId:string) {
+  const plan = await previewPartsSupplierPlan(orderId);
+  if (plan.policyRequired) return { result:null, policyRequired:true, ranked:plan.ranked };
+  const recommended = plan.recommendedActorId;
   if (!recommended) {
-    await raiseException(order.case_id,'NO_ELIGIBLE_PARTS_SUPPLIER','No supplier could fulfill every item in this parts order.','warning',{ orderId });
-    return { result:null, policyRequired:false, ranked };
+    await raiseException(plan.caseId,'NO_ELIGIBLE_PARTS_SUPPLIER','No supplier could fulfill every item in this parts order.','warning',{ orderId });
+    return { result:null, policyRequired:false, ranked:plan.ranked };
   }
 
   const result = await assignSupplier(principal,orderId,recommended);
   await audit(principal,'auto_assign_parts_supplier','parts_order',orderId,'coordination_recommendation_v2',{
-    caseId:order.case_id, recommendedActorId:recommended, candidateCount:candidates.length
+    caseId:plan.caseId, recommendedActorId:recommended, candidateCount:plan.candidateCount,
+    policyVersion:plan.policyVersion, inventoryObservedAt:plan.observedAt
   });
-  return { result, policyRequired:false, ranked };
+  return { result, policyRequired:false, ranked:plan.ranked };
 }
 
 export async function reserveOrderInventory(principal: Principal, orderId:string) {

@@ -39,12 +39,11 @@ function Portal() {
 
   return principal ? (
     <Dashboard>
-      <CoreCaseQueue />
       <section className="mt-8" aria-labelledby="shop-os-heading">
         <div className="mb-4">
           <p className="kicker">Operations workspace</p>
           <h2 id="shop-os-heading" className="mt-1 text-2xl font-bold">Run today’s service work</h2>
-          <p className="muted mt-1 max-w-2xl text-sm">Move from coordinated demand to repair execution without leaving the partner workspace.</p>
+          <p className="muted mt-1 max-w-2xl text-sm">Run direct shop work here, with ROVIQ case handoffs available when your shop joins the network.</p>
         </div>
         <ShopOsScheduleControl />
         <ShopOsWorkspace />
@@ -55,6 +54,7 @@ function Portal() {
         <ShopOsFloorControl />
         <ShopOsDeferredServiceControl />
       </section>
+      <CoreCaseQueue />
       <NetworkSharingControl />
       <LocalMap />
     </Dashboard>
