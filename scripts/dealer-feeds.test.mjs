@@ -333,3 +333,13 @@ describe('search settings fallback', () => {
       .rejects.toThrow('search_config_not_found (/new-vehicles/=200:Just a moment..., /=200:Just a moment..., /used-vehicles/=403)');
   });
 });
+
+describe('used electric pickups', () => {
+  it('keeps Silverado EV and Sierra EV (crew cab only) from GM stores', () => {
+    const feed = FEEDS.find(f => f.sourceKey === 'buick-gmc-beaverton-used-trucks');
+    const card = o => ({ VehicleVin: '1GT40FDA1RU100001', VehicleType: 'Used', VehicleYear: '2024', VehicleMake: 'GMC', VehicleModel: 'Sierra EV',
+      VehicleTrim: 'Denali Edition 1', VehicleBodyStyle: 'Pickup', VehicleInternetPrice: '$79,995', VehicleMileage: '8200', ...o });
+    expect(dealerOnToFeedVehicle(card(), feed)).toMatchObject({ model: 'Sierra EV', condition: 'used', mileage: 8200 });
+    expect(dealerOnToFeedVehicle(card({ VehicleMake: 'Chevrolet', VehicleModel: 'Silverado EV', VehicleTrim: 'RST' }), feed)).toMatchObject({ model: 'Silverado EV' });
+  });
+});

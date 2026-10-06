@@ -37,7 +37,7 @@ export const FEEDS = [
     dealerName: 'Carr Chevrolet (Beaverton)',
     platform: 'dealer-com',
     pageUrl: 'https://www.carrchevrolet.com/used-inventory/index.htm',
-    models: ['Silverado 1500', 'Silverado 2500HD', 'Sierra 1500', 'Sierra 2500HD', 'F-150', 'Super Duty F-250 SRW'],
+    models: ['Silverado 1500', 'Silverado 2500HD', 'Silverado EV', 'Sierra 1500', 'Sierra 2500HD', 'Sierra EV', 'F-150', 'F-150 Lightning', 'Super Duty F-250 SRW'],
     condition: 'used'
   },
   {
@@ -116,7 +116,10 @@ const MODELS = [
   { test: /^F-?150\b/i, label: m => m.replace(/^F-?150/i, 'F-150') },
   { test: /^F-?250/i, label: () => 'F-250 Super Duty' },
   { test: /^Silverado\s*(1500|2500)/i, label: m => m.replace(/\s*HD$/i, ' HD').replace(/^Silverado\s*/i, 'Silverado ') },
-  { test: /^Sierra\s*(1500|2500)/i, label: m => m.replace(/\s*HD$/i, ' HD').replace(/^Sierra\s*/i, 'Sierra ') }
+  { test: /^Sierra\s*(1500|2500)/i, label: m => m.replace(/\s*HD$/i, ' HD').replace(/^Sierra\s*/i, 'Sierra ') },
+  // Electric full-size pickups (crew cab only); F-150 Lightning matches the F-150 entry.
+  { test: /^Silverado\s*EV/i, label: () => 'Silverado EV' },
+  { test: /^Sierra\s*EV/i, label: () => 'Sierra EV' }
 ];
 
 // Crew cab / SuperCrew F-150, F-250, Silverado and Sierra 1500/2500 only.
@@ -133,7 +136,7 @@ export function toFeedVehicle(listing, feed) {
   if (mileage < 0 || (condition === 'used' && !validUsedMileage(listing.mileage, mileage))) return null;
   const style = listing.styles?.style_name || listing.styles?.style_description || '';
   const descriptor = [style, listing.trim, listing.extra_fields?.title].filter(Boolean).join(' ');
-  if (!/super\s*crew|crew\s*cab/i.test(descriptor)) return null;
+  if (!/super\s*crew|crew\s*cab/i.test(descriptor) && !evCrewCab(listing.model)) return null;
   const p = listing.pricing || {};
   const price = [p.our_price, p.internet_price, p.price].map(Number).find(n => Number.isFinite(n) && n >= 1000);
   if (!listing.vin || !price) return null;
@@ -199,6 +202,9 @@ export function readDealerComVehicles(html) {
 }
 
 // Ford VINs carry the cab in position 5: "W" is SuperCrew / Crew Cab.
+// Silverado EV / Sierra EV are built only as crew cabs.
+const evCrewCab = model => /^(Silverado|Sierra)\s*EV/i.test(String(model || ''));
+
 const fordCrewVin = (make, vin) => /^ford$/i.test(String(make || '')) && String(vin || '')[4] === 'W';
 
 // Every price-like field a dealer publishes for a listing, kept with the truck so the
@@ -220,7 +226,7 @@ export function dealerComToFeedVehicle(v, feed) {
   if (condition === 'used' ? !isUsedType(v.type) : String(v.type || '').toLowerCase() !== condition) return null;
   const model = MODELS.find(m => m.test.test(String(v.model || '')));
   if (!model) return null;
-  const crew = /43$/.test(String(v.modelCode || '')) || /crew\s*cab|super\s*crew/i.test([v.trim, v.bodyStyle, ...(v.title || [])].join(' ')) || fordCrewVin(v.make, v.vin);
+  const crew = /43$/.test(String(v.modelCode || '')) || /crew\s*cab|super\s*crew/i.test([v.trim, v.bodyStyle, ...(v.title || [])].join(' ')) || fordCrewVin(v.make, v.vin) || evCrewCab(v.model);
   if (!crew) return null;
   const attrs = Object.fromEntries((v.trackingAttributes || []).map(a => [a.name, a.value]));
   const mileage = money(attrs.odometer);
@@ -308,7 +314,7 @@ export function dealerOnToFeedVehicle(card, feed) {
   if (condition === 'used' ? !isUsedType(type) : String(type).toLowerCase() !== condition) return null;
   const model = MODELS.find(m => m.test.test(String(card.VehicleModel || '')));
   if (!model) return null;
-  const crew = /43$/.test(String(card.VehicleModelCode || '')) || /crew\s*cab|super\s*crew/i.test(`${card.VehicleBodyStyle || ''} ${card.VehicleTrim || ''}`) || fordCrewVin(card.VehicleMake, vin);
+  const crew = /43$/.test(String(card.VehicleModelCode || '')) || /crew\s*cab|super\s*crew/i.test(`${card.VehicleBodyStyle || ''} ${card.VehicleTrim || ''}`) || fordCrewVin(card.VehicleMake, vin) || evCrewCab(card.VehicleModel);
   if (!crew) return null;
   const mileage = money(card.VehicleMileage);
   if (condition === 'used' && !validUsedMileage(card.VehicleMileage, mileage)) return null;
