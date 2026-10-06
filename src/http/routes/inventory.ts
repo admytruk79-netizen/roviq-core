@@ -5,7 +5,12 @@ import { requireRole } from '../middleware/principal.js';
 import { normalizeInventoryPayload } from '../../services/inventory-feed-adapter.js';
 import { syncInventoryFeed } from '../../services/inventory-sync.js';
 import { lastInventoryScrape, runInventoryScrapeLocked } from '../../services/inventory-scrape.js';
-import { createVehicleInquiry, dealerDetailsForVins, findInventoryByVin, siteKeyMatches, vehicleTitle } from '../../services/vehicle-inquiries.js';
+import {
+  createVehicleInquiry, dealerDetailsForVins, findInventoryByVin, siteKeyMatches, vehicleTitle,
+  getInquiryByTrackingToken, updateInquiryStatus
+} from '../../services/vehicle-inquiries.js';
+
+const inquiryStatusEnum = z.enum(['new', 'contacted', 'reserved', 'financing', 'purchased', 'delivered', 'cancelled']);
 
 const querySchema=z.object({
   q:z.string().trim().max(120).optional(),
@@ -78,7 +83,30 @@ export async function inventoryRoutes(app:FastifyInstance){
     }).parse(req.body??{});
     const r=await createVehicleInquiry(b,(b.clientIp||req.ip||'unknown').slice(0,80));
     if(r.rateLimited) return reply.code(429).send({error:'too_many_requests'});
-    return reply.code(201).send({id:r.id,available:r.available,lastSeenAt:r.lastSeenAt,ownerNotified:r.notified});
+    return reply.code(201).send({id:r.id,available:r.available,lastSeenAt:r.lastSeenAt,ownerNotified:r.notified,trackingToken:r.trackingToken});
+  });
+
+  // Public: order-tracking-style lookup, no login -- the tracking token itself is the credential.
+  // Never returns the dealer name/URL or the dealer's own price, which stay admin-only.
+  app.get('/api/inventory/inquiries/track/:token',{config:{public:true}},async(req,reply)=>{
+    const {token}=z.object({token:z.string().min(1).max(200)}).parse(req.params);
+    const inquiry=await getInquiryByTrackingToken(token);
+    if(!inquiry) return reply.code(404).send({error:'inquiry_not_found'});
+    return {inquiry};
+  });
+
+  app.post('/api/admin/inventory/inquiries/:id/status',{preHandler:requireRole('admin')},async(req,reply)=>{
+    const {id}=z.object({id:z.string().uuid()}).parse(req.params);
+    const body=z.object({status:inquiryStatusEnum,note:z.string().trim().max(2000).optional()}).parse(req.body);
+    try{
+      const inquiry=await updateInquiryStatus(req.principal,id,body.status,body.note);
+      return {inquiry};
+    }catch(error){
+      const message=error instanceof Error?error.message:'inquiry_status_error';
+      if(message==='inquiry_not_found')return reply.code(404).send({error:message});
+      if(message==='invalid_inquiry_transition')return reply.code(409).send({error:message});
+      throw error;
+    }
   });
 
   // Dealer behind each requested truck, for the owner's website bookings page only.
@@ -90,8 +118,11 @@ export async function inventoryRoutes(app:FastifyInstance){
     return reply.header('cache-control','no-store').send({dealers:await dealerDetailsForVins(b.vins)});
   });
 
-  app.get('/api/admin/inventory/inquiries',{preHandler:requireRole('admin')},async()=>{
-    const r=await pool.query(`select * from vehicle_inquiries order by created_at desc limit 200`);
+  app.get('/api/admin/inventory/inquiries',{preHandler:requireRole('admin')},async(req)=>{
+    const q=z.object({status:inquiryStatusEnum.optional()}).parse(req.query??{});
+    const r=q.status
+      ?await pool.query(`select * from vehicle_inquiries where status=$1 order by created_at desc limit 200`,[q.status])
+      :await pool.query(`select * from vehicle_inquiries order by created_at desc limit 200`);
     return {inquiries:r.rows};
   });
 

@@ -25,17 +25,22 @@ describe('vehicle inquiries', () => {
     expect(m.message).toContain('Customer: Olena');
   });
 
-  it('stores the request with dealer details and skips email until Resend is configured', async () => {
+  it('stores the request with dealer details, logs a creation event, and returns a tracking token while skipping email until Resend is configured', async () => {
     query.mockResolvedValueOnce({ rows: [{ count: 0 }] })
       .mockResolvedValueOnce({ rows: [truck] })
-      .mockResolvedValueOnce({ rows: [{ id: 'req-1' }] });
+      .mockResolvedValueOnce({ rows: [{ id: 'req-1' }] })
+      .mockResolvedValueOnce({ rows: [] });
     const fetcher = vi.fn();
     const r = await createVehicleInquiry(input, '203.0.113.9', fetcher as unknown as typeof fetch);
     expect(r).toMatchObject({ rateLimited: false, id: 'req-1', available: true, notified: false });
+    if (r.rateLimited) throw new Error('unreachable');
+    expect(typeof r.trackingToken).toBe('string');
+    expect(r.trackingToken.length).toBeGreaterThan(20);
     expect(fetcher).not.toHaveBeenCalled();
     const params = query.mock.calls[2][1];
     expect(params.slice(0, 2)).toEqual(['1FTEW2LP5TKE63673', 'inv1']);
     expect(params.slice(6, 11)).toEqual([true, 4894500, 4511100, 'Courtesy Ford (Portland)', truck.source_dealer_url]);
+    expect(query.mock.calls[3][0]).toContain('VEHICLE_INQUIRY_CREATED');
   });
 
   it('emails the owner through Resend when configured and marks the request notified', async () => {
@@ -45,13 +50,14 @@ describe('vehicle inquiries', () => {
     query.mockResolvedValueOnce({ rows: [{ count: 0 }] })
       .mockResolvedValueOnce({ rows: [truck] })
       .mockResolvedValueOnce({ rows: [{ id: 'req-2' }] })
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] });
     const fetcher = vi.fn(async () => new Response('{}', { status: 200 }));
     const r = await createVehicleInquiry(input, '203.0.113.9', fetcher as unknown as typeof fetch);
     expect(r).toMatchObject({ notified: true });
     const body = JSON.parse((fetcher.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
     expect(body).toMatchObject({ to: ['owner@example.com'], reply_to: 'olena@example.com' });
-    expect(query.mock.calls[3][0]).toContain('owner_notified=true');
+    expect(query.mock.calls[4][0]).toContain('owner_notified=true');
   });
 
   it('records a request for a truck no longer listed, and rate-limits repeat senders', async () => {

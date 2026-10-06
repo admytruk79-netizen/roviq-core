@@ -1,5 +1,21 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { pool } from '../db/pool.js';
+import type { Principal } from '../types/principal.js';
+import { audit } from './audit.js';
+
+export type InquiryStatus = 'new' | 'contacted' | 'reserved' | 'financing' | 'purchased' | 'delivered' | 'cancelled';
+
+// Mirrors the explicit allowed-transition-map pattern used elsewhere in Core (transport,
+// mobility, exceptions) rather than letting a client jump straight to 'delivered'.
+const ALLOWED_TRANSITIONS: Record<InquiryStatus, InquiryStatus[]> = {
+  new: ['contacted', 'cancelled'],
+  contacted: ['reserved', 'cancelled'],
+  reserved: ['financing', 'purchased', 'cancelled'],
+  financing: ['purchased', 'cancelled'],
+  purchased: ['delivered'],
+  delivered: [],
+  cancelled: []
+};
 
 export type InventoryMatch = {
   id: string; vin: string; year: number | null; make: string; model: string; trim: string | null;
@@ -72,17 +88,83 @@ export async function createVehicleInquiry(
     `select count(*)::int as count from vehicle_inquiries where client_ip=$1 and created_at >= now() - interval '10 minutes'`, [clientIp]);
   if (Number(recent.rows[0]?.count ?? 0) >= 5) return { rateLimited: true as const };
   const v = await findInventoryByVin(input.vin);
+  const trackingToken = randomBytes(24).toString('hex');
   const inserted = await pool.query(`
     insert into vehicle_inquiries(vin,vehicle_inventory_id,customer_name,customer_email,customer_phone,note,available_at_request,
-      quoted_price_cents,source_price_cents,dealer_name,dealer_url,vehicle_title,client_ip)
-    values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning id`,
+      quoted_price_cents,source_price_cents,dealer_name,dealer_url,vehicle_title,client_ip,tracking_token)
+    values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) returning id`,
     [input.vin.toUpperCase(), v?.id ?? null, input.name, input.email, input.phone || null, input.note || null, Boolean(v?.available),
      v?.public_price_cents ?? null, v?.source_price_cents ?? null, v?.source_dealer_name ?? null, v?.source_dealer_url ?? null,
-     v ? vehicleTitle(v) : null, clientIp]);
+     v ? vehicleTitle(v) : null, clientIp, trackingToken]);
   const id: string = inserted.rows[0].id;
+  await pool.query(
+    `insert into events(aggregate_type,aggregate_id,event_type,payload) values('vehicle_inquiry',$1,'VEHICLE_INQUIRY_CREATED',$2)`,
+    [id, JSON.stringify({ vin: input.vin.toUpperCase(), available: Boolean(v?.available) })]
+  );
   const notified = await notifyOwner(ownerEmail(input, v, id), fetcher);
   if (notified) await pool.query(`update vehicle_inquiries set owner_notified=true where id=$1`, [id]);
-  return { rateLimited: false as const, id, available: Boolean(v?.available), lastSeenAt: v?.last_seen_at ?? null, notified };
+  return { rateLimited: false as const, id, available: Boolean(v?.available), lastSeenAt: v?.last_seen_at ?? null, notified, trackingToken };
+}
+
+/** Admin-only status progression, e.g. as the real-world sale/delivery actually advances. */
+export async function updateInquiryStatus(principal: Principal, inquiryId: string, nextStatus: InquiryStatus, note?: string) {
+  if (principal.role !== 'admin') throw new Error('forbidden');
+  const client = await pool.connect();
+  try {
+    await client.query('begin');
+    const current = await client.query(`select * from vehicle_inquiries where id=$1 for update`, [inquiryId]);
+    if (!current.rowCount) throw new Error('inquiry_not_found');
+    const inquiry = current.rows[0];
+    if (inquiry.status === nextStatus) {
+      await client.query('commit');
+      return inquiry;
+    }
+    if (!ALLOWED_TRANSITIONS[inquiry.status as InquiryStatus]?.includes(nextStatus)) throw new Error('invalid_inquiry_transition');
+
+    const terminalColumn = nextStatus === 'purchased' ? 'purchased_at' : nextStatus === 'delivered' ? 'delivered_at' : nextStatus === 'cancelled' ? 'cancelled_at' : null;
+    const updated = await client.query(
+      `update vehicle_inquiries set status=$1,updated_at=now()${terminalColumn ? `,${terminalColumn}=now()` : ''} where id=$2 returning *`,
+      [nextStatus, inquiryId]
+    );
+    await client.query(
+      `insert into events(aggregate_type,aggregate_id,event_type,actor_id,payload)
+       values('vehicle_inquiry',$1,'VEHICLE_INQUIRY_STATUS_CHANGED',$2,$3)`,
+      [inquiryId, principal.actorId ?? null, JSON.stringify({ from: inquiry.status, to: nextStatus, note: note ?? null })]
+    );
+    await client.query('commit');
+    await audit(principal, 'update_vehicle_inquiry_status', 'vehicle_inquiry', inquiryId, `${inquiry.status}->${nextStatus}`, {});
+    return updated.rows[0];
+  } catch (error) {
+    await client.query('rollback');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function inquiryTimeline(inquiryId: string) {
+  const r = await pool.query(
+    `select event_type,occurred_at,payload from events where aggregate_type='vehicle_inquiry' and aggregate_id=$1 order by occurred_at asc`,
+    [inquiryId]
+  );
+  return r.rows;
+}
+
+/**
+ * Customer-facing lookup by tracking token -- no login required, same order-tracking-style
+ * pattern as the rest of the no-account booking flow. Deliberately omits the dealer name/URL
+ * and the dealer's own price, which stay admin-only.
+ */
+export async function getInquiryByTrackingToken(trackingToken: string) {
+  const r = await pool.query(
+    `select id,status,vin,vehicle_title,quoted_price_cents::int as quoted_price_cents,customer_name,
+            created_at,updated_at,purchased_at,delivered_at,cancelled_at
+       from vehicle_inquiries where tracking_token=$1`,
+    [trackingToken]
+  );
+  if (!r.rowCount) return null;
+  const timeline = await inquiryTimeline(r.rows[0].id);
+  return { ...r.rows[0], timeline };
 }
 
 // Shared key between the owner's website and Core (SITE_DEALER_LOOKUP_KEY). Unset = lookup off.
