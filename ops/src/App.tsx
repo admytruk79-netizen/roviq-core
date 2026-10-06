@@ -1,4 +1,4 @@
-import { BrowserRouter, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, HashRouter, Route, Routes } from 'react-router-dom';
 import { AuthProvider } from './lib/auth';
 import { Layout } from './components/Layout';
 import { ProtectedRoute } from './components/ProtectedRoute';
@@ -17,11 +17,13 @@ import { PilotReadinessPage } from './pages/PilotReadiness';
 import { CommandCenter } from './pages/CommandCenter';
 import { CoreCases } from './pages/CoreCases';
 import { CoreCaseWorkspace } from './pages/CoreCaseWorkspace';
+import { AiFirstRead } from './pages/AiFirstRead';
 
 function CaseControl() {
   return (
     <div className="space-y-4">
       <CaseActionView />
+      <AiFirstRead />
       <details open className="rounded-xl border border-slate-200 bg-white">
         <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-700">Case tools & details</summary>
         <div className="border-t border-slate-200 p-4">
@@ -37,8 +39,9 @@ function CaseControl() {
 }
 
 function App() {
+  const Router = import.meta.env.BASE_URL === '/' ? BrowserRouter : HashRouter;
   return (
-    <BrowserRouter>
+    <Router>
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
@@ -59,7 +62,7 @@ function App() {
           </Route>
         </Routes>
       </AuthProvider>
-    </BrowserRouter>
+    </Router>
   );
 }
 

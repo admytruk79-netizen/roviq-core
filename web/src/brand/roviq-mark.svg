@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 104 70" role="img" aria-label="ROVIQ">
+  <defs>
+    <mask id="gap" maskUnits="userSpaceOnUse" x="-10" y="-10" width="130" height="90">
+      <rect x="-10" y="-10" width="130" height="90" fill="#fff"/>
+      <g fill="none" stroke="#000" stroke-width="18">
+        <path d="M0 6H36A17 17 0 0 1 36 40H6"/>
+      </g>
+      <polygon points="12,34 34,34 70,70 44,70" fill="#000" stroke="#000" stroke-width="6"/>
+    </mask>
+  </defs>
+  <g fill="#E46F35" mask="url(#gap)">
+    <path d="M44 6H70A20 20 0 0 1 70 46H52" fill="none" stroke="#E46F35" stroke-width="12"/>
+    <polygon points="66,40 82,40 104,70 86,70"/>
+  </g>
+  <g fill="#101D2C">
+    <rect x="0" y="0" width="12" height="70"/>
+    <path d="M0 6H36A17 17 0 0 1 36 40H6" fill="none" stroke="#101D2C" stroke-width="12"/>
+    <polygon points="14,34 34,34 70,70 46,70"/>
+  </g>
+</svg>

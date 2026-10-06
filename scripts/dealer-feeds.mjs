@@ -6,9 +6,10 @@
 // Dealer Inspire sites (Kendall Ford of Vancouver, Courtesy Ford Portland) load inventory from the Cars
 // Commerce search service. The page carries the public, read-only search
 // settings every visitor's browser uses; we read those and query the service.
-// Used and certified pre-owned trucks: any mileage under this cap (a 200-mile used truck counts).
-export const USED_MIN_MILES = 500;
+// Dealer-marked used and certified pre-owned trucks, including delivery-mileage stock.
+// Require an odometer reading; never infer used condition from mileage alone.
 export const USED_MAX_MILES = 40000;
+const validUsedMileage = (raw, miles) => raw != null && /\d/.test(String(raw)) && Number.isFinite(miles) && miles >= 0 && miles <= USED_MAX_MILES;
 const isUsedType = t => /\b(used|certified|pre-?owned|cpo)\b/i.test(String(t || ''));
 
 const PAGE_USER_AGENT = 'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Claude-User/1.0; +Claude-User@anthropic.com)';
@@ -132,7 +133,7 @@ export function toFeedVehicle(listing, feed) {
   if (!model || (condition === 'used' ? !/\bused\b/.test(type) : type !== condition)) return null;
   const certified = condition === 'used' && /certified/.test(type);
   const mileage = Number(listing.mileage) || 0;
-  if (mileage < 0 || (condition === 'used' && (mileage < USED_MIN_MILES || mileage > USED_MAX_MILES))) return null;
+  if (mileage < 0 || (condition === 'used' && !validUsedMileage(listing.mileage, mileage))) return null;
   const style = listing.styles?.style_name || listing.styles?.style_description || '';
   const descriptor = [style, listing.trim, listing.extra_fields?.title].filter(Boolean).join(' ');
   if (!/super\s*crew|crew\s*cab/i.test(descriptor) && !evCrewCab(listing.model)) return null;
@@ -229,7 +230,7 @@ export function dealerComToFeedVehicle(v, feed) {
   if (!crew) return null;
   const attrs = Object.fromEntries((v.trackingAttributes || []).map(a => [a.name, a.value]));
   const mileage = money(attrs.odometer);
-  if (condition === 'used' && (mileage < USED_MIN_MILES || mileage > USED_MAX_MILES)) return null;
+  if (condition === 'used' && !validUsedMileage(attrs.odometer, mileage)) return null;
   const dp = v.pricing?.dprice || [];
   // The dealer's own advertised price (e.g. "Carr Price"), not conditional rebates.
   const price = money(dp.find(d => d.type === 'TOTAL')?.value) || money(v.pricing?.retailPrice);
@@ -316,7 +317,7 @@ export function dealerOnToFeedVehicle(card, feed) {
   const crew = /43$/.test(String(card.VehicleModelCode || '')) || /crew\s*cab|super\s*crew/i.test(`${card.VehicleBodyStyle || ''} ${card.VehicleTrim || ''}`) || fordCrewVin(card.VehicleMake, vin) || evCrewCab(card.VehicleModel);
   if (!crew) return null;
   const mileage = money(card.VehicleMileage);
-  if (condition === 'used' && (mileage < USED_MIN_MILES || mileage > USED_MAX_MILES)) return null;
+  if (condition === 'used' && !validUsedMileage(card.VehicleMileage, mileage)) return null;
   const price = dealerOnSellingPrice(card);
   if (price < 1000) return null;
   const origin = new URL(feed.pageUrl).origin;
@@ -386,7 +387,7 @@ export function jazelToFeedVehicle(d, feed) {
   const model = MODELS.find(m => m.test.test(String(d.model || '')));
   if (!model || d.make !== 'Ford' || d.vin[4] !== 'W') return null;
   const mileage = money(d.mileage);
-  if (condition === 'used' && (mileage < USED_MIN_MILES || mileage > USED_MAX_MILES)) return null;
+  if (condition === 'used' && !validUsedMileage(d.mileage, mileage)) return null;
   const price = money(d.price);
   if (price < 1000) return null;
   const f150 = /F-?150/i.test(d.model);

@@ -8,6 +8,7 @@ import { getFinancialReconciliation } from '../../services/financial-reconciliat
 import { loadCaseForPrincipal } from '../../services/case-access.js';
 import { createStripePaymentIntent } from '../../services/stripe-payments.js';
 import { createStripePartnerSettlement } from '../../services/stripe-settlements.js';
+import { confirmCustomerCheckout, createCustomerCheckout } from '../../services/stripe-checkout.js';
 
 function errorMessage(error:unknown,fallback:string){
   return error instanceof Error?error.message:fallback;
@@ -52,7 +53,7 @@ export async function paymentRoutes(app: FastifyInstance) {
       if (message==='forbidden') return reply.code(403).send({ error:message });
       if (message==='case_not_found') return reply.code(404).send({ error:message });
       if (['currency_precision_unsupported','invalid_financial_amount'].includes(message)) return reply.code(422).send({ error:message });
-      if (['quote_not_approved','provider_intent_conflict','payment_request_conflict'].includes(message)) return reply.code(409).send({ error:message });
+      if (['quote_not_approved','provider_intent_conflict','payment_request_conflict','payment_exceeds_approved_quote','payment_currency_differs_from_quote'].includes(message)) return reply.code(409).send({ error:message });
       throw e;
     }
   });
@@ -74,10 +75,44 @@ export async function paymentRoutes(app: FastifyInstance) {
       if(message==='forbidden') return reply.code(403).send({error:message});
       if(message==='case_not_found') return reply.code(404).send({error:message});
       if(['currency_precision_unsupported','invalid_financial_amount'].includes(message)) return reply.code(422).send({error:message});
-      if(['quote_not_approved','payment_request_conflict','provider_intent_conflict','payment_request_terminal'].includes(message)) return reply.code(409).send({error:message});
+      if(['quote_not_approved','payment_request_conflict','provider_intent_conflict','payment_request_terminal','payment_exceeds_approved_quote','payment_currency_differs_from_quote'].includes(message)) return reply.code(409).send({error:message});
       if(message==='stripe_not_configured') return reply.code(503).send({error:message});
       if(['stripe_request_failed','stripe_payment_create_failed'].includes(message)) return reply.code(502).send({error:message});
       throw error;
+    }
+  });
+
+  // Customer card payment: open Stripe Checkout for one of the customer's own payments.
+  app.post('/api/customers/me/payments/:id/checkout-session', { preHandler: requireRole('customer') }, async (req, reply) => {
+    const { id } = z.object({ id:z.string().uuid() }).parse(req.params);
+    const origin = typeof req.headers.origin === 'string' ? req.headers.origin : undefined;
+    const { surface } = z.object({ surface:z.enum(['customer','app']).default('customer') }).parse(req.body ?? {});
+    try { return await createCustomerCheckout(req.principal, id, origin, surface); }
+    catch (e) {
+      const m = errorMessage(e, 'checkout_error');
+      if (m === 'forbidden') return reply.code(403).send({ error:m });
+      if (m === 'payment_not_found') return reply.code(404).send({ error:m });
+      if (m === 'payment_not_payable') return reply.code(409).send({ error:m });
+      if (m === 'stripe_not_configured') return reply.code(503).send({ error:m });
+      if (['stripe_request_failed','stripe_unreachable'].includes(m)) return reply.code(502).send({ error:m });
+      throw e;
+    }
+  });
+
+  // Back from Stripe: Core asks Stripe whether the session was paid and records it if so.
+  app.post('/api/customers/me/payments/:id/checkout-session/confirm', { preHandler: requireRole('customer') }, async (req, reply) => {
+    const { id } = z.object({ id:z.string().uuid() }).parse(req.params);
+    const { sessionId } = z.object({ sessionId:z.string().min(3).max(255) }).parse(req.body);
+    try { return await confirmCustomerCheckout(req.principal, id, sessionId); }
+    catch (e) {
+      const m = errorMessage(e, 'checkout_error');
+      if (m === 'forbidden') return reply.code(403).send({ error:m });
+      if (m === 'payment_not_found') return reply.code(404).send({ error:m });
+      if (['checkout_session_invalid','checkout_session_unlinked'].includes(m)) return reply.code(422).send({ error:m });
+      if (['checkout_amount_mismatch','checkout_currency_mismatch','invalid_payment_transition'].includes(m)) return reply.code(409).send({ error:m });
+      if (m === 'stripe_not_configured') return reply.code(503).send({ error:m });
+      if (['stripe_request_failed','stripe_unreachable'].includes(m)) return reply.code(502).send({ error:m });
+      throw e;
     }
   });
 

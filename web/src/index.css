@@ -47,3 +47,11 @@
 .roviq-truck-card.is-changed{animation:roviq-rise .5s cubic-bezier(.2,.7,.2,1) both,roviq-glow 1.6s ease-in-out 3}
 .roviq-price-sheen{background:linear-gradient(90deg,#fff 0%,#fff 40%,var(--roviq-copper-soft) 50%,#fff 60%,#fff 100%);background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:roviq-sheen 3.5s linear infinite}
 .roviq-drive{animation:roviq-drive 2.4s ease-in-out infinite alternate}
+
+/* ROVIQ logo lockup (shared/brand). */
+.roviq-logo{display:block;height:30px;width:auto;flex:none}
+.roviq-logo-label{font-size:.72rem;font-weight:800;letter-spacing:.16em;text-transform:uppercase;color:var(--roviq-muted,#a8b4c2)}
+@media (max-width:640px){.roviq-logo{height:24px}}
+
+/* Inside the ROVIQ app the shell shows the logo and one Sign out for every tab. */
+.in-service .roviq-brand,.in-service .embed-signout{display:none!important}

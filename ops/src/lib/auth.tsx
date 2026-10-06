@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
 import { api, getToken, SESSION_EXPIRED_EVENT, setToken } from './api';
 import type { Principal } from './types';
 
-const PRINCIPAL_KEY = 'roviq_principal';
+const PRINCIPAL_KEY = 'roviq_ops_principal';
 
 type AuthState = {
   principal: Principal | null;

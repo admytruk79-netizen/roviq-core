@@ -10,3 +10,11 @@
 
 /* Vehicle to find and load on the active job. */
 .tow-vehicle{margin:10px 0 0;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:rgba(215,165,91,.07)}.tow-vehicle .eyebrow{display:block;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--gold)}.tow-vehicle strong{display:block;font-size:17px;margin-top:3px;color:var(--ink)}.tow-vehicle p{margin:3px 0 0;font-size:13px;color:var(--muted)}.tow-vehicle .tow-vehicle-flag{color:var(--gold2);font-weight:700}
+
+/* ROVIQ logo lockup (shared/brand). */
+.roviq-logo{display:block;height:30px;width:auto;flex:none}
+.roviq-logo-label{font-size:.72rem;font-weight:800;letter-spacing:.16em;text-transform:uppercase;color:var(--roviq-muted,#a8b4c2)}
+@media (max-width:640px){.roviq-logo{height:24px}}
+
+/* Inside the ROVIQ Service app the shell shows the logo and one Sign out for every tab. */
+.in-service .brand,.in-service .embed-signout{display:none!important}

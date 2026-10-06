@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { pool } from '../db/pool.js';
 import { refundPayment, updatePaymentState } from './payments.js';
 import type { Principal } from '../types/principal.js';
+import { applyCheckoutSession } from './stripe-checkout.js';
 
 type StripeObject={
   id?:string;
@@ -14,6 +15,8 @@ type StripeObject={
   status?:string;
   reason?:string;
   evidence_details?:{due_by?:number|null};
+  payment_status?:string|null;
+  amount_total?:number|null;
 };
 type StripeEvent={id:string;type:string;data:{object:StripeObject}};
 
@@ -24,6 +27,9 @@ const THREE_DECIMAL_CURRENCIES=new Set(['BHD','JOD','KWD','OMR','TND']);
 const TWO_DECIMAL_CURRENCIES=new Set([
   'AED','AFN','ALL','AMD','ANG','AOA','ARS','AUD','AWG','AZN','BAM','BBD','BDT','BGN','BMD','BND','BOB','BRL','BSD','BWP','BYN','BZD','CAD','CDF','CHF','CNY','COP','CRC','CVE','CZK','DKK','DOP','DZD','EGP','ETB','EUR','FJD','FKP','GBP','GEL','GIP','GMD','GTQ','GYD','HKD','HNL','HTG','HUF','IDR','ILS','INR','ISK','JMD','KES','KGS','KHR','KYD','KZT','LAK','LBP','LKR','LRD','LSL','MAD','MDL','MKD','MMK','MNT','MOP','MUR','MVR','MWK','MXN','MYR','MZN','NAD','NGN','NIO','NOK','NPR','NZD','PAB','PEN','PGK','PHP','PKR','PLN','QAR','RON','RSD','SAR','SBD','SCR','SEK','SGD','SHP','SLE','SOS','SRD','SZL','THB','TJS','TOP','TRY','TTD','TWD','TZS','UAH','USD','UYU','UZS','WST','YER','ZAR','ZMW'
 ]);
+
+// A customer paying on Stripe Checkout: the session links back to the ROVIQ payment through metadata.
+const CHECKOUT_PAID_EVENTS=new Set(['checkout.session.completed','checkout.session.async_payment_succeeded']);
 
 const SUPPORTED_PAYMENT_INTENT_EVENTS=new Set([
   'payment_intent.requires_action',
@@ -40,17 +46,20 @@ function parseStripeSignature(header:string){
   return {timestamp,signatures};
 }
 
-export function verifyStripeWebhook(rawBody:string,signatureHeader:string,now=Date.now()){
-  const secret=process.env.STRIPE_WEBHOOK_SECRET;
-  if(!secret) throw new Error('stripe_webhook_not_configured');
+// secrets: the signing secrets to accept (the environment variable and the one Core registered
+// itself); defaults to the environment variable alone.
+export function verifyStripeWebhook(rawBody:string,signatureHeader:string,now=Date.now(),secrets?:string[]){
+  const candidates=(secrets??[process.env.STRIPE_WEBHOOK_SECRET]).filter((s):s is string=>Boolean(s));
+  if(!candidates.length) throw new Error('stripe_webhook_not_configured');
   const {timestamp,signatures}=parseStripeSignature(signatureHeader);
   if(!Number.isSafeInteger(timestamp)||Math.abs(now-timestamp*1000)>5*60*1000) throw new Error('stripe_webhook_timestamp_invalid');
-  const expected=createHmac('sha256',secret).update(`${timestamp}.${rawBody}`).digest('hex');
-  const expectedBuffer=Buffer.from(expected,'hex');
-  const valid=signatures.some(signature=>{
-    if(!/^[a-f0-9]{64}$/i.test(signature)) return false;
-    const actual=Buffer.from(signature,'hex');
-    return actual.length===expectedBuffer.length&&timingSafeEqual(expectedBuffer,actual);
+  const valid=candidates.some(secret=>{
+    const expectedBuffer=Buffer.from(createHmac('sha256',secret).update(`${timestamp}.${rawBody}`).digest('hex'),'hex');
+    return signatures.some(signature=>{
+      if(!/^[a-f0-9]{64}$/i.test(signature)) return false;
+      const actual=Buffer.from(signature,'hex');
+      return actual.length===expectedBuffer.length&&timingSafeEqual(expectedBuffer,actual);
+    });
   });
   if(!valid) throw new Error('stripe_webhook_signature_invalid');
   let event:StripeEvent;
@@ -66,6 +75,25 @@ async function localPayment(stripePaymentIntentId:string,db:Queryable=pool):Prom
   const result=await db.query(`select id,currency,case_id from payment_intents where provider='stripe' and provider_intent_id=$1`,[stripePaymentIntentId]);
   if(!result.rowCount) throw new Error('payment_not_found');
   return {id:String(result.rows[0].id),currency:String(result.rows[0].currency).toUpperCase(),caseId:String(result.rows[0].case_id)};
+}
+
+// Checkout creates its Stripe PaymentIntent itself, so the first event for it can arrive before Core
+// has recorded its ID. The signed event's metadata names the ROVIQ payment; link it then.
+async function localPaymentForIntent(object:StripeObject):Promise<LocalPayment>{
+  try{
+    return await localPayment(object.id!);
+  }catch(error){
+    const roviqId=object.metadata?.roviq_payment_intent_id;
+    if(!(error instanceof Error&&error.message==='payment_not_found')||!roviqId) throw error;
+    const linked=await pool.query(
+      `update payment_intents set provider='stripe',provider_intent_id=$2,updated_at=now()
+        where id=$1 and provider_intent_id is null
+        returning id,currency,case_id`,
+      [roviqId,object.id]
+    );
+    if(!linked.rowCount) throw error;
+    return {id:String(linked.rows[0].id),currency:String(linked.rows[0].currency).toUpperCase(),caseId:String(linked.rows[0].case_id)};
+  }
 }
 
 function currencyExponent(currency:string){
@@ -203,6 +231,7 @@ export async function applyStripeWebhook(event:StripeEvent){
   const object=event.data.object;
   const actionable=
     (event.type.startsWith('payment_intent.')&&SUPPORTED_PAYMENT_INTENT_EVENTS.has(event.type))
+    || CHECKOUT_PAID_EVENTS.has(event.type)
     || event.type==='refund.created'
     || ['charge.dispute.created','charge.dispute.updated','charge.dispute.closed'].includes(event.type);
   if(!actionable) return null;
@@ -210,9 +239,16 @@ export async function applyStripeWebhook(event:StripeEvent){
   let relatedPaymentId:string|null=null;
 
   try{
+  if(CHECKOUT_PAID_EVENTS.has(event.type)){
+    if(!object.id) throw new Error('stripe_webhook_payload_invalid');
+    const result=await applyCheckoutSession(object as Parameters<typeof applyCheckoutSession>[0] & {id:string},'webhook');
+    relatedPaymentId=result.paymentId;
+    await finishProviderEvent(event.id,'processed',result.paymentId);
+    return result;
+  }
   if(event.type.startsWith('payment_intent.')){
     if(!object.id) throw new Error('stripe_webhook_payload_invalid');
-    const payment=await localPayment(object.id);
+    const payment=await localPaymentForIntent(object);
     relatedPaymentId=payment.id;
     const currency=requireMatchingCurrency(payment.currency,object.currency);
     const payload={provider:'stripe',stripeEventType:event.type,stripeObjectId:object.id};

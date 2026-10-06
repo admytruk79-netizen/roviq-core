@@ -7,8 +7,9 @@ function loc(v:unknown){if(!v)return'Not available';if(typeof v==='string')retur
 
 export function NetworkMap() {
   const[cases,setCases]=useState<NetworkCase[]>([]),[selected,setSelected]=useState<string|null>(null),[error,setError]=useState('');
-  async function load(){try{setError('');const r=await api.get<{cases:NetworkCase[]}>('/api/admin/spatial/network');setCases(r.cases);if(!selected&&r.cases[0])setSelected(r.cases[0].case_id)}catch(e){setError(e instanceof Error?e.message:'Unable to load operational spatial data')}}
-  useEffect(()=>{void load()},[]);
+  async function load(){try{setError('');const r=await api.get<{cases:NetworkCase[]}>('/api/admin/spatial/network');setCases(r.cases);setSelected(current=>current??r.cases[0]?.case_id??null)}catch(e){setError(e instanceof Error?e.message:'Unable to load operational spatial data')}}
+  // Positions move while a tow or technician is en route, so keep the view current: every 15 s and on return to the tab.
+  useEffect(()=>{void load();const timer=window.setInterval(()=>void load(),15000);const onFocus=()=>void load();window.addEventListener('focus',onFocus);return()=>{window.clearInterval(timer);window.removeEventListener('focus',onFocus)}},[]);
   const active=useMemo(()=>cases.find(c=>c.case_id===selected)??cases[0]??null,[cases,selected]);
   const withMovement=cases.filter(c=>c.transport_location||c.current_vehicle).length;
   const exceptions=cases.filter(c=>c.priority==='urgent'||c.priority==='high').length;

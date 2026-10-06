@@ -36,11 +36,26 @@ for(const file of files){
   if(file.endsWith('.css')) cssBytes+=size;
 }
 
+// The unified app packages seven independent, lazy-loaded role workspaces. Keep a
+// per-workspace JavaScript ceiling as well as an aggregate upload budget.
+const unified = portalDir === 'service';
 const budgets={
-  js: 1_750_000,
+  js: unified ? 2_400_000 : 1_750_000,
   css: 600_000,
-  total: 3_500_000
+  total: 3_500_000,
+  ...(unified ? { workspaceJs: 450_000 } : {})
 };
+if(unified){
+  const groups=new Map();
+  for(const file of files.filter((name)=>name.endsWith('.js'))){
+    const relative=path.relative(dist,file);
+    const group=relative.includes(path.sep)?relative.split(path.sep)[0]:'shell';
+    groups.set(group,(groups.get(group)??0)+(await stat(file)).size);
+  }
+  for(const [group,size] of groups){
+    if(size>budgets.workspaceJs) failures.push(`JavaScript budget exceeded for ${group}: ${size} > ${budgets.workspaceJs}`);
+  }
+}
 if(jsBytes>budgets.js) failures.push(`JavaScript budget exceeded: ${jsBytes} > ${budgets.js}`);
 if(cssBytes>budgets.css) failures.push(`CSS budget exceeded: ${cssBytes} > ${budgets.css}`);
 if(totalBytes>budgets.total) failures.push(`Total dist budget exceeded: ${totalBytes} > ${budgets.total}`);

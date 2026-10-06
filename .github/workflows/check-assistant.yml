@@ -1,0 +1,85 @@
+name: Check ROVIQ Assistant
+
+# Talks to the production assistants: the customer intake assistant (as an admin test customer
+# session) with a sample complaint, and the diagnostic work assistant (as an admin test diagnostic
+# session). Prints the replies and the case draft. Proves the live AI answers; changes nothing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      message:
+        description: What the customer says first
+        default: My truck won't start this morning. It just clicks.
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      EDGE_URL: https://roviq-core.admytruk79.workers.dev
+      ADMIN_EMAIL: ${{ secrets.BOOTSTRAP_ADMIN_EMAIL }}
+      ADMIN_PASSWORD: ${{ secrets.BOOTSTRAP_ADMIN_PASSWORD }}
+      FIRST: ${{ inputs.message }}
+    steps:
+      - name: Talk to the assistant
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 12); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 25 "$EDGE_URL/api/auth/roles" || true)"
+            [[ "$code" == "401" ]] && break
+            sleep 10
+          done
+          admin="$(jq -n --arg e "$ADMIN_EMAIL" --arg p "$ADMIN_PASSWORD" '{email:$e,password:$p}' \
+            | curl -sS --fail-with-body -H 'content-type: application/json' --data @- "$EDGE_URL/api/auth/login" | jq -r .accessToken)"
+          echo "::add-mask::$admin"
+          customer="$(curl -sS --fail-with-body -X POST -H "authorization: Bearer $admin" -H 'content-type: application/json' --data '{}' "$EDGE_URL/api/admin/testing/customer-session" | jq -r .accessToken)"
+          echo "::add-mask::$customer"
+
+          say() {
+            curl -sS --fail-with-body -H "authorization: Bearer $customer" -H 'content-type: application/json' --data "$1" "$EDGE_URL/api/assist/intake"
+          }
+          messages="$(jq -n --arg m "$FIRST" '[{role:"user",content:$m}]')"
+          {
+            echo "## ROVIQ assistant"
+            echo
+            for answer in "It clicks fast and the dashboard lights are dim. It was very cold last night." "Yes, it's parked in my driveway."; do
+              turn="$(say "$(jq -n --argjson m "$messages" '{messages:$m}')")"
+              echo "**Customer:** $(jq -r '.[-1].content' <<<"$messages")"
+              echo
+              echo "**ROVIQ ($(jq -r .assistant <<<"$turn")):** $(jq -r .reply <<<"$turn")"
+              echo
+              messages="$(jq --arg r "$(jq -r .reply <<<"$turn")" --arg a "$answer" '. + [{role:"assistant",content:$r},{role:"user",content:$a}]' <<<"$messages")"
+            done
+            turn="$(say "$(jq -n --argjson m "$messages" '{messages:$m}')")"
+            echo "**Customer:** $(jq -r '.[-1].content' <<<"$messages")"
+            echo
+            echo "**ROVIQ ($(jq -r .assistant <<<"$turn")):** $(jq -r .reply <<<"$turn")"
+            echo
+            echo "### Case draft"
+            echo '```json'
+            jq '{ready, safetyFlags, draft}' <<<"$turn"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # The diagnostic technician's work assistant, as the admin test diagnostic session.
+          tech="$(curl -sS --fail-with-body -X POST -H "authorization: Bearer $admin" -H 'content-type: application/json' --data '{}' "$EDGE_URL/api/admin/testing/diagnostic-session" | jq -r .accessToken)"
+          echo "::add-mask::$tech"
+          {
+            echo
+            echo "## Diagnostic work assistant"
+            echo
+            for question in "show me the nearest cases" "anything urgent?" "take the closest one"; do
+              answer="$(jq -n --arg m "$question" '{message:$m,location:{lat:45.52,lng:-122.68}}' \
+                | curl -sS --fail-with-body -H "authorization: Bearer $tech" -H 'content-type: application/json' --data @- "$EDGE_URL/api/assist/work")"
+              echo "**Technician:** $question"
+              echo
+              echo "**ROVIQ ($(jq -r '.reader // "n/a"' <<<"$answer")):** $(jq -r .reply <<<"$answer")"
+              echo
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"

@@ -1,6 +1,7 @@
 import { Link, Outlet } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import { NotificationsPrompt } from './NotificationsPrompt';
+import roviqLogo from '../brand/roviq-lockup-dark.svg';
 
 export function Layout() {
   const { principal, logout } = useAuth();
@@ -11,21 +12,14 @@ export function Layout() {
       <header className="roviq-header">
         <div className="roviq-header-inner mx-auto max-w-6xl px-4 sm:px-6">
           <Link to="/" className="roviq-brand" aria-label="ROVIQ customer home">
-            <span className="roviq-mark"><span>R</span></span>
-            <span>ROVIQ</span>
+            <img className="roviq-logo" src={roviqLogo} alt="ROVIQ" />
           </Link>
-          {!principal && (
-            <nav className="roviq-customer-nav" aria-label="Site navigation">
-              <Link to="/inventory" className="roviq-nav-link">Trucks</Link>
-            </nav>
-          )}
           {principal && (
             <nav className="roviq-customer-nav" aria-label="Customer navigation">
               <Link to="/" className="roviq-nav-link">My cases</Link>
-              <Link to="/inventory" className="roviq-nav-link">Trucks</Link>
               <Link to="/core-cases" className="roviq-nav-link">Coordinated cases</Link>
               <Link to="/cases/new" className="roviq-nav-link roviq-nav-primary">Start service</Link>
-              <button onClick={logout} className="roviq-nav-link roviq-account-action" type="button" aria-label="Sign out">Sign out</button>
+              <button onClick={logout} className="roviq-nav-link roviq-account-action embed-signout" type="button" aria-label="Sign out">Sign out</button>
             </nav>
           )}
         </div>

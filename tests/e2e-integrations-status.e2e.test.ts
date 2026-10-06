@@ -4,14 +4,16 @@ import { buildApp } from '../src/app.js';
 import { pool } from '../src/db/pool.js';
 
 const ADMIN_KEY = process.env.ADMIN_API_KEY!;
-const SECRET = 'sk_test_THIS_VALUE_MUST_NEVER_BE_RETURNED';
+const SECRET = 'sk_test_THISVALUEMUSTNEVERBERETURNED';
+// Pasted on a phone: invisible characters, quotes and the row label come along with the key.
+const PASTED = '\u200B"Secret key sk_test_THISVALUEMUSTNEVERBERETURNED"\n';
 
 describe('production integration status', () => {
   let app: FastifyInstance;
   const saved = { secret: process.env.STRIPE_SECRET_KEY, webhook: process.env.STRIPE_WEBHOOK_SECRET };
 
   beforeAll(async () => {
-    process.env.STRIPE_SECRET_KEY = SECRET;
+    process.env.STRIPE_SECRET_KEY = PASTED;
     delete process.env.STRIPE_WEBHOOK_SECRET;
     app = await buildApp();
   });
@@ -26,11 +28,12 @@ describe('production integration status', () => {
     const res = await app.inject({ method: 'GET', url: '/api/admin/integrations/status', headers: { 'x-roviq-role': 'admin', 'x-admin-api-key': ADMIN_KEY } });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    expect(body.stripe).toEqual({ secretKey: true, webhookSecret: false, publishableKey: expect.any(Boolean), mode: 'test' });
+    expect(body.stripe).toMatchObject({ secretKey: true, webhookSecret: false, publishableKey: expect.any(Boolean), mode: 'test', keyShape: 'secret_test' });
+    expect(body.stripe.check).toMatchObject({ ok: false });
     expect(typeof body.sms.twilio).toBe('boolean');
     expect(Array.isArray(body.notificationChannels)).toBe(true);
     expect(res.body).not.toContain(SECRET);
-    expect(res.body).not.toContain('THIS_VALUE');
+    expect(res.body).not.toContain('THISVALUE');
   });
 
   it('is closed to everyone but admins', async () => {

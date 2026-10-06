@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
+import roviqLogo from '../brand/roviq-lockup-dark.svg';
 
 export function Login() {
   const { principal, login, loading, error } = useAuth();
@@ -14,14 +15,14 @@ export function Login() {
     e.preventDefault();
     try {
       await login(email.trim(), password);
-      window.location.replace('/');
+      window.location.replace(import.meta.env.BASE_URL);
     } catch { /* surfaced by auth state */ }
   }
 
   return (
     <div className="roviq-shell roviq-grid-glow grid min-h-screen lg:grid-cols-[1.08fr_.92fr]">
       <section className="hidden min-h-screen flex-col justify-between border-r border-white/10 p-12 lg:flex">
-        <div className="roviq-brand"><span className="roviq-mark"><span>R</span></span><span>ROVIQ</span></div>
+        <div className="roviq-brand"><img className="roviq-logo" src={roviqLogo} alt="ROVIQ" /></div>
         <div className="max-w-xl pb-14">
           <p className="roviq-kicker mb-5">Vehicle service, coordinated</p>
           <h1 className="text-6xl font-black leading-[0.96] tracking-[-0.045em]">One case.<br />One clear plan.<br /><span className="roviq-green">Back on the road.</span></h1>
@@ -31,7 +32,7 @@ export function Login() {
       </section>
       <section className="flex min-h-screen items-center justify-center px-5 py-10 sm:px-8">
         <form onSubmit={handleSubmit} className="roviq-panel w-full max-w-md p-6 sm:p-8">
-          <div className="mb-8 lg:hidden"><div className="roviq-brand"><span className="roviq-mark"><span>R</span></span><span>ROVIQ</span></div></div>
+          <div className="mb-8 lg:hidden"><div className="roviq-brand"><img className="roviq-logo" src={roviqLogo} alt="ROVIQ" /></div></div>
           <p className="roviq-kicker">Customer portal</p><h2 className="mt-2 text-3xl font-bold tracking-tight">Welcome back</h2>
           <p className="roviq-muted mt-2 text-sm">Sign in to view and manage your active service cases.</p>
           <div className="mt-7 space-y-5">

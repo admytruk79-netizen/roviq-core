@@ -1,5 +1,6 @@
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
+import roviqLogo from '../brand/roviq-lockup-dark.svg';
 
 export function Layout() {
   const { principal, logout } = useAuth();
@@ -22,8 +23,7 @@ export function Layout() {
           <div className="flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-3">
               <Link to="/" className="roviq-brand shrink-0" aria-label="ROVIQ Operations home">
-                <span className="roviq-mark"><span>R</span></span>
-                <span className="hidden sm:inline">ROVIQ</span>
+                <img className="roviq-logo" src={roviqLogo} alt="ROVIQ" />
               </Link>
               <span className="text-xs font-bold uppercase tracking-[.16em] text-[var(--roviq-muted)]">Ops</span>
             </div>
@@ -53,7 +53,7 @@ export function Layout() {
                   <Link to="/map" className={navClass('/map')}>Map</Link>
                 </nav>
               </details>
-              {principal && <button onClick={handleLogout} className="roviq-btn-secondary shrink-0 text-sm">Sign out</button>}
+              {principal && <button onClick={handleLogout} className="roviq-btn-secondary embed-signout shrink-0 text-sm">Sign out</button>}
             </div>
           </div>
         </div>

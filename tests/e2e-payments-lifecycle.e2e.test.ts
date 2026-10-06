@@ -107,6 +107,18 @@ describe('payments and settlement end-to-end lifecycle', () => {
     const missingPaymentRes = await app.inject({ method: 'POST', url: '/api/admin/payments/00000000-0000-0000-0000-000000000000/state', headers: adminHeaders(), payload: { state: 'captured' } });
     expect(missingPaymentRes.statusCode).toBe(404);
 
+    // Extra work needs a revised quote the customer approves before it can be charged.
+    const extraRes = await app.inject({
+      method: 'POST', url: `/api/admin/maintenance/cases/${caseId}/service-plan/revisions`, headers: adminHeaders(),
+      payload: { changeReason: 'Additional labor found during repair', estimatedTotalMinor: 45000, currency: 'usd', tasks: [{ taskType: 'repair', title: 'Replace brake pads', estimatedAmountMinor: 30000 }, { taskType: 'repair', title: 'Additional labor', estimatedAmountMinor: 15000 }] }
+    });
+    expect(extraRes.statusCode).toBeLessThan(300);
+    const extraApproval = await app.inject({
+      method: 'POST', url: `/api/maintenance/cases/${caseId}/approvals/${JSON.parse(extraRes.body).plan.pendingApproval.id}/decision`, headers: actorHeaders('customer', customerActorId),
+      payload: { decision: 'approved' }
+    });
+    expect(extraApproval.statusCode).toBeLessThan(300);
+
     // A second payment intent, left uncaptured, to exercise refund_not_allowed.
     const payment2Res = await app.inject({
       method: 'POST', url: '/api/admin/payments', headers: adminHeaders(),

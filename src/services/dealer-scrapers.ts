@@ -102,7 +102,7 @@ export function mapDealerComVehicle(item:any,source:DealerSource):InventoryFeedV
     images:stringList(item?.images,source.baseUrl),
     priceCents,
     dealerName:source.name,dealerUrl:absoluteUrl(source.baseUrl,item?.link),
-    raw:{condition:text(item?.type??item?.condition)??sourceCondition(source),title,cab:text(attribute(item,'cab','cabType')),stockNumber:text(item?.stockNumber)}
+    raw:{condition:text(item?.type??item?.condition)??'',title,cab:text(attribute(item,'cab','cabType')),stockNumber:text(item?.stockNumber)}
   };
 }
 
@@ -243,7 +243,7 @@ export function jsonLdVehicles(html:string,source:DealerSource):InventoryFeedVeh
       exteriorColor:text(node.color),drivetrain:text(node.driveWheelConfiguration),fuelType:text(node.fuelType),
       bodyStyle:text(node.bodyType),images:stringList(node.image,source.baseUrl),
       priceCents:dollarsToCents(offer?.price),dealerName:source.name,dealerUrl:absoluteUrl(source.baseUrl,node.url??offer?.url),
-      raw:{condition:text(node.itemCondition??offer?.itemCondition)??sourceCondition(source),title:text(node.name)}
+      raw:{condition:text(node.itemCondition??offer?.itemCondition)??'',title:text(node.name)}
     });
   };
   for(const [,json] of blocks){
@@ -291,14 +291,16 @@ export function isCrewCab(v:InventoryFeedVehicle){
 
 export function isUsed(v:InventoryFeedVehicle){
   const condition=String(v.raw?.condition??'').toLowerCase();
-  if(/\bnew\b/.test(condition)&&!/pre-?owned|used|certified/.test(condition)) return false;
-  if(/used|pre-?owned|certified|cpo/.test(condition)) return true;
-  // Unknown condition: a truck with delivery miles is almost certainly new.
-  return (v.mileage??0)>=100;
+  return /\bused\b|usedcondition|pre-?owned|certified|\bcpo\b/.test(condition);
+}
+
+function isNew(v:InventoryFeedVehicle){
+  const condition=String(v.raw?.condition??'').toLowerCase();
+  return /\bnew\b|newcondition/.test(condition)&&!isUsed(v);
 }
 
 export function isTargetTruck(v:InventoryFeedVehicle){
-  return v.mileage!==undefined&&v.mileage<=MAX_MILEAGE&&isUsed(v)&&Boolean(targetModel(v))&&isCrewCab(v);
+  return v.mileage!==undefined&&Number.isFinite(v.mileage)&&v.mileage>=0&&v.mileage<=MAX_MILEAGE&&isUsed(v)&&Boolean(targetModel(v))&&isCrewCab(v);
 }
 
 // New trucks: every F-150 and F-250 variant (XLT, Lariat, Tremor, Raptor,
@@ -306,13 +308,14 @@ export function isTargetTruck(v:InventoryFeedVehicle){
 const NEW_TARGET_MODELS=new Set(['Ford F-150','Ford F-250']);
 export function isTargetNewTruck(v:InventoryFeedVehicle){
   const model=targetModel(v);
-  return !isUsed(v)&&Boolean(model&&NEW_TARGET_MODELS.has(model))&&isCrewCab(v);
+  return isNew(v)&&Boolean(model&&NEW_TARGET_MODELS.has(model))&&isCrewCab(v);
 }
 
 // Why a scraped vehicle was not published, for the scrape log.
 export function rejectionReason(v:InventoryFeedVehicle,source:DealerSource){
   const wantNew=sourceCondition(source)==='new';
-  if(wantNew===isUsed(v)) return wantNew?'used':'new';
+  if(wantNew&&!isNew(v)) return isUsed(v)?'used':'condition_unknown';
+  if(!wantNew&&!isUsed(v)) return isNew(v)?'new':'condition_unknown';
   if(!targetModel(v)||(wantNew&&!NEW_TARGET_MODELS.has(targetModel(v)!))) return 'model';
   if(!isCrewCab(v)) return 'cab';
   if(!wantNew&&v.mileage===undefined) return 'mileage_unknown';

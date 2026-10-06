@@ -1,6 +1,8 @@
 import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
 import { getAdminActorScope } from './admin-case-scope.js';
+import { stripeSecretKey } from './stripe-config.js';
+import { stripeWebhookSecrets } from './stripe-webhook-setup.js';
 
 type PilotCheck={
   key:string;
@@ -125,10 +127,11 @@ export async function getPilotReadiness(principal:Principal,input:{organizationI
     configured:externalChannels.map((row:any)=>({channel:row.channel,provider:row.provider}))
   });
 
-  const stripeConfigured=Boolean(process.env.STRIPE_SECRET_KEY&&process.env.STRIPE_WEBHOOK_SECRET);
+  const webhookConfigured=(await stripeWebhookSecrets()).length>0;
+  const stripeConfigured=Boolean(stripeSecretKey()&&webhookConfigured);
   add(checks,'payment_provider',stripeConfigured,'Stripe API and webhook credentials must be configured for payment truth',{
-    stripeSecretConfigured:Boolean(process.env.STRIPE_SECRET_KEY),
-    stripeWebhookConfigured:Boolean(process.env.STRIPE_WEBHOOK_SECRET)
+    stripeSecretConfigured:Boolean(stripeSecretKey()),
+    stripeWebhookConfigured:webhookConfigured
   });
 
   const partnerActors=await pool.query(

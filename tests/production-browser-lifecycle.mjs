@@ -121,7 +121,12 @@ async function renderSmoke(browser) {
       await gotoStable(page, url);
       const body = (await page.locator('body').innerText()).trim();
       assert.ok(body.length > 0, `${name} portal body was empty on ${viewport.name}`);
-      assert.match(body, /ROVIQ/i, `${name} portal did not render ROVIQ branding on ${viewport.name}`);
+      // Image logos do not appear in innerText. Require a visible, loaded branded image
+      // when the portal does not display ROVIQ as text.
+      const brandedImage = await page.locator('img[alt*="ROVIQ" i]:visible').evaluateAll((images) =>
+        images.some((image) => image.complete && image.naturalWidth > 0)
+      );
+      assert.ok(/ROVIQ/i.test(body) || brandedImage, `${name} portal did not render ROVIQ branding on ${viewport.name}`);
       await screenshot(page, `${viewport.name}-${name}`);
       await page.close();
       log(`${viewport.name}: ${name} rendered at ${url}`);
@@ -197,7 +202,7 @@ async function productionLifecycle(browser) {
   log('3/10 Ops: move the case through triage, request diagnosis, and dispatch the test diagnostic provider.');
   const opsContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const ops = await opsContext.newPage();
-  await setPortalSession(ops, PORTALS.ops, 'roviq_access_token', 'roviq_principal', admin);
+  await setPortalSession(ops, PORTALS.ops, 'roviq_ops_token', 'roviq_ops_principal', admin);
   await gotoStable(ops, `${PORTALS.ops}/cases/${caseId}`);
 
   let liveCase = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken });
