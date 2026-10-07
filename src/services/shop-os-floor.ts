@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
@@ -142,6 +143,33 @@ export async function addDviEvidence(principal:Principal,inspectionId:string,inp
     await client.query('commit');
     return evidence.rows[0];
   }catch(error){await client.query('rollback');throw error;}finally{client.release();}
+}
+
+const allowedMimeByMediaType:Record<'photo'|'video'|'document',RegExp>={
+  photo:/^image\/(jpeg|png|webp|heic|heif)$/,
+  video:/^video\/(mp4|quicktime|webm)$/,
+  document:/^application\/pdf$/
+};
+
+export function assertEvidenceContentType(mediaType:'photo'|'video'|'document',contentType:string|undefined){
+  if(!contentType||!allowedMimeByMediaType[mediaType].test(contentType)) throw httpError('dvi_evidence_content_type_invalid',400);
+}
+
+export function buildEvidenceStorageKey(inspectionId:string,mediaType:'photo'|'video'|'document',contentType:string){
+  const ext=contentType.split('/')[1]?.replace('quicktime','mov')??'bin';
+  return `dvi/${inspectionId}/${mediaType}/${randomUUID()}.${ext}`;
+}
+
+export async function getDviEvidenceForDownload(principal:Principal,evidenceId:string){
+  const client=await pool.connect();
+  try{
+    const result=await client.query(`select e.*,i.repair_order_id,i.organization_id,i.location_id
+      from shop_dvi_evidence e join shop_dvi_inspections i on i.id=e.inspection_id where e.id=$1`,[evidenceId]);
+    if(!result.rowCount) throw httpError('dvi_evidence_not_found',404);
+    const row=result.rows[0];
+    await resolveScope(principal,{organizationId:row.organization_id,locationId:row.location_id},client);
+    return row;
+  }finally{client.release();}
 }
 
 export async function submitDviInspection(principal:Principal,inspectionId:string){

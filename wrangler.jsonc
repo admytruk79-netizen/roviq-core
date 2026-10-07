@@ -21,6 +21,12 @@
       "service": "roviq-local2"
     }
   ],
+  "r2_buckets": [
+    {
+      "binding": "DVI_EVIDENCE",
+      "bucket_name": "roviq-core-dvi-evidence"
+    }
+  ],
   "migrations": [
     {
       "tag": "v1",

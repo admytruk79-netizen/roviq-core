@@ -514,6 +514,33 @@ export default {
         return await handleLocalCoreRequest(request, env, url);
       }
 
+      // Object storage for DVI evidence (photos/video/PDF). Core (on Render) holds no R2
+      // credentials -- only this Worker has the R2 binding -- so Core authorizes every
+      // read/write against shop-floor scope first, then calls here with a shared secret the
+      // client never sees. Deliberately not under /api/ so it is never proxied to Render.
+      if (url.pathname.startsWith('/internal/storage/')) {
+        if (!env.EDGE_STORAGE_KEY || request.headers.get('x-edge-storage-key') !== env.EDGE_STORAGE_KEY) {
+          return json({ error: 'unauthorized' }, 401);
+        }
+        if (!env.DVI_EVIDENCE) return json({ error: 'edge_storage_not_bound' }, 503);
+        const key = decodeURIComponent(url.pathname.slice('/internal/storage/'.length));
+        if (!key) return json({ error: 'storage_key_required' }, 400);
+        if (request.method === 'PUT') {
+          await env.DVI_EVIDENCE.put(key, request.body, {
+            httpMetadata: { contentType: request.headers.get('content-type') || 'application/octet-stream' }
+          });
+          return json({ ok: true, key });
+        }
+        if (request.method === 'GET') {
+          const object = await env.DVI_EVIDENCE.get(key);
+          if (!object) return new Response('not found', { status: 404 });
+          return new Response(object.body, {
+            headers: { 'content-type': object.httpMetadata?.contentType || 'application/octet-stream', 'cache-control': 'private, max-age=300' }
+          });
+        }
+        return json({ error: 'method_not_allowed' }, 405);
+      }
+
       if (url.pathname === '/ready') {
         const sql = await sqlFor(env);
         const rows = await sql`select now() as database_time, current_database() as database_name, current_user as database_user`;
