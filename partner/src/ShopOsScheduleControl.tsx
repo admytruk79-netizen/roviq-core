@@ -88,6 +88,12 @@ export function ShopOsScheduleControl(){
   const[error,setError]=useState<string|null>(null);
   const[message,setMessage]=useState<string|null>(null);
   const[editing,setEditing]=useState<Appointment|null>(null);
+  const[creating,setCreating]=useState(false);
+  const[summary,setSummary]=useState('');
+  const[bookingStart,setBookingStart]=useState('');
+  const[bookingEnd,setBookingEnd]=useState('');
+  const[bookingResource,setBookingResource]=useState('');
+  const bookingPending=useRef(false);
   const[startValue,setStartValue]=useState('');
   const[endValue,setEndValue]=useState('');
   const[resourceValue,setResourceValue]=useState('');
@@ -125,6 +131,33 @@ export function ShopOsScheduleControl(){
   const appointments=useMemo(()=>[...(board?.appointments??[])].sort((a,b)=>new Date(a.starts_at).getTime()-new Date(b.starts_at).getTime()),[board]);
   const active=appointments.filter(a=>isAppointmentActiveNow(a,clockMs));
   const exceptions=appointments.filter(a=>['cancelled','no_show'].includes(a.appointment_status));
+
+  const bookableResources=resources.filter(r=>r.active!==false&&!['blocked','offline'].includes(r.operational_state??'available'));
+
+  async function bookAppointment(){
+    if(bookingPending.current)return;
+    const starts=new Date(bookingStart),ends=new Date(bookingEnd);
+    if(!summary.trim()||!bookableResources.some(r=>r.id===bookingResource)){
+      setError('Enter a service summary and choose an available resource.');return;
+    }
+    if(!Number.isFinite(starts.getTime())||!Number.isFinite(ends.getTime())||ends<=starts){
+      setError('Choose valid start and end times, with the end after the start.');return;
+    }
+    bookingPending.current=true;setBusy('booking');setError(null);setMessage(null);
+    try{
+      await api.post('/api/shop-os/appointments',{
+        resourceId:bookingResource,startsAt:starts.toISOString(),endsAt:ends.toISOString(),
+        customerVisibleSummary:summary.trim(),status:'held'
+      });
+      setCreating(false);setSummary('');setBookingStart('');setBookingEnd('');
+      const range=rangeFor(mode);
+      const outsideRange=starts.getTime()<new Date(range.from).getTime()||starts.getTime()>=new Date(range.to).getTime();
+      setMessage(`Appointment booked. Capacity was checked before saving.${outsideRange?' This booking is outside the displayed range.':''}`);
+      await load();
+    }catch(e){
+      setError(`Appointment was not booked. ${human(e instanceof Error?e.message:'Request failed')}. Review the time and resource, then try again.`);
+    }finally{bookingPending.current=false;setBusy(null)}
+  }
 
   function openReschedule(appointment:Appointment){
     setEditing(appointment);
@@ -188,9 +221,24 @@ export function ShopOsScheduleControl(){
       <div className="flex flex-wrap gap-2" role="group" aria-label="Schedule range">
         <button type="button" className={mode==='day'?'primary':'secondary'} aria-pressed={mode==='day'} onClick={()=>setMode('day')}>Today</button>
         <button type="button" className={mode==='week'?'primary':'secondary'} aria-pressed={mode==='week'} onClick={()=>setMode('week')}>7 days</button>
+        <button type="button" className="primary" disabled={busy==='booking'} aria-expanded={creating} onClick={()=>setCreating(value=>!value)}>{creating?'Close booking':'New local appointment'}</button>
         <button type="button" className="secondary" disabled={loading} onClick={()=>void load()}>{loading?'Refreshing…':'Refresh'}</button>
       </div>
     </div>
+
+    {creating&&<form className="panel mt-4 grid gap-3 p-5" aria-labelledby="local-booking-heading" onSubmit={event=>{event.preventDefault();void bookAppointment()}}>
+      <div><h3 id="local-booking-heading" className="font-bold">Book direct shop work</h3><p className="muted mt-1 text-sm">Schedule a visit directly with your shop. Times use your device’s local time zone.</p></div>
+      <fieldset disabled={busy==='booking'} className="grid gap-3">
+        <label className="text-sm"><span className="muted">Service summary</span><input className="input mt-1 w-full" required maxLength={1000} value={summary} onChange={e=>setSummary(e.target.value)} placeholder="What is the visit for?"/></label>
+        <div className="grid gap-3 md:grid-cols-3">
+          <label className="text-sm"><span className="muted">Start</span><input className="input mt-1 w-full" type="datetime-local" required value={bookingStart} onChange={e=>setBookingStart(e.target.value)}/></label>
+          <label className="text-sm"><span className="muted">End</span><input className="input mt-1 w-full" type="datetime-local" required value={bookingEnd} onChange={e=>setBookingEnd(e.target.value)}/></label>
+          <label className="text-sm"><span className="muted">Resource</span><select className="input mt-1 w-full" required value={bookingResource} onChange={e=>setBookingResource(e.target.value)}><option value="">Choose resource</option>{bookableResources.map(r=><option key={r.id} value={r.id}>{r.display_name} · {human(r.resource_type)}</option>)}</select></label>
+        </div>
+        {!loading&&bookableResources.length===0&&<p className="text-sm text-amber-200">No available resources. Configure or unblock a resource before booking.</p>}
+        <button className="primary justify-self-start" type="submit" disabled={loading||bookableResources.length===0}>{busy==='booking'?'Checking capacity…':'Book appointment'}</button>
+      </fieldset>
+    </form>}
 
     {message&&<div className="mt-4 rounded-xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100" role="status" aria-live="polite">{message}</div>}
     {error&&<div className="mt-4 rounded-xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-100" role="alert">{error}</div>}
