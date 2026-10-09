@@ -1,3 +1,4 @@
+import { assertLocalShopContext } from './shop-os-local-intake.js';
 import type { PoolClient } from 'pg';
 import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
@@ -86,6 +87,7 @@ async function assertCompletionReady(repairOrderId:string,db:Queryable){
 
 export async function createRepairOrder(principal:Principal,input:{
   organizationId?:string;locationId?:string;serviceCaseId?:string|null;appointmentId?:string|null;
+  shopCustomerId?:string|null;shopVehicleId?:string|null;
   customerVehicleId?:string|null;advisorActorId?:string|null;primaryTechnicianActorId?:string|null;
   customerConcern?:string|null;internalNotes?:string|null;odometer?:number|null;
 }){
@@ -93,6 +95,8 @@ export async function createRepairOrder(principal:Principal,input:{
   try{
     await client.query('begin');
     const scope=await resolveScope(principal,input,client);
+    if(input.shopCustomerId&&(input.serviceCaseId||input.customerVehicleId))throw httpError('shop_local_context_conflict',409);
+    await assertLocalShopContext(principal,input,scope,client);
     await assertCaseBelongsToShop(principal,input.serviceCaseId,scope.organizationId,client);
     await assertActorScope(input.advisorActorId,scope.organizationId,scope.locationId,client);
     await assertActorScope(input.primaryTechnicianActorId,scope.organizationId,scope.locationId,client);
@@ -102,12 +106,18 @@ export async function createRepairOrder(principal:Principal,input:{
       input={...input,customerVehicleId:caseVehicle.rows[0]?.vehicle_id??null};
     }
     if(input.appointmentId){
-      const appointment=await client.query(`select organization_id,location_id,service_case_id,appointment_status from roviq_appointments where id=$1`,[input.appointmentId]);
+      const appointment=await client.query(`select organization_id,location_id,service_case_id,appointment_status,shop_customer_id,shop_vehicle_id from roviq_appointments where id=$1`,[input.appointmentId]);
       if(!appointment.rowCount) throw httpError('appointment_not_found',404);
       const a=appointment.rows[0];
       if(a.organization_id!==scope.organizationId) throw httpError('repair_order_appointment_tenant_mismatch',409);
       if(scope.locationId&&a.location_id!==scope.locationId) throw httpError('repair_order_appointment_location_mismatch',409);
       if((a.service_case_id??null)!==(input.serviceCaseId??null)) throw httpError('repair_order_appointment_case_mismatch',409);
+      if(a.shop_customer_id){
+        if(input.shopCustomerId&&input.shopCustomerId!==a.shop_customer_id)throw httpError('repair_order_appointment_customer_mismatch',409);
+        if(input.shopVehicleId&&input.shopVehicleId!==a.shop_vehicle_id)throw httpError('repair_order_appointment_vehicle_mismatch',409);
+        input={...input,shopCustomerId:a.shop_customer_id,shopVehicleId:a.shop_vehicle_id};
+        await assertLocalShopContext(principal,input,scope,client);
+      }else if(input.shopCustomerId)throw httpError('repair_order_appointment_customer_mismatch',409);
       if(!['held','confirmed','in_progress','completed'].includes(a.appointment_status)) throw httpError('repair_order_appointment_inactive',409);
     }
     if(input.customerVehicleId){
@@ -125,12 +135,12 @@ export async function createRepairOrder(principal:Principal,input:{
     }
     const created=await client.query(`insert into shop_repair_orders(
       organization_id,location_id,service_case_id,appointment_id,customer_vehicle_id,advisor_actor_id,
-      primary_technician_actor_id,repair_order_number,customer_concern,internal_notes,odometer,created_by_actor_id
-    ) values($1,$2,$3,$4,$5,$6,$7,'RO-'||upper(substr(replace(gen_random_uuid()::text,'-',''),1,12)),$8,$9,$10,$11)
+      primary_technician_actor_id,repair_order_number,customer_concern,internal_notes,odometer,created_by_actor_id,shop_customer_id,shop_vehicle_id
+    ) values($1,$2,$3,$4,$5,$6,$7,'RO-'||upper(substr(replace(gen_random_uuid()::text,'-',''),1,12)),$8,$9,$10,$11,$12,$13)
     returning *`,[
       scope.organizationId,scope.locationId,input.serviceCaseId??null,input.appointmentId??null,input.customerVehicleId??null,
       input.advisorActorId??null,input.primaryTechnicianActorId??null,input.customerConcern??null,input.internalNotes??null,
-      input.odometer??null,principal.actorId??null
+      input.odometer??null,principal.actorId??null,input.shopCustomerId??null,input.shopVehicleId??null
     ]);
     await appendOrderEvent(client,created.rows[0].id,'SHOP_OS_REPAIR_ORDER_CREATED',principal,{status:'draft'});
     await client.query('commit');
@@ -158,7 +168,9 @@ export async function getRepairOrder(principal:Principal,repairOrderId:string){
     const order=result.rows[0];
     await resolveScope(principal,{organizationId:order.organization_id,locationId:order.location_id},client);
     const lines=await client.query(`select * from shop_repair_order_lines where repair_order_id=$1 order by sort_order,id`,[repairOrderId]);
-    return {repairOrder:order,lines:lines.rows};
+    const customer=order.shop_customer_id?(await client.query('select id,display_name,email,phone from shop_customers where id=$1 and organization_id=$2',[order.shop_customer_id,order.organization_id])).rows[0]:null;
+    const vehicle=order.shop_vehicle_id?(await client.query('select * from shop_vehicles where id=$1 and organization_id=$2',[order.shop_vehicle_id,order.organization_id])).rows[0]:null;
+    return {repairOrder:order,lines:lines.rows,customer,vehicle};
   }finally{client.release();}
 }
 

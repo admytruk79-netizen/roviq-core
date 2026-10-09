@@ -22,6 +22,7 @@ type Resource={
 
 type Board={resources:Resource[];appointments:Appointment[]};
 type ResourceResponse={resources:Resource[]};
+type LocalIntake={customers:{id:string;display_name:string}[];vehicles:{id:string;shop_customer_id:string;make:string;model:string}[]};
 type RangeMode='day'|'week';
 
 function human(value:string|null|undefined){
@@ -93,6 +94,9 @@ export function ShopOsScheduleControl(){
   const[bookingStart,setBookingStart]=useState('');
   const[bookingEnd,setBookingEnd]=useState('');
   const[bookingResource,setBookingResource]=useState('');
+  const[intake,setIntake]=useState<LocalIntake>({customers:[],vehicles:[]});
+  const[bookingCustomer,setBookingCustomer]=useState('');
+  const[bookingVehicle,setBookingVehicle]=useState('');
   const bookingPending=useRef(false);
   const[startValue,setStartValue]=useState('');
   const[endValue,setEndValue]=useState('');
@@ -106,11 +110,13 @@ export function ShopOsScheduleControl(){
     setLoading(true);
     setError(null);
     try{
-      const[b,r]=await Promise.all([
+      const[b,r,records]=await Promise.all([
         api.get<Board>(`/api/shop-os/board?from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}`),
-        api.get<ResourceResponse>('/api/shop-os/resources')
+        api.get<ResourceResponse>('/api/shop-os/resources'),
+        api.get<LocalIntake>('/api/shop-os/local-intake')
       ]);
       if(requestId!==requestSequence.current)return;
+      setIntake(records);
       setBoard(b);
       setResources(r.resources??[]);
     }catch(e){
@@ -147,7 +153,7 @@ export function ShopOsScheduleControl(){
     try{
       await api.post('/api/shop-os/appointments',{
         resourceId:bookingResource,startsAt:starts.toISOString(),endsAt:ends.toISOString(),
-        customerVisibleSummary:summary.trim(),status:'held'
+        customerVisibleSummary:summary.trim(),status:'held',shopCustomerId:bookingCustomer||null,shopVehicleId:bookingVehicle||null
       });
       setCreating(false);setSummary('');setBookingStart('');setBookingEnd('');
       const range=rangeFor(mode);
@@ -229,6 +235,7 @@ export function ShopOsScheduleControl(){
     {creating&&<form className="panel mt-4 grid gap-3 p-5" aria-labelledby="local-booking-heading" onSubmit={event=>{event.preventDefault();void bookAppointment()}}>
       <div><h3 id="local-booking-heading" className="font-bold">Book direct shop work</h3><p className="muted mt-1 text-sm">Schedule a visit directly with your shop. Times use your device’s local time zone.</p></div>
       <fieldset disabled={busy==='booking'} className="grid gap-3">
+        <div className="grid gap-3 sm:grid-cols-2"><label className="text-sm"><span className="muted">Customer (optional)</span><select className="input mt-1 w-full" value={bookingCustomer} onChange={e=>{setBookingCustomer(e.target.value);setBookingVehicle('')}}><option value="">Unlinked appointment</option>{intake.customers.map(c=><option key={c.id} value={c.id}>{c.display_name}</option>)}</select></label><label className="text-sm"><span className="muted">Vehicle (optional)</span><select className="input mt-1 w-full" disabled={!bookingCustomer} value={bookingVehicle} onChange={e=>setBookingVehicle(e.target.value)}><option value="">Choose vehicle</option>{intake.vehicles.filter(v=>v.shop_customer_id===bookingCustomer).map(v=><option key={v.id} value={v.id}>{v.make} {v.model}</option>)}</select></label></div>
         <label className="text-sm"><span className="muted">Service summary</span><input className="input mt-1 w-full" required maxLength={1000} value={summary} onChange={e=>setSummary(e.target.value)} placeholder="What is the visit for?"/></label>
         <div className="grid gap-3 md:grid-cols-3">
           <label className="text-sm"><span className="muted">Start</span><input className="input mt-1 w-full" type="datetime-local" required value={bookingStart} onChange={e=>setBookingStart(e.target.value)}/></label>
