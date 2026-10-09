@@ -1,3 +1,4 @@
+import { assertLocalShopContext } from './shop-os-local-intake.js';
 import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
 import { syncCustomerTimeOperationalConstraint } from './case-constraint-projection.js';
@@ -43,6 +44,7 @@ export async function updateShopOsAppointment(principal:Principal,appointmentId:
     if(input.action==='reschedule') nextResource=await loadManageableShopOsResource(principal,input.resourceId??existing.resource_id,client);
     else if(input.action==='confirm'||input.action==='start') nextResource=await loadManageableShopOsResource(principal,existing.resource_id,client);
 
+    await assertLocalShopContext(principal,{shopCustomerId:existing.shop_customer_id,shopVehicleId:existing.shop_vehicle_id},{organizationId:nextResource.organization_id,locationId:nextResource.location_id},client);
     const nextResourceId=input.action==='reschedule'?(input.resourceId??existing.resource_id):existing.resource_id;
     if(existing.service_case_id) await assertManageableServiceCase(principal,existing.service_case_id,nextResource.organization_id,client);
     const nextStarts=input.action==='reschedule'?(input.startsAt??existing.starts_at):existing.starts_at;
