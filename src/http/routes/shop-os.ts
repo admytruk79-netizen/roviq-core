@@ -1,3 +1,4 @@
+import { createLocalShopIntake, listLocalShopIntake } from '../../services/shop-os-local-intake.js';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireRole } from '../middleware/principal.js';
@@ -25,8 +26,22 @@ const shopResourceTypeSchema=z.enum(['bay','technician','advisor','equipment','m
 export async function shopOsRoutes(app:FastifyInstance){
   const allowed={preHandler:requireRole('admin','partner')};
 
+  app.get('/api/shop-os/local-intake',allowed,async(req)=>{
+    const query=z.object({organizationId:z.string().uuid().optional(),locationId:z.string().uuid().optional()}).parse(req.query);
+    return listLocalShopIntake(req.principal,query);
+  });
+  app.post('/api/shop-os/local-intake',allowed,async(req,reply)=>{
+    const body=z.object({
+      organizationId:z.string().uuid().optional(),locationId:z.string().uuid().optional(),
+      displayName:z.string().trim().min(1).max(200),email:z.string().trim().email().max(254).nullable().optional(),phone:z.string().trim().max(50).nullable().optional(),
+      vehicle:z.object({make:z.string().trim().min(1).max(100),model:z.string().trim().min(1).max(100),modelYear:z.number().int().min(1886).max(2200).nullable().optional(),vin:z.string().trim().toUpperCase().regex(/^[A-HJ-NPR-Z0-9]{17}$/).nullable().optional(),licensePlate:z.string().trim().max(30).nullable().optional()}).optional()
+    }).parse(req.body);
+    return reply.code(201).send(await createLocalShopIntake(req.principal,body));
+  });
+
   app.post('/api/shop-os/appointments',allowed,async(req,reply)=>{
     const body=z.object({
+      shopCustomerId:z.string().uuid().nullable().optional(),shopVehicleId:z.string().uuid().nullable().optional(),
       serviceCaseId:z.string().uuid().nullable().optional(),
       resourceId:z.string().uuid(),
       startsAt:z.string().datetime({offset:true}),
@@ -160,6 +175,7 @@ export async function shopOsRoutes(app:FastifyInstance){
   app.post('/api/shop-os/repair-orders',allowed,async(req,reply)=>{
     const body=z.object({
       organizationId:z.string().uuid().optional(),locationId:z.string().uuid().optional(),serviceCaseId:z.string().uuid().nullable().optional(),
+      shopCustomerId:z.string().uuid().nullable().optional(),shopVehicleId:z.string().uuid().nullable().optional(),
       appointmentId:z.string().uuid().nullable().optional(),customerVehicleId:z.string().uuid().nullable().optional(),
       advisorActorId:z.string().uuid().nullable().optional(),primaryTechnicianActorId:z.string().uuid().nullable().optional(),
       customerConcern:z.string().max(5000).nullable().optional(),internalNotes:z.string().max(10000).nullable().optional(),
