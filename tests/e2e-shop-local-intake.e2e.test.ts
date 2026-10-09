@@ -1,7 +1,7 @@
 import {createShopOsAppointment} from '../src/services/shop-os-appointment-create.js';
 import {afterAll,describe,expect,it} from 'vitest';
 import {pool} from '../src/db/pool.js';
-import {createLocalShopIntake,listLocalShopIntake} from '../src/services/shop-os-local-intake.js';
+import {addLocalShopVehicle,createLocalShopIntake,listLocalShopIntake} from '../src/services/shop-os-local-intake.js';
 import {createRepairOrder,getRepairOrder} from '../src/services/shop-os-repair-orders.js';
 async function shop(){
   const org=(await pool.query("insert into organizations(organization_type,display_name) values('shop','Local intake test') returning id")).rows[0];
@@ -13,6 +13,14 @@ describe('standalone shop intake',()=>{
   it('links direct work to durable customer/vehicle records and blocks foreign context',async()=>{
     const a=await shop(),b=await shop();
     const local=await createLocalShopIntake(a.principal,{displayName:'Local customer',vehicle:{make:'Ford',model:'Focus'}});
+    const added=await addLocalShopVehicle(a.principal,local.customer.id,{make:'Toyota',model:'Camry',modelYear:2024,vin:'1HGCM82633A004352',licensePlate:'SHOP-2'});
+    expect(added.vehicle.shop_customer_id).toBe(local.customer.id);
+    expect(added.vehicle.model_year).toBe(2024);
+    expect((await listLocalShopIntake(a.principal,{})).customers).toHaveLength(1);
+    await expect(addLocalShopVehicle(b.principal,local.customer.id,{make:'Ford',model:'Focus'})).rejects.toMatchObject({statusCode:404});
+    expect((await listLocalShopIntake(b.principal,{})).vehicles).toHaveLength(0);
+    const event=await pool.query("select payload from events where aggregate_id=$1 and event_type='SHOP_OS_LOCAL_VEHICLE_ADDED'",[local.customer.id]);
+    expect(event.rows[0].payload.vehicleId).toBe(added.vehicle.id);
     const other=await createLocalShopIntake(a.principal,{displayName:'Other customer',vehicle:{make:'Honda',model:'Civic'}});
     const connection=(await pool.query("insert into partner_system_connections(organization_id,mode,provider_key,display_name,connection_status) values($1,'roviq_native','roviq','Native test','active') returning id",[a.orgId])).rows[0];
     const resource=(await pool.query("insert into service_resources(organization_id,resource_type,display_name,active,source_connection_id) values($1,'bay','Intake bay',true,$2) returning id",[a.orgId,connection.id])).rows[0];

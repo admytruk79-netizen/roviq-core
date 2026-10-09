@@ -1,4 +1,4 @@
-import { createLocalShopIntake, listLocalShopIntake } from '../../services/shop-os-local-intake.js';
+import { addLocalShopVehicle, createLocalShopIntake, listLocalShopIntake } from '../../services/shop-os-local-intake.js';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireRole } from '../middleware/principal.js';
@@ -23,6 +23,8 @@ const repairOrderStatusSchema=z.enum([
 const deferredStatusSchema=z.enum(['open','reminded','booked','completed','dismissed']);
 const shopResourceTypeSchema=z.enum(['bay','technician','advisor','equipment','mobile_unit','tow_unit','valet_driver','loaner_vehicle']);
 
+const localVehicleSchema=z.object({make:z.string().trim().min(1).max(100),model:z.string().trim().min(1).max(100),modelYear:z.number().int().min(1886).max(2200).nullable().optional(),vin:z.string().trim().toUpperCase().regex(/^[A-HJ-NPR-Z0-9]{17}$/).nullable().optional(),licensePlate:z.string().trim().max(30).nullable().optional()});
+
 export async function shopOsRoutes(app:FastifyInstance){
   const allowed={preHandler:requireRole('admin','partner')};
 
@@ -34,9 +36,15 @@ export async function shopOsRoutes(app:FastifyInstance){
     const body=z.object({
       organizationId:z.string().uuid().optional(),locationId:z.string().uuid().optional(),
       displayName:z.string().trim().min(1).max(200),email:z.string().trim().email().max(254).nullable().optional(),phone:z.string().trim().max(50).nullable().optional(),
-      vehicle:z.object({make:z.string().trim().min(1).max(100),model:z.string().trim().min(1).max(100),modelYear:z.number().int().min(1886).max(2200).nullable().optional(),vin:z.string().trim().toUpperCase().regex(/^[A-HJ-NPR-Z0-9]{17}$/).nullable().optional(),licensePlate:z.string().trim().max(30).nullable().optional()}).optional()
+      vehicle:localVehicleSchema.optional()
     }).parse(req.body);
     return reply.code(201).send(await createLocalShopIntake(req.principal,body));
+  });
+
+  app.post('/api/shop-os/customers/:customerId/vehicles',allowed,async(req,reply)=>{
+    const {customerId}=z.object({customerId:z.string().uuid()}).parse(req.params);
+    const body=localVehicleSchema.extend({organizationId:z.string().uuid().optional(),locationId:z.string().uuid().optional()}).parse(req.body);
+    return reply.code(201).send(await addLocalShopVehicle(req.principal,customerId,body));
   });
 
   app.post('/api/shop-os/appointments',allowed,async(req,reply)=>{

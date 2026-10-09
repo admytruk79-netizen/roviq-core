@@ -44,3 +44,16 @@ export async function createLocalShopIntake(principal:Principal,input:ScopeInput
     return {customer,vehicle};
   }catch(error){await client.query('rollback');throw error}finally{client.release()}
 }
+
+export async function addLocalShopVehicle(principal:Principal,customerId:string,input:ScopeInput&{make:string;model:string;modelYear?:number|null;vin?:string|null;licensePlate?:string|null}){
+  const client=await pool.connect();
+  try{
+    await client.query('begin');
+    const scope=await resolveShopPrincipalScope(principal,input,client);
+    await assertLocalShopContext(principal,{shopCustomerId:customerId},scope,client);
+    const vehicle=(await client.query(`insert into shop_vehicles(organization_id,shop_customer_id,make,model,model_year,vin,license_plate) values($1,$2,$3,$4,$5,$6,$7) returning *`,[scope.organizationId,customerId,input.make.trim(),input.model.trim(),input.modelYear??null,input.vin?.trim().toUpperCase()||null,input.licensePlate?.trim()||null])).rows[0];
+    await client.query(`insert into events(aggregate_type,aggregate_id,event_type,actor_id,actor_role,payload) values('shop_customer',$1,'SHOP_OS_LOCAL_VEHICLE_ADDED',$2,$3,$4)`,[customerId,principal.actorId??null,principal.role,JSON.stringify({organizationId:scope.organizationId,vehicleId:vehicle.id})]);
+    await client.query('commit');
+    return {vehicle};
+  }catch(error){await client.query('rollback');throw error}finally{client.release()}
+}
