@@ -22,7 +22,7 @@ type Resource={
 
 type Board={resources:Resource[];appointments:Appointment[]};
 type ResourceResponse={resources:Resource[]};
-type LocalIntake={customers:{id:string;display_name:string}[];vehicles:{id:string;shop_customer_id:string;make:string;model:string}[]};
+type LocalIntake={customers:{id:string;display_name:string}[];vehicles:{id:string;shop_customer_id:string;make:string;model:string;model_year?:number|null;vin?:string|null;license_plate?:string|null}[]};
 type RangeMode='day'|'week';
 
 function human(value:string|null|undefined){
@@ -235,7 +235,7 @@ export function ShopOsScheduleControl(){
     {creating&&<form className="panel mt-4 grid gap-3 p-5" aria-labelledby="local-booking-heading" onSubmit={event=>{event.preventDefault();void bookAppointment()}}>
       <div><h3 id="local-booking-heading" className="font-bold">Book direct shop work</h3><p className="muted mt-1 text-sm">Schedule a visit directly with your shop. Times use your device’s local time zone.</p></div>
       <fieldset disabled={busy==='booking'} className="grid gap-3">
-        <div className="grid gap-3 sm:grid-cols-2"><label className="text-sm"><span className="muted">Customer (optional)</span><select className="input mt-1 w-full" value={bookingCustomer} onChange={e=>{setBookingCustomer(e.target.value);setBookingVehicle('')}}><option value="">Unlinked appointment</option>{intake.customers.map(c=><option key={c.id} value={c.id}>{c.display_name}</option>)}</select></label><label className="text-sm"><span className="muted">Vehicle (optional)</span><select className="input mt-1 w-full" disabled={!bookingCustomer} value={bookingVehicle} onChange={e=>setBookingVehicle(e.target.value)}><option value="">Choose vehicle</option>{intake.vehicles.filter(v=>v.shop_customer_id===bookingCustomer).map(v=><option key={v.id} value={v.id}>{v.make} {v.model}</option>)}</select></label></div>
+        <div className="grid gap-3 sm:grid-cols-2"><label className="text-sm"><span className="muted">Customer (optional)</span><select className="input mt-1 w-full" value={bookingCustomer} onChange={e=>{setBookingCustomer(e.target.value);setBookingVehicle('')}}><option value="">Unlinked appointment</option>{intake.customers.map(c=><option key={c.id} value={c.id}>{c.display_name}</option>)}</select></label><label className="text-sm"><span className="muted">Vehicle (optional)</span><select className="input mt-1 w-full" disabled={!bookingCustomer} value={bookingVehicle} onChange={e=>setBookingVehicle(e.target.value)}><option value="">Choose vehicle</option>{intake.vehicles.filter(v=>v.shop_customer_id===bookingCustomer).map(v=><option key={v.id} value={v.id}>{v.model_year??''} {v.make} {v.model}{v.license_plate?` · ${v.license_plate}`:v.vin?` · VIN …${v.vin.slice(-6)}`:''}</option>)}</select></label></div>
         <label className="text-sm"><span className="muted">Service summary</span><input className="input mt-1 w-full" required maxLength={1000} value={summary} onChange={e=>setSummary(e.target.value)} placeholder="What is the visit for?"/></label>
         <div className="grid gap-3 md:grid-cols-3">
           <label className="text-sm"><span className="muted">Start</span><input className="input mt-1 w-full" type="datetime-local" required value={bookingStart} onChange={e=>setBookingStart(e.target.value)}/></label>
