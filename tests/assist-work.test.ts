@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker from '../cloudflare/worker.js';
-import { arrangeJobs, intentFromKeywords, pointOf } from '../cloudflare/work-assist.js';
+import { arrangeJobs, arrangeOpenJobs, intentFromKeywords, pointOf } from '../cloudflare/work-assist.js';
 
 // The diagnostic technician's assistant: answers come only from the technician's own queue
 // (fetched from Core with their sign-in), and accepting a job is a proposal they confirm.
@@ -99,5 +99,69 @@ describe('diagnostic assistant', () => {
     const body = await (await ask('show me the nearest cases')).json() as { jobs: unknown[] };
     expect(body.jobs).toEqual([]);
     expect(calls.some((c) => c.includes('/api/diagnostics/me/queue'))).toBe(false);
+  });
+});
+
+describe('open job board through the assistant', () => {
+  const board = {
+    standing: { tier: 'gold' },
+    radiusKm: 50,
+    jobs: [
+      { jobId: 'j-basic', issueType: 'oil_change', urgency: 'normal', jobRank: 'basic', vehicle: '2010 Toyota Corolla', distanceKm: 2 },
+      { jobId: 'j-premium-far', issueType: 'check_engine_light', urgency: 'normal', jobRank: 'premium', vehicle: '2025 Porsche Cayenne', distanceKm: 12 },
+      { jobId: 'j-premium-near', issueType: 'transmission', urgency: 'urgent', jobRank: 'premium', vehicle: '2024 BMW X5', distanceKm: 4.5 }
+    ]
+  };
+  function stubBoard() {
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.endsWith('/api/auth/roles')) return new Response(JSON.stringify({ active: { role: 'diagnostic', actorId: 'tech-1' } }), { status: 200 });
+      if (url.includes('/api/diagnostics/open-jobs')) return new Response(JSON.stringify(board), { status: 200 });
+      if (url.endsWith('/api/diagnostics/me/queue')) return new Response(JSON.stringify({ queue: [] }), { status: 200 });
+      return new Response('{}', { status: 404 });
+    }));
+    return urls;
+  }
+
+  it('reads open-job requests without the AI', () => {
+    expect(intentFromKeywords('any open jobs near me?')).toMatchObject({ intent: 'open_jobs' });
+    expect(intentFromKeywords('show premium jobs')).toMatchObject({ intent: 'open_jobs', rank: 'premium' });
+    expect(intentFromKeywords('claim the closest premium job')).toMatchObject({ intent: 'claim', job: 'closest', rank: 'premium' });
+    expect(intentFromKeywords('claim job 2')).toMatchObject({ intent: 'claim', job: 2 });
+    expect(intentFromKeywords('take the closest one')).toMatchObject({ intent: 'accept' });
+  });
+
+  it('sorts open jobs best rank first, then nearest', () => {
+    expect(arrangeOpenJobs(board.jobs, null).map((j) => j.jobId)).toEqual(['j-premium-near', 'j-premium-far', 'j-basic']);
+    expect(arrangeOpenJobs(board.jobs, 'basic').map((j) => j.jobId)).toEqual(['j-basic']);
+  });
+
+  it('lists open jobs from Core with the technician’s location and rank', async () => {
+    const urls = stubBoard();
+    const body = await (await ask('any open jobs near me?')).json() as { reply: string; jobs: Array<{ jobId: string }> };
+    expect(urls.some((u) => u.includes('/api/diagnostics/open-jobs?lat=45.52&lng=-122.68'))).toBe(true);
+    expect(body.jobs.map((j) => j.jobId)).toEqual(['j-premium-near', 'j-premium-far', 'j-basic']);
+    expect(body.reply).toMatch(/3 open jobs within 50 km/);
+    expect(body.reply).toMatch(/Gold/);
+  });
+
+  it('prepares a claim the technician confirms, and never claims by itself', async () => {
+    const urls = stubBoard();
+    const body = await (await ask('claim the closest premium job')).json() as { proposal: { action: string; jobId: string } };
+    expect(body.proposal).toMatchObject({ action: 'claim_open_job', jobId: 'j-premium-near' });
+    expect(urls.some((u) => u.includes('/claim'))).toBe(false);
+    const numbered = await (await ask('claim job 2', { lastJobs: ['j-premium-near', 'j-premium-far', 'j-basic'] })).json() as { proposal: { jobId: string } };
+    expect(numbered.proposal.jobId).toBe('j-premium-far');
+    // Nothing offered directly: "take the closest one" means the closest open job.
+    const fallback = await (await ask('take the closest one')).json() as { proposal: { action: string; jobId: string } };
+    expect(fallback.proposal).toMatchObject({ action: 'claim_open_job', jobId: 'j-basic' });
+  });
+
+  it('asks for location before looking for open jobs', async () => {
+    stubBoard();
+    const body = await (await ask('any open jobs near me?', { location: null })).json() as { reply: string };
+    expect(body.reply).toMatch(/location/);
   });
 });

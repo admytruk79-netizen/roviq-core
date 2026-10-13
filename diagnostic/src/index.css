@@ -19,3 +19,11 @@
 .assistant-suggestions{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.assistant-suggestions button{min-height:40px;padding:0 12px;font-size:13px}
 .assistant-input{display:flex;gap:8px;margin-top:10px}.assistant-input input{flex:1;min-height:44px}.assistant-input button{min-height:44px;padding:0 16px}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
+.open-jobs{padding:16px;margin-top:16px}.open-jobs .section-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.open-job-list{list-style:none;margin:12px 0 0;padding:0;display:grid;gap:10px}
+.open-job{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;border:1px solid var(--roviq-line,#d9dde3);border-left-width:4px;border-radius:12px;padding:12px}
+.open-job h3{margin:6px 0 2px;font-size:16px}.open-job p{margin:0;font-size:13px;color:var(--roviq-muted)}.open-job .pill{margin-left:6px}
+.open-job.rank-premium{border-left-color:var(--roviq-copper)}.open-job.rank-standard{border-left-color:#647386}.open-job.rank-basic{border-left-color:#c9ced6}
+.rank,.tier{display:inline-block;border-radius:999px;padding:2px 10px;font-size:12px;font-weight:700;letter-spacing:.02em}
+.rank-premium.rank{background:var(--roviq-copper);color:#fff}.rank-standard.rank{background:#647386;color:#fff}.rank-basic.rank{background:#eceef2;color:#101d2c}
+.tier-gold{background:#f3d27a;color:#4a3600}.tier-silver{background:#dfe3e8;color:#2b3440}.tier-bronze{background:#e6b48f;color:#4a2508}

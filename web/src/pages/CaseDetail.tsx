@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import { formatAmount, formatDateTime, formatMinorAmount, humanizeToken } from '../lib/format';
+import { RateProviders } from '../components/RateProviders';
 import { StatusBadge } from '../components/StatusBadge';
 import type { CustomerSnapshot, CustomerVehicle, PaymentIntent, ServiceCase, ServicePlanResponse, TimelineEvent } from '../lib/types';
 import { vehicleLabel } from '../components/VehiclePicker';
@@ -467,6 +468,8 @@ export function CaseDetail() {
           ))}
         </ul>
       </section>
+
+      {id && <RateProviders caseId={id} refreshKey={caseData?.state} />}
 
       <section>
         <h2 className="text-sm font-semibold text-slate-800">Activity</h2>

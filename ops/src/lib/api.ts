@@ -97,6 +97,7 @@ export const api = {
   post: <T>(path: string, payload?: unknown) => jsonMutation<T>('POST',path,payload),
   put: <T>(path: string, payload?: unknown) => jsonMutation<T>('PUT',path,payload),
   patch: <T>(path: string, payload?: unknown) => jsonMutation<T>('PATCH',path,payload),
+  delete: <T>(path: string) => request<T>(path,{method:'DELETE',body:'{}'}),
   postWithHeaders: <T>(path:string,payload:unknown,headers:Record<string,string>) =>
     request<T>(path,{method:'POST',body:JSON.stringify(payload),headers})
 };

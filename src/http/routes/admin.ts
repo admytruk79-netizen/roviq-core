@@ -5,6 +5,7 @@ import { audit } from '../../services/audit.js';
 import { authorizeExistingOfferSelection } from '../../services/selection-authority.js';
 import { requireRole } from '../middleware/principal.js';
 import { getOperationalHealthSummary } from '../../services/operations.js';
+import { withdrawOpenJob } from '../../services/open-jobs.js';
 
 const partnerRepairActorTypes = new Set(['partner','shop','repair_shop','service_provider','dealer','dealership']);
 
@@ -94,6 +95,8 @@ export async function adminRoutes(app: FastifyInstance) {
           },allowedFromStates);
         }
       }
+      // Ops chose who gets this case: it is no longer up for grabs on the open job board.
+      if(caseId) await withdrawOpenJob(caseId,'ops_assigned',client);
       await client.query('commit');
     }catch(error){
       await client.query('rollback');
