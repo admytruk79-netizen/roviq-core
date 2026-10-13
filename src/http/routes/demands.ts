@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { pool } from '../../db/pool.js';
+import { publishOpenJob } from '../../services/open-jobs.js';
 import { audit } from '../../services/audit.js';
 import { env } from '../../config/env.js';
 import { createServiceCase, transitionCase } from '../../services/orchestration.js';
@@ -80,6 +81,12 @@ export async function demandRoutes(app: FastifyInstance) {
       // deployment (or test fixture) that hasn't deliberately turned it on. Best-effort even when
       // enabled: a routing failure (no policy configured, no eligible provider) never blocks intake.
       const routed = env.AUTO_ROUTE_NEW_DEMANDS ? await autoRouteNewDemand(req.principal,demand.id) : null;
+      // Best-effort like auto-routing: a case that cannot be listed stays with Ops.
+      if (env.OPEN_JOBS_AUTO_PUBLISH && !routed && body.location) {
+        await publishOpenJob(req.principal,serviceCase.id).catch((error) => {
+          console.warn('open_job_auto_publish_skipped',{ caseId:serviceCase.id, reason:error instanceof Error ? error.message : String(error) });
+        });
+      }
       return reply.code(201).send({ demand, case:routed?.case ?? triageCase });
     }
 

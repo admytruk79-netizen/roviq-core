@@ -20,6 +20,7 @@ import { partnerRoutes } from './routes/partners.js';
 import { adminRoutes } from './routes/admin.js';
 import { routingRoutes } from './routes/routing.js';
 import { diagnosticRoutes } from './routes/diagnostics.js';
+import { openJobRoutes } from './routes/open-jobs.js';
 import { transportRoutes } from './routes/transport.js';
 import { mobilityRoutes } from './routes/mobility.js';
 import { partsRoutes } from './routes/parts.js';
@@ -59,7 +60,7 @@ const routeModules: RouteModule[] = [
   { name: 'platform', plugins: [authRoutes, coreRoutes, meRoutes, caseKernelRoutes, capabilityRoutes, connectorGatewayRoutes, sagaRoutes, policyRoutes, coreApprovalToolRoutes, tradeCaseRoutes, coreOperationsRoutes, coreActorSurfaceRoutes] },
   { name: 'case-lifecycle', plugins: [demandRoutes, caseRoutes, caseVehicleRoutes, exceptionRoutes, servicePlanRoutes, quoteRoutes, caseAddonItemRoutes] },
   { name: 'coordination', plugins: [routingRoutes, triageRoutes, triageEvaluationRoutes, coherenceRoutes, connectedVehicleRoutes, networkOrchestrationRoutes, networkInventoryRoutes] },
-  { name: 'service-operations', plugins: [diagnosticRoutes, fieldServiceRoutes, transportRoutes, mobilityRoutes, partsRoutes] },
+  { name: 'service-operations', plugins: [diagnosticRoutes, openJobRoutes, fieldServiceRoutes, transportRoutes, mobilityRoutes, partsRoutes] },
   { name: 'shop-os', plugins: [shopOsRoutes, shopOsDeferredAppointmentChoiceRoutes, shopOsFloorRoutes] },
   { name: 'financial-and-communications', plugins: [paymentWebhookRoutes, paymentRoutes, commerceRoutes, notificationRoutes] },
   { name: 'integration-and-observability', plugins: [integrationRoutes, analyticsRoutes, localRoutes, pilotRoutes, inventoryRoutes] },

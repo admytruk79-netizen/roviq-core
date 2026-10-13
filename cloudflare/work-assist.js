@@ -7,7 +7,8 @@
 // proposal the person confirms with a tap; the assistant itself never acts.
 
 const DEFAULT_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
-const INTENTS = ['list', 'details', 'accept', 'decline', 'help'];
+const INTENTS = ['list', 'details', 'accept', 'decline', 'open_jobs', 'claim', 'help'];
+const RANKS = ['premium', 'standard', 'basic'];
 const SORTS = ['nearest', 'urgent', 'newest'];
 const FILTERS = ['all', 'offered', 'accepted'];
 const URGENCY_RANK = { emergency: 3, urgent: 2, normal: 1 };
@@ -50,18 +51,26 @@ export function intentFromKeywords(text) {
   const job = /\b(closest|nearest)\b/.test(t) ? 'closest' : number ? Number(number[1]) : null;
   const sort = /\burgent|emergenc|priority/.test(t) ? 'urgent' : /\bnew(est)?\b|latest|recent/.test(t) ? 'newest' : 'nearest';
   const filter = /\b(my accepted|accepted|in progress|current)\b/.test(t) ? 'accepted' : /\b(new|offer|offered|waiting|available)\b/.test(t) ? 'offered' : 'all';
-  if (/\b(decline|reject|pass on|skip)\b/.test(t)) return { intent: 'decline', sort, filter, job };
-  if (/\b(accept|take|grab|claim|i'?ll do)\b/.test(t)) return { intent: 'accept', sort, filter, job };
-  if (/\b(detail|tell me (more|about)|what'?s|info|show job|open)\b/.test(t) && job != null) return { intent: 'details', sort, filter, job };
-  if (/\b(help|what can you)\b/.test(t)) return { intent: 'help', sort, filter, job };
-  return { intent: 'list', sort, filter, job };
+  const rank = RANKS.find((r) => new RegExp(`\\b${r}\\b`).test(t)) ?? null;
+  // The open job board: jobs nobody holds yet, which the technician claims ("any open jobs near me?").
+  const board = rank != null || /\b(open jobs?|job board|board|up for grabs|unclaimed|jobs? near me|nearby jobs?|available jobs?)\b/.test(t);
+  if (/\b(decline|reject|pass on|skip)\b/.test(t)) return { intent: 'decline', sort, filter, job, rank };
+  if (/\bclaim\b/.test(t) || (board && /\b(accept|take|grab|i'?ll do)\b/.test(t))) return { intent: 'claim', sort, filter, job, rank };
+  if (/\b(accept|take|grab|i'?ll do)\b/.test(t)) return { intent: 'accept', sort, filter, job, rank };
+  if (/\b(detail|tell me (more|about)|what'?s|info|show job|open)\b/.test(t) && job != null && !board) return { intent: 'details', sort, filter, job, rank };
+  if (/\b(help|what can you)\b/.test(t)) return { intent: 'help', sort, filter, job, rank };
+  if (board) return { intent: 'open_jobs', sort, filter, job, rank };
+  return { intent: 'list', sort, filter, job, rank };
 }
 
 const INTENT_PROMPT = `You read requests from a ROVIQ field technician to their job assistant.
-Return ONLY a JSON object: {"intent": one of ${JSON.stringify(INTENTS)}, "sort": one of ${JSON.stringify(SORTS)}, "filter": one of ${JSON.stringify(FILTERS)}, "job": a job number from the last list, "closest", or null}.
-- "list": show jobs (e.g. "show me the nearest cases", "what's urgent?", "anything new?")
+Return ONLY a JSON object: {"intent": one of ${JSON.stringify(INTENTS)}, "sort": one of ${JSON.stringify(SORTS)}, "filter": one of ${JSON.stringify(FILTERS)}, "job": a job number from the last list, "closest", or null, "rank": one of ${JSON.stringify(RANKS)} or null}.
+- "list": show the technician's own jobs and offers (e.g. "show me my cases", "what's urgent?", "anything new?")
 - "details": about one job ("tell me about job 2")
-- "accept" / "decline": take or turn down an offered job ("take the closest one", "accept 1", "pass on job 3")
+- "accept" / "decline": take or turn down a job offered to them ("accept 1", "pass on job 3")
+- "open_jobs": the open job board, jobs nobody holds yet near them ("any open jobs near me?", "show premium jobs")
+- "claim": claim a job from the open job board ("claim the closest premium job", "claim job 2")
+"rank": premium / standard / basic when they name one, else null.
 - "help": what the assistant can do
 "filter": "offered" = new offers waiting for an answer, "accepted" = jobs already taken, otherwise "all".`;
 
@@ -86,6 +95,7 @@ export async function readIntent(env, text) {
       sort: SORTS.includes(value?.sort) ? value.sort : fallback.sort,
       filter: FILTERS.includes(value?.filter) ? value.filter : fallback.filter,
       job: job ?? fallback.job,
+      rank: RANKS.includes(value?.rank) ? value.rank : fallback.rank,
       reader: 'ai'
     };
   } catch {
@@ -111,6 +121,58 @@ async function diagnosticQueue(env, auth) {
   const res = await fetch(new URL('/api/diagnostics/me/queue', env.CORE_API_URL), { headers: { authorization: auth } });
   if (!res.ok) throw new Error('queue_unavailable');
   return (await res.json()).queue ?? [];
+}
+
+async function openJobBoard(env, auth, here) {
+  const url = new URL('/api/diagnostics/open-jobs', env.CORE_API_URL);
+  if (here) { url.searchParams.set('lat', String(here.lat)); url.searchParams.set('lng', String(here.lng)); }
+  const res = await fetch(url, { headers: { authorization: auth } });
+  if (!res.ok) throw new Error('open_jobs_unavailable');
+  return res.json();
+}
+
+const RANK_ORDER = { premium: 0, standard: 1, basic: 2 };
+const TIERS = { gold: 'Gold', silver: 'Silver', bronze: 'Bronze' };
+
+/** Open jobs as the assistant shows them: best rank first, then nearest, numbered. */
+export function arrangeOpenJobs(jobs, rank) {
+  return jobs
+    .filter((j) => !rank || j.jobRank === rank)
+    .sort((a, b) => (RANK_ORDER[a.jobRank] ?? 3) - (RANK_ORDER[b.jobRank] ?? 3) || a.distanceKm - b.distanceKm)
+    .map((j, i) => ({ ref: i + 1, jobId: j.jobId, issue: issueLabel(j.issueType), urgency: j.urgency ?? 'normal', jobRank: j.jobRank, vehicle: j.vehicle ?? null, distanceKm: j.distanceKm, status: 'open' }));
+}
+
+const describeOpen = (j) => `${j.ref}. ${j.jobRank[0].toUpperCase()}${j.jobRank.slice(1)} · ${j.issue}${j.vehicle ? ` on a ${j.vehicle}` : ''}${j.urgency !== 'normal' ? ` (${j.urgency})` : ''}, about ${j.distanceKm} km away`;
+
+async function openJobsTurn(env, principal, body, here, ask) {
+  if (!here) return { status: 200, reader: ask.reader, reply: 'Turn on location so I can find open jobs near you.', jobs: [] };
+  let board;
+  try { board = await openJobBoard(env, principal.auth, here); } catch { return { status: 502, error: 'open_jobs_unavailable' }; }
+  const jobs = arrangeOpenJobs(board.jobs ?? [], ask.rank);
+  const tier = TIERS[board.standing?.tier] ?? 'Silver';
+  const kind = ask.rank ? `${ask.rank} ` : '';
+  if (ask.intent === 'claim') {
+    // "closest" means the nearest of the jobs asked about; "job 2" the second one they last saw.
+    let target = ask.job === 'closest' || (ask.job == null && ask.rank)
+      ? [...jobs].sort((a, b) => a.distanceKm - b.distanceKm)[0] ?? null
+      : pick(jobs, ask.job, body.lastJobs);
+    if (!target && ask.job == null && jobs.length === 1) target = jobs[0];
+    if (!target) {
+      const reply = jobs.length ? `Which one? ${jobs.map(describeOpen).join('; ')}.` : `There are no open ${kind}jobs you can claim near you right now.`;
+      return { status: 200, reader: ask.reader, reply, jobs };
+    }
+    return {
+      status: 200,
+      reader: ask.reader,
+      reply: `Ready to claim: ${describeOpen(target)}. First claim wins, so confirm below.`,
+      jobs: [target],
+      proposal: { action: 'claim_open_job', jobId: target.jobId, label: `Claim ${target.issue} (${target.distanceKm} km)` }
+    };
+  }
+  const reply = jobs.length
+    ? `${jobs.length} open ${kind}job${jobs.length === 1 ? '' : 's'} within ${board.radiusKm ?? 50} km, best first: ${jobs.map(describeOpen).join('; ')}. You’re ${tier}${tier === 'Gold' ? ', so you see premium jobs first' : ''}.`
+    : `No open ${kind}jobs near you right now. You’re ${tier}${tier === 'Gold' ? '' : '; gold technicians see premium jobs a little earlier'}.`;
+  return { status: 200, reader: ask.reader, reply, jobs };
 }
 
 /** Jobs as the assistant shows them: numbered in the order given, with distance when both ends are known. */
@@ -142,8 +204,8 @@ function pick(jobs, job, lastJobs) {
   if (job === 'closest') return [...jobs].sort((a, b) => (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity))[0] ?? null;
   if (typeof job !== 'number') return null;
   // "Job 2" means the second job in the list the person last saw, if they saw one.
-  const offerId = Array.isArray(lastJobs) ? lastJobs[job - 1] : null;
-  return (offerId ? jobs.find((j) => j.offerId === offerId) : jobs[job - 1]) ?? null;
+  const id = Array.isArray(lastJobs) ? lastJobs[job - 1] : null;
+  return (id ? jobs.find((j) => (j.offerId ?? j.jobId) === id) : jobs[job - 1]) ?? null;
 }
 
 /** One request to the diagnostic technician's assistant. */
@@ -152,11 +214,12 @@ export async function diagnosticTurn(env, principal, body) {
   if (!text) return { status: 400, error: 'message_required' };
   const here = pointOf(body.location);
   const ask = await readIntent(env, text);
+  if (ask.intent === 'open_jobs' || ask.intent === 'claim') return openJobsTurn(env, principal, body, here, ask);
   let queue;
   try { queue = await diagnosticQueue(env, principal.auth); } catch { return { status: 502, error: 'queue_unavailable' }; }
 
   if (ask.intent === 'help') {
-    return { status: 200, reader: ask.reader, reply: 'Ask me things like “show me the nearest cases”, “what’s urgent?”, “tell me about job 2” or “take the closest one”. I’ll prepare it and you confirm with a tap.', jobs: [] };
+    return { status: 200, reader: ask.reader, reply: 'Ask me things like “show me my nearest cases”, “what’s urgent?”, “any open jobs near me?”, “claim the closest premium job” or “take the closest one”. I’ll prepare it and you confirm with a tap.', jobs: [] };
   }
 
   const all = arrangeJobs(queue, here, ask.sort, 'all');
@@ -167,6 +230,8 @@ export async function diagnosticTurn(env, principal, body) {
     // last saw; with nothing named and only one candidate, that one.
     let target = ask.job === 'closest' ? pick(choices, 'closest') : pick(all, ask.job, body.lastJobs);
     if (!target && ask.job == null && choices.length === 1) target = choices[0];
+    // Nothing offered to take: "take the closest one" means the closest open job instead.
+    if (!target && ask.intent === 'accept' && !offered.length && ask.job === 'closest') return openJobsTurn(env, principal, body, here, { ...ask, intent: 'claim' });
     if (!target) {
       const reply = choices.length
         ? `Which one? ${choices.map(describe).join('; ')}.`

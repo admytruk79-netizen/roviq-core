@@ -14,6 +14,10 @@ const schema = z.object({
   // operational decision, not something a fresh deploy or the existing test fixtures should
   // suddenly start doing. Turn on once a real routing policy has been configured and reviewed.
   AUTO_ROUTE_NEW_DEMANDS: z.enum(['true','false']).default('false').transform(v => v === 'true'),
+  // Puts every new maintenance case with a location straight onto the open job board, where
+  // nearby technicians claim it (better-ranked technicians see better jobs first). Off by default:
+  // Ops publishes case by case until this is deliberately turned on.
+  OPEN_JOBS_AUTO_PUBLISH: z.enum(['true','false']).default('false').transform(v => v === 'true'),
   // Same fail-closed convention as AUTO_ROUTE_NEW_DEMANDS: an active 'parts_supplier_default'
   // routing_policies row is still required, this flag only controls whether parts order creation
   // triggers ranking automatically. An admin can always trigger it on demand regardless of this
