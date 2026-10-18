@@ -16,6 +16,33 @@ beforeEach(() => {
 });
 
 describe('unified app role tabs', () => {
+  it('clears prepared tokens when a later role handoff fails', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.endsWith('/api/auth/login')) return response({
+        accessToken: jwt('customer'), principal: { role: 'customer', actorId: 'customer-1' },
+        roles: [{ role: 'customer' }, { role: 'parts' }]
+      });
+      return new Response(JSON.stringify({ error: 'role_revoked' }), { status: 403 });
+    }));
+    await expect(signIn('person@example.com', 'password123')).rejects.toThrow('role_revoked');
+    expect(localStorage.getItem('roviq_access_token')).toBeNull();
+    expect(localStorage.getItem('roviq_parts_token')).toBeNull();
+    expect(restoreSession()).toBeNull();
+  });
+
+  it('rejects a role handoff with an unexpected principal', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.endsWith('/api/auth/login')) return response({
+        accessToken: jwt('customer'), principal: { role: 'customer', actorId: 'customer-1' },
+        roles: [{ role: 'customer' }, { role: 'parts' }]
+      });
+      return response({ accessToken: jwt('admin'), principal: { role: 'admin' } });
+    }));
+    await expect(signIn('person@example.com', 'password123')).rejects.toThrow('invalid_workspace_session');
+    expect(localStorage.getItem('roviq_access_token')).toBeNull();
+    expect(localStorage.getItem('roviq_parts_token')).toBeNull();
+  });
+
   it('opens Customer and a granted Parts tab with separate scoped tokens', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       if (url.endsWith('/api/auth/login')) return response({
@@ -74,4 +101,3 @@ describe('unified app deep links', () => {
     expect(deepLink('', session)).toBeNull();
   });
 });
-

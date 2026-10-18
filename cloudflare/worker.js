@@ -2,6 +2,8 @@ import { buildPushPayload } from '@block65/webcrypto-web-push';
 import { handleLocalCoreRequest, isLocalCorePath } from './local-adapter.js';
 import { intakeTurn, signedInAs, triageInputFromDemand } from './assist.js';
 import { workTurn } from './work-assist.js';
+import { findingTurn } from './finding-assist.js';
+import { requestObdAnalysis, claimObdJob, processObdJob, processObdAnalysisBatch } from './obd-analysis.js';
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -490,14 +492,15 @@ export async function pingCore(env) {
 
 async function runScheduledOperations(env) {
   const sql = await sqlFor(env);
-  const [deadlines, notifications, webhooks, corePing] = await Promise.all([
+  const [deadlines, notifications, webhooks, corePing, obdAnalysis] = await Promise.all([
     sweepExpiredDeadlinesNative(sql, 200),
     processNotificationBatchNative(sql, env, 'cloudflare-cron', 200),
     processWebhookOutboxNative(sql, 100),
-    pingCore(env)
+    pingCore(env),
+    processObdAnalysisBatch(sql, env, 10).catch(() => [{state:'unavailable'}])
   ]);
-  console.log(JSON.stringify({ event: 'scheduled_operations_complete', deadlines: deadlines.length, notifications: notifications.length, webhooks: webhooks.length, corePing }));
-  return { deadlines, notifications, webhooks, corePing };
+  console.log(JSON.stringify({ event: 'scheduled_operations_complete', deadlines: deadlines.length, notifications: notifications.length, webhooks: webhooks.length, corePing, obdAnalysisCount: obdAnalysis.length }));
+  return { deadlines, notifications, webhooks, corePing, obdAnalysisCount: obdAnalysis.length };
 }
 
 export default {
@@ -554,6 +557,21 @@ export default {
         const body = await request.json().catch(() => ({}));
         const result = await intakeTurn(env, body?.messages);
         return result.error ? json({ error: result.error }, result.status) : json(result);
+      }
+
+      if (url.pathname === '/api/connected/obd-analysis' && request.method === 'POST') {
+        const sql = await sqlFor(env);
+        const result = await requestObdAnalysis(request, env, sql);
+        if (!result.error && result.analysisPending && ctx?.waitUntil) {
+          ctx.waitUntil((async () => {const job = await claimObdJob(sql, result.job.event_id); if (job) await processObdJob(sql, env, job);})()
+            .catch(() => console.error(JSON.stringify({event:'obd_analysis_interrupted'}))));
+        }
+        return json(result.error ? {error:result.error} : result, result.status);
+      }
+
+      if (url.pathname === '/api/assist/finding' && request.method === 'POST') {
+        const result = await findingTurn(request, env);
+        return json(result.error ? { error: result.error } : result, result.status);
       }
 
       // Work assistant for service roles (see work-assist.js). Answers come from the person's own data.

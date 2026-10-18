@@ -7,6 +7,7 @@ import { loadCaseForPrincipal } from '../../services/case-access.js';
 import { requireRole } from '../middleware/principal.js';
 import { healthEventDedupKey } from '../../services/connected-vehicle-identity.js';
 import { syncRepairAuthorizationOperationalConstraint } from '../../services/case-constraint-projection.js';
+import { assertTechnicianScanCase, assertScanConsent } from '../../services/obd-access-policy.js';
 
 async function loadOwnedVehicle(principal:any, vehicleId:string) {
   const result = await pool.query(
@@ -58,6 +59,16 @@ export async function connectedVehicleRoutes(app:FastifyInstance) {
     return {sources:result.rows};
   });
 
+  app.get('/api/connected/scanner-sources',{preHandler:requireRole('customer','admin')},async()=>{
+    const result=await pool.query(
+      `select id,provider_key from connected_sources
+        where status='active' and source_type='roviq_reader' and organization_id is null
+          and provider_key='obdlink_mxp'
+        order by created_at asc`
+    );
+    return {sources:result.rows};
+  });
+
   app.post('/api/connected/enrollments',{preHandler:requireRole('customer','admin')},async(req,reply)=>{
     const body=z.object({
       vehicleId:z.string().uuid(),
@@ -96,9 +107,11 @@ export async function connectedVehicleRoutes(app:FastifyInstance) {
          values($1,$2,$3,$4,$5)
          on conflict(source_id,external_device_id)
          do update set vehicle_id=excluded.vehicle_id,consent_id=excluded.consent_id,enrollment_status='active',updated_at=now(),metadata=excluded.metadata
+         where device_enrollments.vehicle_id=excluded.vehicle_id
          returning *`,
         [body.vehicleId,body.sourceId,consent.rows[0].id,body.externalDeviceId,JSON.stringify(body.metadata??{})]
       );
+      if(!enrollment.rowCount) throw Object.assign(new Error('scanner_already_enrolled_to_another_vehicle'),{statusCode:409});
       await client.query('commit');
       await audit(req.principal,'enroll_connected_vehicle','device_enrollment',enrollment.rows[0].id,'connected_vehicle_enrolled',{
         vehicleId:body.vehicleId,sourceId:body.sourceId
@@ -125,7 +138,52 @@ export async function connectedVehicleRoutes(app:FastifyInstance) {
     return {enrollments:result.rows};
   });
 
-  app.post('/api/connected/health-events',{preHandler:requireRole('customer','admin')},async(req,reply)=>{
+  app.post('/api/connected/enrollments/:id/revoke',{preHandler:requireRole('customer','admin')},async(req,reply)=>{
+    const {id}=z.object({id:z.string().uuid()}).parse(req.params);
+    const client=await pool.connect();
+    try{
+      await client.query('begin');
+      const existing=await client.query(
+        `select de.id,de.consent_id,cv.customer_actor_id
+           from device_enrollments de join customer_vehicles cv on cv.id=de.vehicle_id
+          where de.id=$1 for update of de`,[id]
+      );
+      if(!existing.rowCount){await client.query('rollback');return reply.code(404).send({error:'enrollment_not_found'});}
+      if(req.principal.role==='customer'&&existing.rows[0].customer_actor_id!==req.principal.actorId){
+        await client.query('rollback');return reply.code(403).send({error:'forbidden'});
+      }
+      await client.query(`update connected_vehicle_consents set status='revoked',revoked_at=coalesce(revoked_at,now()) where id=$1`,[existing.rows[0].consent_id]);
+      await client.query(`update device_enrollments set enrollment_status='revoked',updated_at=now() where id=$1`,[id]);
+      await client.query('commit');
+      return {revoked:true};
+    }catch(error){await client.query('rollback').catch(()=>{});throw error;}finally{client.release();}
+  });
+
+  app.get('/api/maintenance/cases/:caseId/obd-enrollments',{preHandler:requireRole('customer','admin','diagnostic','partner')},async(req,reply)=>{
+    const {caseId}=z.object({caseId:z.string().uuid()}).parse(req.params);
+    const record=await loadCaseForPrincipal(req.principal,caseId);
+    if(!record) return reply.code(404).send({error:'case_not_found'});
+    if(!record.vehicle_id) return reply.code(409).send({error:'case_vehicle_required'});
+    if(['diagnostic','partner'].includes(req.principal.role)) assertTechnicianScanCase(req.principal,String(record.vehicle_id),record);
+    const result=await pool.query(
+      `select de.id as enrollment_id,de.source_id,de.vehicle_id,cs.provider_key,de.external_device_id as scanner_device_id
+         from device_enrollments de
+         join connected_sources cs on cs.id=de.source_id
+         join connected_vehicle_consents cvc on cvc.id=de.consent_id
+         left join actors operator on operator.id=$3
+        where de.vehicle_id=$1 and de.enrollment_status='active'
+          and cs.status='active' and cs.source_type in ('roviq_reader','technician')
+          and cvc.customer_actor_id=$2 and cvc.status='active'
+          and (cvc.retention_until is null or cvc.retention_until>now())
+          and cvc.scopes ? 'vehicle_health'
+          and (cs.organization_id is null or cs.organization_id=operator.organization_id or $4::boolean)
+        order by de.created_at desc`,
+      [record.vehicle_id,record.customer_actor_id,req.principal.actorId??null,['customer','admin'].includes(req.principal.role)]
+    );
+    return {vehicleId:record.vehicle_id,enrollments:result.rows};
+  });
+
+  app.post('/api/connected/health-events',{preHandler:requireRole('customer','admin','diagnostic','partner')},async(req,reply)=>{
     const body=z.object({
       vehicleId:z.string().uuid(),
       sourceId:z.string().uuid(),
@@ -142,14 +200,29 @@ export async function connectedVehicleRoutes(app:FastifyInstance) {
       metadata:z.record(z.unknown()).default({})
     }).parse(req.body);
 
-    await loadOwnedVehicle(req.principal,body.vehicleId);
+    const technician=['diagnostic','partner'].includes(req.principal.role);
+    let scanCase:Awaited<ReturnType<typeof loadCaseForPrincipal>>=null;
+    if(technician){
+      if(!body.serviceCaseId||!body.enrollmentId) return reply.code(400).send({error:'scan_case_and_enrollment_required'});
+      scanCase=await loadCaseForPrincipal(req.principal,body.serviceCaseId);
+      assertTechnicianScanCase(req.principal,body.vehicleId,scanCase);
+    }else{
+      await loadOwnedVehicle(req.principal,body.vehicleId);
+    }
     const source=await pool.query(`select * from connected_sources where id=$1`,[body.sourceId]);
     if(!source.rowCount) return reply.code(404).send({error:'connected_source_not_found'});
     if(source.rows[0].status!=='active') return reply.code(409).send({error:'connected_source_not_active'});
+    if(technician){
+      if(!['roviq_reader','technician'].includes(source.rows[0].source_type)) return reply.code(403).send({error:'scan_source_not_allowed'});
+      if(source.rows[0].organization_id){
+        const actor=await pool.query('select organization_id from actors where id=$1',[req.principal.actorId]);
+        if(actor.rows[0]?.organization_id!==source.rows[0].organization_id) return reply.code(403).send({error:'scan_source_forbidden'});
+      }
+    }
 
     if(body.enrollmentId){
       const enrollment=await pool.query(
-        `select de.*,cvc.status as consent_status,cvc.retention_until,cvc.scopes
+        `select de.*,cvc.status as consent_status,cvc.retention_until,cvc.scopes,cvc.customer_actor_id
          from device_enrollments de
          join connected_vehicle_consents cvc on cvc.id=de.consent_id
          where de.id=$1 and de.vehicle_id=$2 and de.source_id=$3`,
@@ -157,6 +230,7 @@ export async function connectedVehicleRoutes(app:FastifyInstance) {
       );
       if(!enrollment.rowCount) return reply.code(409).send({error:'enrollment_mismatch'});
       const row=enrollment.rows[0];
+      if(technician&&scanCase) assertScanConsent(scanCase,row);
       if(row.enrollment_status!=='active') return reply.code(409).send({error:'enrollment_not_active'});
       if(row.consent_status!=='active') return reply.code(409).send({error:'connected_consent_not_active'});
       if(row.retention_until&&new Date(row.retention_until).getTime()<=Date.now()) return reply.code(409).send({error:'connected_consent_expired'});
@@ -196,6 +270,10 @@ export async function connectedVehicleRoutes(app:FastifyInstance) {
     const event=inserted.rows[0]??(
       await pool.query(`select * from vehicle_health_events where source_id=$1 and deduplication_key=$2`,[body.sourceId,deduplicationKey])
     ).rows[0];
+    if(event.vehicle_id!==body.vehicleId||
+      (body.serviceCaseId&&event.service_case_id!==body.serviceCaseId)){
+      return reply.code(409).send({error:'scan_event_identity_conflict'});
+    }
 
     if(inserted.rowCount&&body.enrollmentId){
       await pool.query(`update device_enrollments set last_seen_at=now(),updated_at=now() where id=$1`,[body.enrollmentId]);

@@ -14,6 +14,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  connection-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Check case coordination, access, scanner and analysis recovery
+        run: node tests/run-simulations.mjs
+
   worker-check:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -145,6 +156,8 @@ jobs:
         run: npm ci --no-audit --no-fund
       - name: Apply migrations to fresh acceptance database
         run: npm run db:migrate
+      - name: Prove scan job persistence, competing claims and consent revocation
+        run: node tests/obd-queue-postgres.mjs
       - name: Run full Core end-to-end acceptance suite
         run: npm run test:e2e
       - name: Prove database backup and restore
@@ -211,4 +224,3 @@ jobs:
           test "$PILOT_STATUS" = "active"
           test "$PILOT_EVIDENCE_SOURCE" = "ci_restart_evidence"
           npm run db:migrate
-

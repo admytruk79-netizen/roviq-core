@@ -38,6 +38,10 @@ async function call<T>(path: string, init: RequestInit & { token?: string } = {}
 }
 
 function storeTab(workspace: Workspace, session: TokenResponse) {
+  if (session.principal?.role !== workspace.role || !tokenUsable(session.accessToken)
+      || (workspace.role !== 'admin' && !session.principal.actorId)) {
+    throw new ApiError(403, 'invalid_workspace_session');
+  }
   localStorage.setItem(workspace.tokenKey, session.accessToken);
   localStorage.setItem(workspace.principalKey, JSON.stringify({ role: session.principal.role, actorId: session.principal.actorId ?? null }));
 }
@@ -61,34 +65,41 @@ export function workspaceFor(role: Role) {
  */
 export async function signIn(email: string, password: string): Promise<ServiceSession> {
   signOut();
-  const login = await call<LoginResponse>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
-  const serviceRoles = new Set<string>(WORKSPACES.map((w) => w.role));
-  const opened: Role[] = [];
+  try {
+    const login = await call<LoginResponse>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+    const serviceRoles = new Set<string>(WORKSPACES.map((w) => w.role));
+    const opened: Role[] = [];
 
-  if (login.principal.role === 'admin') {
-    storeTab(workspaceFor('admin'), login);
-    opened.push('admin');
-    for (const workspace of WORKSPACES.filter((w) => w.role !== 'admin')) {
-      const test = await call<TokenResponse>(`/api/admin/testing/${workspace.role}-session`, { method: 'POST', body: '{}', token: login.accessToken });
-      storeTab(workspace, test);
-      opened.push(workspace.role);
+    if (login.principal.role === 'admin') {
+      storeTab(workspaceFor('admin'), login);
+      opened.push('admin');
+      for (const workspace of WORKSPACES.filter((w) => w.role !== 'admin')) {
+        const test = await call<TokenResponse>(`/api/admin/testing/${workspace.role}-session`, { method: 'POST', body: '{}', token: login.accessToken });
+        storeTab(workspace, test);
+        opened.push(workspace.role);
+      }
+    } else {
+      const held = (login.roles ?? [login.principal]).map((r) => r.role).filter((r): r is Role => serviceRoles.has(r));
+      for (const role of held) {
+        const workspace = workspaceFor(role);
+        const scoped = role === login.principal.role
+          ? login
+          : await call<TokenResponse>('/api/auth/switch-role', { method: 'POST', body: JSON.stringify({ role }), token: login.accessToken });
+        storeTab(workspace, scoped);
+        opened.push(role);
+      }
     }
-  } else {
-    const held = (login.roles ?? [login.principal]).map((r) => r.role).filter((r): r is Role => serviceRoles.has(r));
-    for (const role of held) {
-      const workspace = workspaceFor(role);
-      const scoped = role === login.principal.role
-        ? login
-        : await call<TokenResponse>('/api/auth/switch-role', { method: 'POST', body: JSON.stringify({ role }), token: login.accessToken });
-      storeTab(workspace, scoped);
-      opened.push(role);
-    }
+
+    if (!opened.length) throw new ApiError(403, 'no_service_workspace');
+    const session: ServiceSession = { roles: WORKSPACES.map((w) => w.role).filter((r) => opened.includes(r)), testMode: login.principal.role === 'admin', email };
+    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    return session;
+  } catch (error) {
+    // Preparing workspaces is atomic from the user's perspective. A failed
+    // role handoff must not leave usable sessions in embedded portals.
+    signOut();
+    throw error;
   }
-
-  if (!opened.length) throw new ApiError(403, 'no_service_workspace');
-  const session: ServiceSession = { roles: WORKSPACES.map((w) => w.role).filter((r) => opened.includes(r)), testMode: login.principal.role === 'admin', email };
-  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-  return session;
 }
 
 /** The current session, if every one of its tabs still holds an unexpired token. */
