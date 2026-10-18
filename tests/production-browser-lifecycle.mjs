@@ -22,7 +22,11 @@ async function gotoStable(page, url, attempts = 3) {
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+      // HashRouter can revisit the same case without reloading its data after another actor acts.
+      const options = { waitUntil: 'domcontentloaded', timeout: 45_000 };
+      const response = page.url() === url && new URL(url).hash
+        ? await page.reload(options)
+        : await page.goto(url, options);
       if (response && response.status() >= 400) throw new Error(`GET ${url} -> ${response.status()}`);
       await page.locator('body').waitFor({ state: 'visible', timeout: 15_000 });
       await page.waitForFunction(() => Boolean(document.body?.innerText.trim()), undefined, {timeout:20000});
