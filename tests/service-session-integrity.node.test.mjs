@@ -24,7 +24,7 @@ beforeEach(() => {
 
 test('failed role handoff removes previously prepared workspace tokens', async () => {
   globalThis.fetch = async url => url.endsWith('/api/auth/login')
-    ? response({ ...session('customer'), roles: [{ role: 'customer' }, { role: 'parts' }] })
+    ? response({ ...session('diagnostic'), roles: [{ role: 'diagnostic' }, { role: 'parts' }] })
     : response({ error: 'role_revoked' }, 403);
   await assert.rejects(signIn('test@example.com', 'password'), /role_revoked/);
   assert.equal(restoreSession(), null);
@@ -33,7 +33,7 @@ test('failed role handoff removes previously prepared workspace tokens', async (
 
 test('unexpected scoped principal is rejected and all tokens are cleared', async () => {
   globalThis.fetch = async url => url.endsWith('/api/auth/login')
-    ? response({ ...session('customer'), roles: [{ role: 'customer' }, { role: 'parts' }] })
+    ? response({ ...session('diagnostic'), roles: [{ role: 'diagnostic' }, { role: 'parts' }] })
     : response(session('admin'));
   await assert.rejects(signIn('test@example.com', 'password'), /invalid_workspace_session/);
   assert.equal(values.size, 0);
@@ -47,10 +47,10 @@ test('missing actor binding is rejected', async () => {
 
 test('successful multi-role login retains separate scoped sessions', async () => {
   globalThis.fetch = async url => url.endsWith('/api/auth/login')
-    ? response({ ...session('customer'), roles: [{ role: 'customer' }, { role: 'parts' }] })
+    ? response({ ...session('diagnostic'), roles: [{ role: 'diagnostic' }, { role: 'parts' }] })
     : response(session('parts'));
-  assert.deepEqual((await signIn('test@example.com', 'password')).roles, ['customer', 'parts']);
-  assert.deepEqual(restoreSession().roles, ['customer', 'parts']);
-  assert.equal(values.get('roviq_access_token'), token('customer'));
+  assert.deepEqual((await signIn('test@example.com', 'password')).roles, ['diagnostic', 'parts']);
+  assert.deepEqual(restoreSession().roles, ['diagnostic', 'parts']);
+  assert.equal(values.get('roviq_diagnostic_token'), token('diagnostic'));
   assert.equal(values.get('roviq_parts_token'), token('parts'));
 });

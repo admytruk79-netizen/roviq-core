@@ -43,7 +43,7 @@ describe('unified app role tabs', () => {
     expect(localStorage.getItem('roviq_parts_token')).toBeNull();
   });
 
-  it('opens Customer and a granted Parts tab with separate scoped tokens', async () => {
+  it('opens only the granted Actor tab for an identity whose primary role is Customer', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       if (url.endsWith('/api/auth/login')) return response({
         accessToken: jwt('customer'), principal: { role: 'customer', actorId: 'customer-1' },
@@ -55,16 +55,16 @@ describe('unified app role tabs', () => {
       throw new Error(`unexpected request: ${url}`);
     }));
     const session = await signIn('person@example.com', 'password123');
-    expect(session.roles).toEqual(['customer', 'parts']);
-    expect(localStorage.getItem('roviq_access_token')).toBe(jwt('customer'));
+    expect(session.roles).toEqual(['parts']);
+    expect(localStorage.getItem('roviq_access_token')).toBeNull();
     expect(localStorage.getItem('roviq_parts_token')).toBe(jwt('parts'));
     expect(localStorage.getItem('roviq_ops_token')).toBeNull();
-    expect(restoreSession()?.roles).toEqual(['customer', 'parts']);
+    expect(restoreSession()?.roles).toEqual(['parts']);
     signOut();
     expect(restoreSession()).toBeNull();
   });
 
-  it('uses the admin token only for Ops and test identities for other tabs', async () => {
+  it('opens only Ops for admin without creating test identities', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       if (url.endsWith('/api/auth/login')) return response({
         accessToken: jwt('admin'), principal: { role: 'admin', actorId: null }
@@ -74,23 +74,20 @@ describe('unified app role tabs', () => {
       throw new Error(`unexpected request: ${url}`);
     }));
     const session = await signIn('ops@example.com', 'password123');
-    expect(session.roles).toEqual(['customer', 'diagnostic', 'tow', 'partner', 'parts', 'fleet', 'admin']);
-    expect(session.testMode).toBe(true);
+    expect(session.roles).toEqual(['admin']);
+    expect(session.testMode).toBe(false);
     expect(localStorage.getItem('roviq_ops_token')).toBe(jwt('admin'));
-    expect(JSON.parse(localStorage.getItem('roviq_principal') ?? '{}').role).toBe('customer');
+    expect(localStorage.getItem('roviq_principal')).toBeNull();
     expect(restoreSession()?.roles).toEqual(session.roles);
   });
 });
 
 describe('unified app deep links', () => {
-  const session = { roles: ['customer', 'tow'] as const, testMode: false, email: 'a@b.c' } as unknown as Parameters<typeof deepLink>[1];
+  const session = { roles: ['tow'] as const, testMode: false, email: 'a@b.c' } as unknown as Parameters<typeof deepLink>[1];
   const stripeReturn = '?open=customer&at=%2Fcases%2F11111111-2222-3333-4444-555555555555%3Fpayment%3Dsuccess%26payment_id%3D66666666-7777-8888-9999-000000000000%26session_id%3Dcs_test_a1B2';
 
-  it('reopens a held tab at the page Stripe returns to', () => {
-    expect(deepLink(stripeReturn, session)).toEqual({
-      role: 'customer',
-      route: '/cases/11111111-2222-3333-4444-555555555555?payment=success&payment_id=66666666-7777-8888-9999-000000000000&session_id=cs_test_a1B2'
-    });
+  it('does not reopen Customer inside Actor', () => {
+    expect(deepLink(stripeReturn, session)).toBeNull();
   });
 
   it('ignores tabs the session does not hold and anything that is not an in-app route', () => {

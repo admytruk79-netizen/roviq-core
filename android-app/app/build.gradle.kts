@@ -46,6 +46,23 @@ android {
         versionName = appVersionName
     }
 
+    buildFeatures { buildConfig = true }
+    flavorDimensions += "product"
+    productFlavors {
+        create("customer") {
+            dimension = "product"
+            applicationId = "com.roviq.app"
+            resValue("string", "app_name", "ROVIQ Customer")
+            buildConfigField("String", "APP_URL", "\"https://roviq-core-customer.pages.dev\"")
+        }
+        create("actor") {
+            dimension = "product"
+            applicationId = "com.roviq.actor"
+            resValue("string", "app_name", "ROVIQ Actor")
+            buildConfigField("String", "APP_URL", "\"https://roviq-service.pages.dev\"")
+        }
+    }
+
     val keystorePath = System.getenv("ROVIQ_ANDROID_KEYSTORE_PATH")
     val keystorePassword = System.getenv("ROVIQ_ANDROID_KEYSTORE_PASSWORD")
     val keyAlias = System.getenv("ROVIQ_ANDROID_KEY_ALIAS")
@@ -81,7 +98,7 @@ android {
 // Every Android release-producing path, including aggregate tasks such as `build`
 // and `assemble`, flows through preReleaseBuild. Wiring validation here avoids
 // guessing from raw command-line task names and also covers Gradle abbreviations.
-tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+tasks.matching { it.name.matches(Regex("pre.*ReleaseBuild")) }.configureEach {
     dependsOn(validateReleaseVersion)
 }
 

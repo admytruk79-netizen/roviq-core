@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { authenticateCustomer } from '../web/src/lib/customer-auth';
 
 describe('Customer portal authentication handoff', () => {
-  it('exchanges an admin login for a customer-scoped session before finishing login', async () => {
+  it('switches an explicitly granted customer role before finishing login', async () => {
     let token: string | null = 'stale-token';
     const calls: Array<{ path: string; payload: unknown; token: string | null }> = [];
 
@@ -11,10 +11,10 @@ describe('Customer portal authentication handoff', () => {
       if (path === '/api/auth/login') {
         return {
           accessToken: 'admin-token',
-          principal: { role: 'admin', actorId: null }
+          principal: { role: 'admin', actorId: null }, roles: [{role:'customer',actorId:'customer-actor'}]
         } as T;
       }
-      if (path === '/api/admin/testing/customer-session') {
+      if (path === '/api/auth/switch-role') {
         expect(token).toBe('admin-token');
         return {
           accessToken: 'customer-token',
@@ -31,7 +31,7 @@ describe('Customer portal authentication handoff', () => {
 
     expect(calls.map(call => call.path)).toEqual([
       '/api/auth/login',
-      '/api/admin/testing/customer-session'
+      '/api/auth/switch-role'
     ]);
     expect(calls[0].payload).toEqual({ email: 'admin@example.com', password: 'password' });
     expect(calls[0].token).toBeNull();
@@ -39,7 +39,7 @@ describe('Customer portal authentication handoff', () => {
     expect(token).toBe('customer-token');
   });
 
-  it('accepts a direct customer login without calling the admin handoff route', async () => {
+  it('accepts a direct customer login without calling the role switch route', async () => {
     let token: string | null = null;
     const post = vi.fn(async <T>(): Promise<T> => ({
       accessToken: 'customer-token',
@@ -61,7 +61,7 @@ describe('Customer portal authentication handoff', () => {
       if (path === '/api/auth/login') {
         return {
           accessToken: 'admin-token',
-          principal: { role: 'admin', actorId: null }
+          principal: { role: 'admin', actorId: null }, roles: [{role:'customer',actorId:'customer-actor'}]
         } as T;
       }
       throw new Error('handoff failed');

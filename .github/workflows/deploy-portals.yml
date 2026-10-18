@@ -1,9 +1,6 @@
-name: Deploy ROVIQ Portals Launcher
+name: Legacy manual deploy ROVIQ Portals Launcher
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths: ['portals/**','.github/workflows/deploy-portals.yml']
 permissions: { contents: read }
 concurrency: { group: roviq-portals-production, cancel-in-progress: true }
 jobs:

@@ -93,7 +93,7 @@ jobs:
         run: node scripts/check-portal-evidence.mjs ${{ matrix.directory }}
 
   service-app-build:
-    name: service-app-build
+    name: customer-and-actor-build
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -111,10 +111,10 @@ jobs:
             partner/package-lock.json
             parts-portal/package-lock.json
             fleet/package-lock.json
-      - name: Build the Service shell and every role workspace
+      - name: Build and verify exactly two app products
         env:
           VITE_API_BASE_URL: https://roviq-core.admytruk79.workers.dev
-        run: node scripts/build-service-app.mjs
+        run: node scripts/build-products.mjs
       - name: Record accessibility baseline and enforce performance budget
         run: node scripts/check-portal-evidence.mjs service
 

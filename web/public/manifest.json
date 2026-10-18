@@ -1,6 +1,6 @@
 {
-  "name": "ROVIQ",
-  "short_name": "ROVIQ",
+  "name": "ROVIQ Customer",
+  "short_name": "Customer",
   "description": "Track diagnostics, repair and towing service for your vehicle.",
   "start_url": "/",
   "scope": "/",
@@ -8,6 +8,12 @@
   "background_color": "#0b1624",
   "theme_color": "#0b1624",
   "icons": [
-    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
-  ]
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "id": "/"
 }

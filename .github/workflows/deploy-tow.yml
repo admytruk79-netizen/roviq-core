@@ -1,9 +1,6 @@
-name: Deploy ROVIQ Tow Portal
+name: Legacy manual deploy ROVIQ Tow Portal
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths: ['tow/**','.github/workflows/deploy-tow.yml']
 permissions: { contents: read }
 concurrency: { group: roviq-tow-production, cancel-in-progress: true }
 jobs:

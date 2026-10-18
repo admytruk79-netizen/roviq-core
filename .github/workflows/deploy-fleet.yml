@@ -1,13 +1,7 @@
-name: Deploy ROVIQ Fleet Portal
+name: Legacy manual deploy ROVIQ Fleet Portal
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - 'fleet/**'
-      - '.github/workflows/deploy-fleet.yml'
-
 permissions:
   contents: read
 

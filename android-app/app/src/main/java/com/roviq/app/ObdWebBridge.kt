@@ -16,7 +16,7 @@ import org.json.JSONObject
 /** Exact-origin, main-frame-only bridge; no bearer tokens or arbitrary commands. */
 class ObdWebBridge(private val activity: Activity, private val view: WebView) : AutoCloseable {
     private val scanner = ObdClassicScanner(activity)
-    private val origins = setOf("https://roviq-core-customer.pages.dev", "https://roviq-diagnostic-net.pages.dev")
+    private val origins = setOf(BuildConfig.APP_URL)
     private var generation = 0
     private var busy = false
     private var installed = false

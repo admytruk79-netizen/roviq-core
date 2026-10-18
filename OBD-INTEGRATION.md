@@ -18,7 +18,7 @@ Customer and diagnostic panels show original readings, confirmation, queued stat
 
 `node tests/run-simulations.mjs` passes 70 scenarios across coordination, connection access, sign-in, dictation, parser, native message client, ingestion handlers, analysis and outbox behavior. Most external boundaries are mocked. `node tests/obd-queue-postgres.mjs` adds real SQL regression coverage for a migrated local acceptance database and refuses remote database hosts; CI runs it before the full Core E2E suite.
 
-Full Core, Worker, frontend and Android builds must pass CI. Physical MX+ fixtures, Android permission and WebView behavior, a legitimate registered source/enrollment, configured live cloud inference, cross-company access and outage recovery still require acceptance. The current native app opens the customer page; the unified Actor shell uses frames and does not yet provide native scanner access. The standalone diagnostic origin is permitted by the bridge but is not a separate packaged Actor app.
+Full Core, Worker, frontend and Android builds must pass CI. Physical MX+ fixtures, Android permission and WebView behavior, a legitimate registered source/enrollment, configured live cloud inference, cross-company access and outage recovery still require acceptance. The Customer and Actor native flavors now open their respective product origins. Actor offers a main-frame diagnostic workspace with a return to its role chooser, enabling the native bridge without allowing subframes to invoke it. Both Android flavors still require physical scanner acceptance.
 
 ## Sources
 

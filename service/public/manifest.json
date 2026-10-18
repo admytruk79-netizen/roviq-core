@@ -1,0 +1,18 @@
+{
+  "id": "/",
+  "name": "ROVIQ Actor",
+  "short_name": "Actor",
+  "description": "Diagnostics, towing, shop, parts, mobility and operations workspaces.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b1624",
+  "theme_color": "#0b1624",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

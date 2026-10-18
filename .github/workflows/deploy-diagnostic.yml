@@ -1,9 +1,6 @@
-name: Deploy ROVIQ Diagnostic Portal
+name: Legacy manual deploy ROVIQ Diagnostic Portal
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths: ['diagnostic/**','.github/workflows/deploy-diagnostic.yml']
 permissions: { contents: read }
 concurrency: { group: roviq-diagnostic-production, cancel-in-progress: true }
 jobs:

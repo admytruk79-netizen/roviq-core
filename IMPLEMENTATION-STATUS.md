@@ -11,3 +11,7 @@ Historical isolated Neon testing on 12 October executed the queue claim/publicat
 Local dependency installation is still blocked by the environment proxy; full type checking, Kotlin compilation and deployed browser validation require CI. No production deployment or production migration is represented by these local checks.
 
 Remaining pilot gates: passing full CI; real Android/MX+ capture and disconnect fixtures; independent customer and company accounts completing a service-day journey; settlement and actual notification delivery; mileage history/reminder acceptance; two-app packaging and native access from the Actor app; capacity and completion behavior when no fulfillment plan exists. This is a proposed hardening release, not an assertion of operational readiness.
+
+## Two-app product change
+
+Customer is the standalone web product; Actor now packages only the six business/admin workspaces. Android produces distinct Customer and Actor package IDs, labels and entry URLs. Normal sign-in uses explicit grants and no longer creates test identities. See docs/two-app-products.md for product boundaries, compatibility routing and deployment details. Seventy-seven local scenarios pass after this change. Full CI must rerun for the new web products and both Android flavors before release. Packaging is implemented; physical device and distribution acceptance remain outstanding.

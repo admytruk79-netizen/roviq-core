@@ -1,9 +1,6 @@
-name: Deploy ROVIQ Parts Portal
+name: Legacy manual deploy ROVIQ Parts Portal
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths: ['parts-portal/**','.github/workflows/deploy-parts.yml']
 permissions: { contents: read }
 concurrency: { group: roviq-parts-production, cancel-in-progress: true }
 jobs:
