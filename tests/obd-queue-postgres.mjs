@@ -23,7 +23,7 @@ async function fixture(run){
     await pool.query("insert into connected_sources(id,source_type,provider_key) values($1,'roviq_reader','synthetic_ci_scanner')",[ids.source]);
     await pool.query("insert into connected_vehicle_consents(id,vehicle_id,customer_actor_id,consent_version,scopes,retention_until) values($1,$2,$3,'ci-test','[\"vehicle_health\"]',now()+interval '1 hour')",[ids.consent,ids.vehicle,ids.actor]);
     await pool.query("insert into device_enrollments(id,vehicle_id,source_id,consent_id,external_device_id) values($1,$2,$3,$4,$5)",[ids.enrollment,ids.vehicle,ids.source,ids.consent,ids.enrollment]);
-    await pool.query("insert into vehicle_health_events(id,vehicle_id,source_id,enrollment_id,service_case_id,event_type,occurred_at,dtc_codes,normalized_signals,deduplication_key) values($1,$2,$3,$4,$5,'obd_scan',now(),'{P0302}','{\"engineRpm\":700}',$1::text)",[ids.event,ids.vehicle,ids.source,ids.enrollment,ids.case]);
+    await pool.query("insert into vehicle_health_events(id,vehicle_id,source_id,enrollment_id,service_case_id,event_type,occurred_at,dtc_codes,normalized_signals,deduplication_key) values($1,$2,$3,$4,$5,'obd_scan',now(),'{P0302}','{\"engineRpm\":700}',$6)",[ids.event,ids.vehicle,ids.source,ids.enrollment,ids.case,ids.event]);
     await enqueue(ids);
     await run(ids);
   } finally {
