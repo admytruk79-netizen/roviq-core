@@ -2,11 +2,10 @@
 // role the account holds, and hands each tab its token under the storage keys that role's app
 // already reads. Each tab's app then runs exactly as it does standalone, with one role's access.
 
-export type Role = 'customer' | 'diagnostic' | 'tow' | 'partner' | 'parts' | 'fleet' | 'admin';
+export type Role = 'diagnostic' | 'tow' | 'partner' | 'parts' | 'fleet' | 'admin';
 export type Workspace = { role: Role; label: string; path: string; tokenKey: string; principalKey: string };
 
 export const WORKSPACES: readonly Workspace[] = [
-  { role: 'customer', label: 'My service', path: 'customer/', tokenKey: 'roviq_access_token', principalKey: 'roviq_principal' },
   { role: 'diagnostic', label: 'Diagnostic', path: 'diagnostic/', tokenKey: 'roviq_diagnostic_token', principalKey: 'roviq_diagnostic_principal' },
   { role: 'tow', label: 'Tow', path: 'tow/', tokenKey: 'roviq_tow_token', principalKey: 'roviq_tow_principal' },
   { role: 'partner', label: 'Shop', path: 'partner/', tokenKey: 'roviq_partner_token', principalKey: 'roviq_partner_principal' },
@@ -15,8 +14,8 @@ export const WORKSPACES: readonly Workspace[] = [
   { role: 'admin', label: 'Ops', path: 'ops/', tokenKey: 'roviq_ops_token', principalKey: 'roviq_ops_principal' }
 ];
 
-const SESSION_KEY = 'roviq_service_session';
-const LAST_TAB_KEY = 'roviq_service_last_tab';
+const SESSION_KEY = 'roviq_actor_session';
+const LAST_TAB_KEY = 'roviq_actor_last_tab';
 const API = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
 
 export type ServiceSession = { roles: Role[]; testMode: boolean; email: string };
@@ -38,6 +37,10 @@ async function call<T>(path: string, init: RequestInit & { token?: string } = {}
 }
 
 function storeTab(workspace: Workspace, session: TokenResponse) {
+  if (session.principal?.role !== workspace.role || !tokenUsable(session.accessToken)
+      || (workspace.role !== 'admin' && !session.principal.actorId)) {
+    throw new ApiError(403, 'invalid_workspace_session');
+  }
   localStorage.setItem(workspace.tokenKey, session.accessToken);
   localStorage.setItem(workspace.principalKey, JSON.stringify({ role: session.principal.role, actorId: session.principal.actorId ?? null }));
 }
@@ -55,26 +58,18 @@ export function workspaceFor(role: Role) {
 }
 
 /**
- * Sign in and prepare a token for every workspace the account can open. A customer or business account gets
- * the roles it has been granted; the ROVIQ admin uses Ops directly and clearly labelled
- * test accounts for customer and service workspaces, never real businesses' identities.
+ * Sign in to Actor using only roles explicitly granted to this identity.
+ * Customer access lives in a separate app. Admin opens Ops without creating test identities.
  */
 export async function signIn(email: string, password: string): Promise<ServiceSession> {
   signOut();
-  const login = await call<LoginResponse>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
-  const serviceRoles = new Set<string>(WORKSPACES.map((w) => w.role));
-  const opened: Role[] = [];
+  try {
+    const login = await call<LoginResponse>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+    const serviceRoles = new Set<string>(WORKSPACES.map((w) => w.role));
+    const opened: Role[] = [];
 
-  if (login.principal.role === 'admin') {
-    storeTab(workspaceFor('admin'), login);
-    opened.push('admin');
-    for (const workspace of WORKSPACES.filter((w) => w.role !== 'admin')) {
-      const test = await call<TokenResponse>(`/api/admin/testing/${workspace.role}-session`, { method: 'POST', body: '{}', token: login.accessToken });
-      storeTab(workspace, test);
-      opened.push(workspace.role);
-    }
-  } else {
-    const held = (login.roles ?? [login.principal]).map((r) => r.role).filter((r): r is Role => serviceRoles.has(r));
+    const held = [...new Set([login.principal, ...(login.roles ?? [])].map((r) => r.role))]
+      .filter((r): r is Role => serviceRoles.has(r));
     for (const role of held) {
       const workspace = workspaceFor(role);
       const scoped = role === login.principal.role
@@ -83,21 +78,26 @@ export async function signIn(email: string, password: string): Promise<ServiceSe
       storeTab(workspace, scoped);
       opened.push(role);
     }
-  }
 
-  if (!opened.length) throw new ApiError(403, 'no_service_workspace');
-  const session: ServiceSession = { roles: WORKSPACES.map((w) => w.role).filter((r) => opened.includes(r)), testMode: login.principal.role === 'admin', email };
-  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-  return session;
+    if (!opened.length) throw new ApiError(403, 'no_service_workspace');
+    const session: ServiceSession = { roles: WORKSPACES.map((w) => w.role).filter((r) => opened.includes(r)), testMode: false, email };
+    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    return session;
+  } catch (error) {
+    // Preparing workspaces is atomic from the user's perspective. A failed
+    // role handoff must not leave usable sessions in embedded portals.
+    signOut();
+    throw error;
+  }
 }
 
 /** The current session, if every one of its tabs still holds an unexpired token. */
 export function restoreSession(): ServiceSession | null {
   try {
     const raw = localStorage.getItem(SESSION_KEY);
-    if (!raw) return null;
+    if (!raw) { signOut(); return null; }
     const session = JSON.parse(raw) as ServiceSession;
-    if (!Array.isArray(session.roles) || !session.roles.length) return null;
+    if (!Array.isArray(session.roles) || !session.roles.length || session.testMode) { signOut(); return null; }
     if (!session.roles.every((role) => {
       const workspace = WORKSPACES.find((w) => w.role === role);
       if (!workspace || !tokenUsable(localStorage.getItem(workspace.tokenKey))) return false;
@@ -117,6 +117,8 @@ export function restoreSession(): ServiceSession | null {
 }
 
 export function signOut() {
+  // Remove sessions from the retired combined shell on this Actor origin.
+  for (const key of ['roviq_service_session', 'roviq_service_last_tab', 'roviq_access_token', 'roviq_principal']) localStorage.removeItem(key);
   localStorage.removeItem(SESSION_KEY);
   for (const workspace of WORKSPACES) {
     localStorage.removeItem(workspace.tokenKey);
@@ -143,7 +145,7 @@ export function rememberTab(role: Role) {
 export function signInMessage(error: unknown) {
   if (error instanceof ApiError) {
     if (error.code === 'invalid_credentials') return 'Email or password is incorrect.';
-    if (error.code === 'no_service_workspace') return 'This account has no active ROVIQ workspace.';
+    if (error.code === 'no_service_workspace') return 'Use the Customer app for vehicle service. This account has no Actor workspace.';
     if (error.status === 429) return 'Too many sign-in attempts. Wait a minute and try again.';
     return `Sign-in failed (${error.code}). Try again.`;
   }

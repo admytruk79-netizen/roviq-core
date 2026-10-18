@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { deepLink, isTabSignOut, lastTab, rememberTab, restoreSession, signIn, signInMessage, signOut, workspaceFor, type Role, type ServiceSession } from './session';
+import { legacyCustomerReturn } from './product-links';
 import roviqLogo from './brand/roviq-lockup-dark.svg';
 import roviqMark from './brand/roviq-mark-dark.svg';
 
@@ -41,16 +42,16 @@ function SignIn({ onSignedIn, notice }: { onSignedIn: (session: ServiceSession) 
         <main id="main-content" className="guest-home">
           <div className="guest-content">
             <div className="guest-copy">
-              <p className="eyebrow">One ROVIQ app</p>
-              <h1>Your service, connected.</h1>
-              <p>Book and follow a request as a customer. Coordinate diagnostics, towing, repairs, parts and mobility as a team. Your account opens the right workspace after sign in.</p>
+              <p className="eyebrow">ROVIQ Actor</p>
+              <h1>Your work, connected.</h1>
+              <p>Coordinate diagnostics, towing, repairs, parts and mobility. Sign in to open the workspaces your team has granted you.</p>
               <button type="button" className="primary" onClick={() => setView('sign-in')}>Sign in to continue <span aria-hidden="true">→</span></button>
-              <p className="guest-note">No account? Contact your ROVIQ team for access.</p>
+              <p className="guest-note">Need service for your vehicle? <a href="https://roviq-core-customer.pages.dev">Open ROVIQ Customer</a>. For team access, contact your ROVIQ administrator.</p>
             </div>
             <div className="guest-preview" aria-label="How ROVIQ works">
               <p className="preview-label">A connected service flow</p>
               <ol>
-                <li><span className="preview-number">01</span><span><strong>Request</strong><small>Start and track service</small></span></li>
+                <li><span className="preview-number">01</span><span><strong>Receive work</strong><small>See your assigned jobs</small></span></li>
                 <li><span className="preview-number">02</span><span><strong>Coordinate</strong><small>Route work to the right team</small></span></li>
                 <li><span className="preview-number">03</span><span><strong>Resolve</strong><small>Keep everyone informed</small></span></li>
               </ol>
@@ -61,7 +62,7 @@ function SignIn({ onSignedIn, notice }: { onSignedIn: (session: ServiceSession) 
       ) : (
         <main id="main-content" className="signin">
           <form className="signin-card" onSubmit={submit} aria-busy={busy}>
-            <h1>Sign in to ROVIQ</h1>
+            <h1>Sign in to ROVIQ Actor</h1>
             <p className="hint">Your account opens only the tabs you are allowed to use.</p>
             {notice && <p className="notice" role="status">{notice}</p>}
             <label>Email<input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} /></label>
@@ -118,18 +119,19 @@ function Workspaces({ session, onSignOut }: { session: ServiceSession; onSignOut
   }, [session, onSignOut]);
 
   const single = session.roles.length === 1;
+  const nativeDiagnostics = active === 'diagnostic' && Boolean((window as unknown as {ROVIQObd?: unknown}).ROVIQObd);
 
   return (
     <div className="shell">
       <header className="topbar workspace-topbar">
         <div className="topbar-row">
-          <p className="brand"><img className="roviq-logo" src={roviqLogo} alt="ROVIQ" /><img className="roviq-logo-mark" src={roviqMark} alt="ROVIQ" /><span>Core</span></p>
+          <p className="brand"><img className="roviq-logo" src={roviqLogo} alt="ROVIQ" /><img className="roviq-logo-mark" src={roviqMark} alt="ROVIQ" /><span>Actor</span></p>
           <span className="account-label" title={session.email}>{session.email}</span>
-          {session.testMode && <span className="test-badge" title="Customer and service workspaces use admin test accounts">Test mode</span>}
           <button type="button" className="signout" onClick={() => onSignOut()}>Sign out</button>
         </div>
         <div className="workspace-heading">
           <span className="workspace-kicker">Your workspaces</span>
+          {nativeDiagnostics && <a className="signout" href="/diagnostic/">Open vehicle diagnostics and scanner</a>}
           <span className="workspace-current">{workspaceFor(active).label}{!single && <span className="workspace-count"> · {session.roles.indexOf(active) + 1} of {session.roles.length}</span>}</span>
         </div>
         {!single ? (
@@ -182,6 +184,8 @@ function Workspaces({ session, onSignOut }: { session: ServiceSession; onSignOut
 export default function App() {
   const [session, setSession] = useState<ServiceSession | null>(restoreSession);
   const [notice, setNotice] = useState('');
+  const customerReturn = legacyCustomerReturn(window.location.search);
+  useEffect(() => { if (customerReturn) window.location.replace(customerReturn); }, [customerReturn]);
 
   const handleSignOut = useCallback((message?: string) => {
     signOut();
@@ -189,6 +193,7 @@ export default function App() {
     setNotice(message ?? '');
   }, []);
 
+  if (customerReturn) return <main><a href={customerReturn}>Continue in ROVIQ Customer</a></main>;
   if (!session) return <SignIn notice={notice} onSignedIn={(s) => { setNotice(''); setSession(s); }} />;
   return <Workspaces session={session} onSignOut={handleSignOut} />;
 }

@@ -1,13 +1,7 @@
-name: Deploy ROVIQ Partner Portal
+name: Legacy manual deploy ROVIQ Partner Portal
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - 'partner/**'
-      - '.github/workflows/deploy-partner.yml'
-
 permissions:
   contents: read
 

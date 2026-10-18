@@ -21,13 +21,29 @@ export async function createIntegrationClient(principal:Principal,input:{actorId
 
 export async function authenticateIntegrationKey(raw:string) {
   const prefix = raw.slice(0,12);
-  const r = await pool.query('select * from integration_clients where key_prefix=$1 and status=\'active\' limit 1',[prefix]);
+  const r = await pool.query(
+    `select ic.*,a.status as actor_status
+       from integration_clients ic
+       join actors a on a.id=ic.actor_id
+      where ic.key_prefix=$1 and ic.status='active' and ic.revoked_at is null
+      limit 1`,[prefix]
+  );
   if (!r.rowCount) return null;
+  const client = r.rows[0];
+  if (client.status !== 'active' || client.revoked_at != null || client.actor_status !== 'active') return null;
   const expected = Buffer.from(r.rows[0].key_hash,'hex');
   const actual = Buffer.from(hashKey(raw),'hex');
   if (expected.length !== actual.length || !timingSafeEqual(expected,actual)) return null;
-  await pool.query('update integration_clients set last_used_at=now() where id=$1',[r.rows[0].id]);
-  return r.rows[0];
+  // Revalidate on the usage write: revocation may have committed while the key
+  // hash was checked. The returned row also carries current integration scopes.
+  const current = await pool.query(
+    `update integration_clients ic set last_used_at=now()
+       from actors a
+      where ic.id=$1 and a.id=ic.actor_id and a.status='active'
+        and ic.status='active' and ic.revoked_at is null and ic.key_hash=$2
+      returning ic.*`,[client.id,client.key_hash]
+  );
+  return current.rows[0] ?? null;
 }
 
 export async function createWebhookSubscription(principal:Principal,input:{actorId:string;endpointUrl:string;eventTypes:string[]}) {

@@ -87,31 +87,23 @@ try {
   await page.locator('#password').fill(ADMIN_PASSWORD);
   await page.getByRole('button', { name: 'Sign in' }).click();
 
-  let navigated = true;
-  try {
-    await page.waitForURL(url => !url.pathname.endsWith('/login'), { timeout: 15_000 });
-  } catch {
-    navigated = false;
-  }
+  await page.getByRole('alert').filter({hasText:'requires a granted customer account'}).waitFor({timeout:15000});
+  const rejected = await page.evaluate(() => ({token:localStorage.getItem('roviq_access_token'),principal:localStorage.getItem('roviq_principal')}));
+  assert.equal(rejected.token,null,'Admin-only login must not persist a Customer token');
+  assert.equal(rejected.principal,null,'Admin-only login must not become Customer');
+  assert.ok(authResponses.every(r=>!r.url.includes('/testing/')),'Normal Customer login must not create testing identities');
 
-  await page.screenshot({ path: path.join(ARTIFACT_DIR, 'customer-auth-probe.png'), fullPage: true }).catch(() => {});
-  const uiError = await page.locator('p').filter({ hasText: /invalid|unable|requires|expired|error/i }).allInnerTexts().catch(() => []);
-  const stored = await page.evaluate(() => ({
-    hasToken: !!localStorage.getItem('roviq_access_token'),
-    principal: localStorage.getItem('roviq_principal')
-  }));
-  let principal = null;
-  try { principal = stored.principal ? JSON.parse(stored.principal) : null; } catch { principal = null; }
-  console.log(`[auth-probe] browser navigated=${navigated} url=${page.url()} hasToken=${stored.hasToken} principalRole=${principal?.role ?? 'none'} actorIdPresent=${!!principal?.actorId} uiError=${JSON.stringify(uiError)}`);
-  console.log(`[auth-probe] browser authResponses=${JSON.stringify(authResponses)}`);
-
-  assert.ok(navigated, `Customer UI remained on login. responses=${JSON.stringify(authResponses)} uiError=${JSON.stringify(uiError)}`);
-  assert.equal(principal?.role, 'customer', 'Customer UI did not persist customer principal');
-  assert.ok(principal?.actorId, 'Customer UI principal is missing actorId');
-  assert.ok(stored.hasToken, 'Customer UI did not persist access token');
+  // The probe explicitly obtained this scoped test fixture above. Normal app sign-in never does so.
+  await page.evaluate(session=>{
+    localStorage.setItem('roviq_access_token',session.accessToken);
+    localStorage.setItem('roviq_principal',JSON.stringify(session.principal));
+  },customerSession.body);
+  await gotoStable(page,`${CUSTOMER_URL}/`);
+  assert.ok(!new URL(page.url()).pathname.endsWith('/login'),'Explicit scoped Customer fixture could not open Customer');
+  await page.screenshot({path:path.join(ARTIFACT_DIR,'customer-auth-probe.png'),fullPage:true}).catch(()=>{});
   await context.close();
 } finally {
   await browser.close();
 }
 
-console.log('[auth-probe] Customer auth path passed: direct login, customer-session handoff, and browser redirect.');
+console.log('[auth-probe] Customer boundary passed: admin-only UI login rejected; explicitly provisioned Customer fixture opens Customer.');

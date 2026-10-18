@@ -1,18 +1,12 @@
-# ROVIQ Android release
+# ROVIQ Customer and Actor Android apps
 
-The Android customer app uses application ID `com.roviq.app`, targets Android API 35, and opens the production ROVIQ customer experience over HTTPS.
+Two product flavors share the native host code but produce separately installable apps:
 
-## Google Play bundle
+- Customer: `com.roviq.app`, label ROVIQ Customer, entry https://roviq-core-customer.pages.dev. The original package ID is retained for customer upgrades.
+- Actor: `com.roviq.actor`, label ROVIQ Actor, entry https://roviq-service.pages.dev. Granted roles open diagnostics, tow, shop, parts, mobility and Ops.
 
-`.github/workflows/android-release.yml` builds `app-release.aab`. Pull requests produce an unsigned validation bundle. Pushes to `android-release-shell` and manual release runs require the repository signing secrets below and verify the signed AAB before publishing it as a workflow artifact.
+Build with `gradle :app:bundleCustomerRelease :app:bundleActorRelease`. Configure positive `ROVIQ_VERSION_CODE` and a `ROVIQ_VERSION_NAME` for release tasks. The CI workflow supplies an increasing run number and uploads `app-customer-release.aab` and `app-actor-release.aab` separately. Pull request bundles are unsigned validation artifacts, not Play-ready uploads.
 
-Required repository secrets:
+Signed push/manual builds require ROVIQ_ANDROID_KEYSTORE_BASE64, ROVIQ_ANDROID_KEYSTORE_PASSWORD, ROVIQ_ANDROID_KEY_ALIAS and ROVIQ_ANDROID_KEY_PASSWORD repository secrets. The configured upload key may sign both distinct packages; each requires its own Play listing. Keep the upload key for future updates and use Play App Signing. Release-version validation covers both flavored and aggregate tasks.
 
-- `ROVIQ_ANDROID_KEYSTORE_BASE64`
-- `ROVIQ_ANDROID_KEYSTORE_PASSWORD`
-- `ROVIQ_ANDROID_KEY_ALIAS`
-- `ROVIQ_ANDROID_KEY_PASSWORD`
-
-Manual workflow runs accept `version_code` and `version_name`; Google Play version codes must increase for each upload.
-
-The upload key must be retained for future releases. Google Play App Signing should remain enabled so the Play signing key is managed separately from the upload key.
+Each flavor restricts native navigation, location and Bluetooth bridge origin to its configured HTTPS entry origin. Only main frames can invoke the read-only scanner bridge. Actor provides a link to main-frame diagnostics for scanner use and a return to Actor workspaces. Physical-device and real scanner acceptance remain required.

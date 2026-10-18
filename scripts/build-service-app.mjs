@@ -1,5 +1,5 @@
-// Builds the ROVIQ Service app: the tabbed shell at `/` plus each role's existing portal under its
-// own folder (`/customer/`, `/diagnostic/`, `/tow/`, `/partner/`, `/parts/`, `/fleet/`, `/ops/`), all on one origin so the
+// Builds the ROVIQ Actor app: the tabbed shell at `/` plus each role's existing portal under its
+// own folder (`/diagnostic/`, `/tow/`, `/partner/`, `/parts/`, `/fleet/`, `/ops/`), all on one origin so the
 // shell's single sign-in reaches every tab. Output: service/dist.
 import { spawnSync } from 'node:child_process';
 import { existsSync, rmSync } from 'node:fs';
@@ -11,7 +11,6 @@ const dist = path.join(root, 'service', 'dist');
 
 // Portal directory -> folder it is served from inside the Service app (see service/src/session.ts).
 const tabs = [
-  ['web', 'customer'],
   ['diagnostic', 'diagnostic'],
   ['tow', 'tow'],
   ['partner', 'partner'],
@@ -45,4 +44,6 @@ for (const [portal, folder] of tabs) {
   run(cwd, ['run', 'build', '--', `--base=/${folder}/`, `--outDir=${path.join(dist, folder)}`, '--emptyOutDir']);
 }
 
-console.log(`ROVIQ Service app built: ${path.relative(root, dist)} (shell + ${tabs.map(([, f]) => f).join(', ')})`);
+if (existsSync(path.join(dist, 'customer'))) throw new Error('Customer workspace must not be packaged in Actor');
+
+console.log(`ROVIQ Actor app built: ${path.relative(root, dist)} (shell + ${tabs.map(([, f]) => f).join(', ')})`);

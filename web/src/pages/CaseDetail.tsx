@@ -6,6 +6,7 @@ import { RateProviders } from '../components/RateProviders';
 import { StatusBadge } from '../components/StatusBadge';
 import type { CustomerSnapshot, CustomerVehicle, PaymentIntent, ServiceCase, ServicePlanResponse, TimelineEvent } from '../lib/types';
 import { vehicleLabel } from '../components/VehiclePicker';
+import { ObdScanPanel } from '../components/ObdScanPanel';
 
 type Spatial = {
   origin?: unknown;
@@ -379,6 +380,8 @@ export function CaseDetail() {
           </span>
         </section>
       )}
+
+      {id && vehicle && !['completed','cancelled'].includes(caseData.state) && <ObdScanPanel key={id} caseId={id}/>}
 
       {caseData.attributes?.description && (
         <section className="rounded-xl border border-slate-200 bg-white p-4">

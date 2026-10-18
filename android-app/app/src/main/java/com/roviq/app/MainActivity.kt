@@ -17,6 +17,7 @@ import android.webkit.WebViewClient
 
 class MainActivity : Activity() {
     private lateinit var webView: WebView
+    private lateinit var obdBridge: ObdWebBridge
     private var pendingGeoOrigin: String? = null
     private var pendingGeoCallback: GeolocationPermissions.Callback? = null
 
@@ -37,13 +38,18 @@ class MainActivity : Activity() {
             setGeolocationEnabled(true)
         }
         WebView.setWebContentsDebuggingEnabled(false)
+        obdBridge = ObdWebBridge(this, webView)
+        obdBridge.install()
 
         webView.webViewClient = object : WebViewClient() {
+            override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+                obdBridge.navigationChanged()
+            }
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val uri = request.url
                 val host = uri.host.orEmpty()
-                val trusted = host == "roviq-core-customer.pages.dev" || host.endsWith(".roviq.com")
-                if (trusted && uri.scheme == "https") return false
+                val trusted = host == Uri.parse(APP_URL).host
+                if (trusted && uri.scheme == "https" && (uri.port == -1 || uri.port == 443) && uri.userInfo == null) return false
 
                 return try {
                     startActivity(Intent(Intent.ACTION_VIEW, uri))
@@ -111,6 +117,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        obdBridge.close()
         pendingGeoCallback?.invoke(pendingGeoOrigin, false, false)
         pendingGeoOrigin = null
         pendingGeoCallback = null
@@ -123,11 +130,16 @@ class MainActivity : Activity() {
 
     private fun isLocationOriginAllowed(origin: String): Boolean {
         val uri = try { Uri.parse(origin) } catch (_: Exception) { return false }
-        return uri.scheme == "https" && uri.host == "roviq-core-customer.pages.dev"
+        return uri.scheme == "https" && uri.host == Uri.parse(APP_URL).host && (uri.port == -1 || uri.port == 443)
+    }
+
+    override fun onPause() {
+        obdBridge.navigationChanged()
+        super.onPause()
     }
 
     companion object {
-        private const val APP_URL = "https://roviq-core-customer.pages.dev"
+        private val APP_URL = BuildConfig.APP_URL
         private const val LOCATION_REQUEST = 1207
     }
 }

@@ -1,4 +1,4 @@
-name: Build ROVIQ Android App
+name: Build Customer and Actor Android Apps
 
 on:
   push:
@@ -22,6 +22,15 @@ permissions:
 
 jobs:
   android-bundle:
+    name: android-${{ matrix.product }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - product: customer
+            variant: Customer
+          - product: actor
+            variant: Actor
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -69,17 +78,17 @@ jobs:
           ROVIQ_ANDROID_KEYSTORE_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.ROVIQ_ANDROID_KEYSTORE_PASSWORD || '' }}
           ROVIQ_ANDROID_KEY_ALIAS: ${{ github.event_name != 'pull_request' && secrets.ROVIQ_ANDROID_KEY_ALIAS || '' }}
           ROVIQ_ANDROID_KEY_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.ROVIQ_ANDROID_KEY_PASSWORD || '' }}
-        run: gradle --no-daemon :app:bundleRelease
+        run: gradle --no-daemon :app:bundle${{ matrix.variant }}Release
 
       - name: Verify signed release bundle
         if: github.event_name != 'pull_request'
         working-directory: android-app
-        run: jarsigner -verify -verbose -certs app/build/outputs/bundle/release/app-release.aab
+        run: jarsigner -verify -verbose -certs app/build/outputs/bundle/${{ matrix.product }}Release/app-${{ matrix.product }}-release.aab
 
       - name: Upload AAB
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.event_name == 'pull_request' && format('roviq-unsigned-pr-aab-{0}', env.ROVIQ_VERSION_CODE) || format('roviq-play-{0}-{1}', env.ROVIQ_VERSION_NAME, env.ROVIQ_VERSION_CODE) }}
-          path: android-app/app/build/outputs/bundle/release/app-release.aab
+          name: ${{ github.event_name == 'pull_request' && format('roviq-{0}-unsigned-pr-aab-{1}', matrix.product, env.ROVIQ_VERSION_CODE) || format('roviq-{0}-play-{1}-{2}', matrix.product, env.ROVIQ_VERSION_NAME, env.ROVIQ_VERSION_CODE) }}
+          path: android-app/app/build/outputs/bundle/${{ matrix.product }}Release/app-${{ matrix.product }}-release.aab
           if-no-files-found: error
           retention-days: 30
