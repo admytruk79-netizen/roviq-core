@@ -31,18 +31,8 @@ jobs:
         include:
           - name: customer
             url: https://roviq-core-customer.pages.dev
-          - name: diagnostic
-            url: https://roviq-diagnostic-net.pages.dev
-          - name: partner
-            url: https://roviq-partner.pages.dev
-          - name: parts
-            url: https://roviq-parts-net.pages.dev
-          - name: tow
-            url: https://roviq-tow-net.pages.dev
-          - name: ops
-            url: https://roviq-ops.pages.dev
-          - name: fleet
-            url: https://roviq-fleet-net.pages.dev
+          - name: actor
+            url: https://roviq-service.pages.dev
     steps:
       - name: Fetch surface
         shell: bash

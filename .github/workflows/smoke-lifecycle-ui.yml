@@ -41,7 +41,7 @@ jobs:
             fi
             case "$asset" in
               http://*|https://*) printf '%s' "$asset" ;;
-              /*) printf '%s%s' "$url" "$asset" ;;
+              /*) printf '%s%s' "$(sed -E 's#(https?://[^/]+).*#\1#' <<< "$url")" "$asset" ;;
               *) printf '%s/%s' "$url" "$asset" ;;
             esac
           }
@@ -76,29 +76,29 @@ jobs:
             return 1
           }
 
-          wait_for_markers "https://roviq-web-dxv.pages.dev" \
+          wait_for_markers "https://roviq-core-customer.pages.dev" \
             "/approvals/" \
             "/api/maintenance/cases/"
 
-          wait_for_markers "https://roviq-diagnostic-net.pages.dev" \
+          wait_for_markers "https://roviq-service.pages.dev/diagnostic/" \
             "/findings" \
             "/api/diagnostics/me/queue"
 
-          wait_for_markers "https://roviq-tow-net.pages.dev" \
+          wait_for_markers "https://roviq-service.pages.dev/tow/" \
             "/status" \
             "/api/transport/me/dispatches"
 
-          wait_for_markers "https://roviq-partner.pages.dev" \
+          wait_for_markers "https://roviq-service.pages.dev/partner/" \
             "/service-plan/revisions" \
             "/parts-orders" \
             "/api/partners/me/offers"
 
-          wait_for_markers "https://roviq-parts-net.pages.dev" \
+          wait_for_markers "https://roviq-service.pages.dev/parts/" \
             "/reserve" \
             "/status" \
             "/api/parts/me/orders"
 
-          wait_for_markers "https://roviq-ops.pages.dev" \
+          wait_for_markers "https://roviq-service.pages.dev/ops/" \
             "/api/admin/transport" \
             "/select-provider" \
             "/api/admin/parts-orders/" \
