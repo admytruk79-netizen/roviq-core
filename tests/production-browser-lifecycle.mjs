@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
-import { EDGE_URL, PORTALS } from './production-config.mjs';
+import { EDGE_URL, PORTALS, APPS } from './production-config.mjs';
 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL?.trim() ?? '';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? '';
@@ -25,6 +25,7 @@ async function gotoStable(page, url, attempts = 3) {
       const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 });
       if (response && response.status() >= 400) throw new Error(`GET ${url} -> ${response.status()}`);
       await page.locator('body').waitFor({ state: 'visible', timeout: 15_000 });
+      await page.waitForFunction(() => Boolean(document.body?.innerText.trim()), undefined, {timeout:20000});
       return;
     } catch (error) {
       lastError = error;
@@ -109,14 +110,14 @@ async function waitForButton(pageOrLocator, name, timeout = 30_000) {
 }
 
 async function renderSmoke(browser) {
-  log('Running desktop/mobile browser render smoke across all six canonical portals.');
+  log('Running desktop/mobile browser render smoke across the two Customer and Actor products.');
   const viewports = [
     { name: 'desktop', width: 1440, height: 900 },
     { name: 'mobile', width: 390, height: 844 }
   ];
   for (const viewport of viewports) {
     const context = await browser.newContext({ viewport });
-    for (const [name, url] of Object.entries(PORTALS)) {
+    for (const [name, url] of Object.entries(APPS)) {
       const page = await context.newPage();
       await gotoStable(page, url);
       const body = (await page.locator('body').innerText()).trim();
@@ -139,17 +140,21 @@ async function productionLifecycle(browser) {
   assert.ok(ADMIN_EMAIL && ADMIN_PASSWORD, 'ADMIN_EMAIL and ADMIN_PASSWORD are required for lifecycle mode');
   const marker = `browser-acceptance-${Date.now()}`;
 
-  log('1/10 Customer: sign in through the real UI and create a tagged case.');
+  log('1/10 Customer: use an explicitly provisioned test identity and create a tagged case.');
   const customerContext = await browser.newContext({
     viewport: { width: 1280, height: 900 },
     geolocation: { latitude: 45.5152, longitude: -122.6784 },
     permissions: ['geolocation']
   });
   const customer = await customerContext.newPage();
-  await gotoStable(customer, `${PORTALS.customer}/login`);
-  await customer.locator('#email').fill(ADMIN_EMAIL);
-  await customer.locator('#password').fill(ADMIN_PASSWORD);
-  await customer.getByRole('button', { name: 'Sign in' }).click();
+  const admin = await requestJson('/api/auth/login', {
+    method:'POST', body:{email:ADMIN_EMAIL,password:ADMIN_PASSWORD}
+  });
+  assert.equal(admin.principal.role,'admin');
+  const customerFixture = await requestJson('/api/admin/testing/customer-session', {
+    method:'POST',token:admin.accessToken,body:{}
+  });
+  await setPortalSession(customer,PORTALS.customer,'roviq_access_token','roviq_principal',customerFixture);
   await waitForCustomerSession(customer);
   await gotoStable(customer, `${PORTALS.customer}/cases/new`);
   // Intake requires a vehicle: the test customer's saved vehicle is preselected on later runs;
@@ -186,10 +191,6 @@ async function productionLifecycle(browser) {
   await screenshot(customer, 'lifecycle-01-customer-created');
 
   log('2/10 Core: obtain the same real admin session and scoped test-role sessions used by each portal.');
-  const admin = await requestJson('/api/auth/login', {
-    method: 'POST',
-    body: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD }
-  });
   assert.equal(admin.principal.role, 'admin');
   const adminToken = admin.accessToken;
   const sessionFor = role => requestJson(`/api/admin/testing/${role}-session`, {
@@ -203,21 +204,21 @@ async function productionLifecycle(browser) {
   const opsContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const ops = await opsContext.newPage();
   await setPortalSession(ops, PORTALS.ops, 'roviq_ops_token', 'roviq_ops_principal', admin);
-  await gotoStable(ops, `${PORTALS.ops}/cases/${caseId}`);
+  await gotoStable(ops, `${PORTALS.ops}#/cases/${caseId}`);
 
   let liveCase = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken });
   if (liveCase.case.state === 'intake') {
     const beginTriage = await waitForButton(ops, 'Begin triage');
     await beginTriage.click();
     await waitForCaseState(caseId, adminToken, 'triage');
-    await gotoStable(ops, `${PORTALS.ops}/cases/${caseId}`);
+    await gotoStable(ops, `${PORTALS.ops}#/cases/${caseId}`);
     liveCase = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken });
   }
   if (liveCase.case.state === 'triage') {
     const requestDiagnosis = await waitForButton(ops, 'Request diagnosis');
     await requestDiagnosis.click();
     await waitForCaseState(caseId, adminToken, 'diagnostic_pending');
-    await gotoStable(ops, `${PORTALS.ops}/cases/${caseId}`);
+    await gotoStable(ops, `${PORTALS.ops}#/cases/${caseId}`);
   }
 
   liveCase = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken });
@@ -256,7 +257,7 @@ async function productionLifecycle(browser) {
   }
   const findingForm = diagnostic.locator('form.finding-form');
   await findingForm.waitFor({ state: 'visible', timeout: 30_000 });
-  await findingForm.locator('textarea').fill('Browser acceptance: verified non-drivable vehicle requiring tow to repair provider.');
+  await findingForm.getByLabel('What did you verify?').fill('Browser acceptance: verified non-drivable vehicle requiring tow to repair provider.');
   await findingForm.getByLabel('Vehicle condition').selectOption('non_drivable');
   await findingForm.getByLabel('Recommended next step').selectOption('route_to_tow');
   await findingForm.getByRole('button', { name: 'Save finding & hand off' }).click();
@@ -264,7 +265,7 @@ async function productionLifecycle(browser) {
   await screenshot(diagnostic, 'lifecycle-03-diagnostic-to-tow');
 
   log('5/10 Ops + Tow: assign Tow / Valet and drive the vehicle through pickup into transit.');
-  await gotoStable(ops, `${PORTALS.ops}/cases/${caseId}`);
+  await gotoStable(ops, `${PORTALS.ops}#/cases/${caseId}`);
   const towSection = ops.locator('section').filter({ hasText: 'Tow handoff' }).first();
   const towSelect = towSection.locator('select');
   await towSelect.waitFor({ state: 'visible', timeout: 30_000 });
@@ -280,7 +281,7 @@ async function productionLifecycle(browser) {
   const towContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const tow = await towContext.newPage();
   await setPortalSession(tow, PORTALS.tow, 'roviq_tow_token', 'roviq_tow_principal', towSession);
-  await gotoStable(tow, `${PORTALS.tow}/dispatches/${dispatch.id}`);
+  await gotoStable(tow, PORTALS.tow);
   for (const [buttonName, expected] of [
     ['Accept', 'accepted'],
     ['Mark en route', 'en_route'],
@@ -295,14 +296,14 @@ async function productionLifecycle(browser) {
   await screenshot(tow, 'lifecycle-04-tow-in-transit');
 
   log('6/10 Ops + Tow + Partner: select the repair destination, deliver there, then accept the repair handoff.');
-  await gotoStable(ops, `${PORTALS.ops}/cases/${caseId}`);
+  await gotoStable(ops, `${PORTALS.ops}#/cases/${caseId}`);
   const liveInTransit = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken });
   if (liveInTransit.case.state !== 'provider_selection') {
     assert.equal(liveInTransit.case.state, 'tow_in_progress', `Expected tow_in_progress before repair routing, got ${liveInTransit.case.state}`);
     const findRepair = await waitForButton(ops, 'Find repair provider');
     await findRepair.click();
     await waitForCaseState(caseId, adminToken, 'provider_selection');
-    await gotoStable(ops, `${PORTALS.ops}/cases/${caseId}`);
+    await gotoStable(ops, `${PORTALS.ops}#/cases/${caseId}`);
   }
 
   const providerSelectionCase = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken });
@@ -449,7 +450,7 @@ async function productionLifecycle(browser) {
   await screenshot(partner, 'lifecycle-09-repair-complete');
 
   log('9/10 Payment: advance the case to payment when Core exposes that transition, then exercise the payment handoff.');
-  await gotoStable(ops, `${PORTALS.ops}/cases/${caseId}`);
+  await gotoStable(ops, `${PORTALS.ops}#/cases/${caseId}`);
   let prePaymentCase = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken });
   if (prePaymentCase.case.state === 'repair_in_progress') {
     const transitions = await requestJson(`/api/maintenance/cases/${caseId}/transitions`, { token: adminToken });
@@ -457,7 +458,7 @@ async function productionLifecycle(browser) {
       const paymentAction = await waitForButton(ops, 'Request payment');
       await paymentAction.click();
       await waitForCaseState(caseId, adminToken, 'payment_pending');
-      await gotoStable(ops, `${PORTALS.ops}/cases/${caseId}`);
+      await gotoStable(ops, `${PORTALS.ops}#/cases/${caseId}`);
       prePaymentCase = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken });
     }
   }

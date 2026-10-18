@@ -1,12 +1,15 @@
 export const EDGE_URL = process.env.EDGE_URL ?? 'https://roviq-core.admytruk79.workers.dev';
-
-export const PORTALS = Object.freeze({
+export const ACTOR_URL = (process.env.ACTOR_URL ?? 'https://roviq-service.pages.dev').replace(/\/$/, '');
+export const APPS = Object.freeze({
   customer: process.env.CUSTOMER_URL ?? 'https://roviq-core-customer.pages.dev',
-  diagnostic: process.env.DIAGNOSTIC_URL ?? 'https://roviq-diagnostic-net.pages.dev',
-  partner: process.env.PARTNER_URL ?? 'https://roviq-partner.pages.dev',
-  parts: process.env.PARTS_URL ?? 'https://roviq-parts-net.pages.dev',
-  tow: process.env.TOW_URL ?? 'https://roviq-tow-net.pages.dev',
-  ops: process.env.OPS_URL ?? 'https://roviq-ops.pages.dev'
+  actor: ACTOR_URL
 });
-
-export const LAUNCHER_URL = process.env.LAUNCHER_URL ?? 'https://roviq-portals.pages.dev';
+export const PORTALS = Object.freeze({
+  customer: APPS.customer,
+  diagnostic: process.env.DIAGNOSTIC_URL ?? `${ACTOR_URL}/diagnostic/`,
+  partner: process.env.PARTNER_URL ?? `${ACTOR_URL}/partner/`,
+  parts: process.env.PARTS_URL ?? `${ACTOR_URL}/parts/`,
+  tow: process.env.TOW_URL ?? `${ACTOR_URL}/tow/`,
+  ops: process.env.OPS_URL ?? `${ACTOR_URL}/ops/`
+});
+export const LAUNCHER_URL = ACTOR_URL;
