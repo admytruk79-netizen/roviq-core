@@ -1,0 +1,34 @@
+name: Inspect public dealer feed responses
+on:
+  push:
+    branches: [codex/inventory-feed-diagnostics]
+permissions: {contents: read}
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 22}
+      - name: Inspect listings without publishing to Core
+        run: |
+          node --input-type=module <<'JS'
+          import {FEEDS,fetchFeed} from './scripts/dealer-feeds.mjs';
+          for(const feed of FEEDS.filter(f=>f.condition==='used'&&!f.platform)){
+            let reported=false;
+            const fetcher=async(url,init)=>{
+              const response=await fetch(url,init);
+              if(String(url).endsWith('/search')&&response.ok&&!reported){
+                const body=await response.clone().json();
+                const rows=body?.data?.listings??body?.listings??[];
+                const trucks=rows.filter(l=>/F-?150|F-?250|Silverado|Sierra/i.test(String(l.model??'')));
+                console.log(JSON.stringify({feed:feed.sourceKey,requestedFields:JSON.parse(init.body).requestedFields,rowCount:rows.length,truckCount:trucks.length,types:[...new Set(rows.map(l=>l.type))],samples:(trucks.length?trucks:rows).slice(0,4).map(l=>({keys:Object.keys(l),type:l.type,model:l.model,make:l.make,trim:l.trim,mileage:l.mileage,styles:l.styles,pricing:l.pricing,mechanical:l.mechanical,hasVin:Boolean(l.vin)}))}));
+                reported=true;
+              }
+              return response;
+            };
+            try{const r=await fetchFeed(feed,fetcher);console.log(JSON.stringify({feed:feed.sourceKey,scanned:r.scanned,accepted:r.vehicles.length}));}
+            catch(e){console.error(JSON.stringify({feed:feed.sourceKey,error:e.message}));process.exitCode=1;}
+          }
+          JS
