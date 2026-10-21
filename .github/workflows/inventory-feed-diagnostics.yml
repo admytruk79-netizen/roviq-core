@@ -32,3 +32,15 @@ jobs:
             catch(e){console.error(JSON.stringify({feed:feed.sourceKey,error:e.message}));process.exitCode=1;}
           }
           JS
+      - name: Check explicit cab-field projections without publishing
+        run: |
+          node --input-type=module <<'JS'
+          import {FEEDS,loadSearchConfig} from './scripts/dealer-feeds.mjs';
+          const feed=FEEDS[0],cfg=await loadSearchConfig(feed);
+          const common=['vin','stock','year','make','model','trim','type','vdp_url','mileage','pricing','media'];
+          for(const fields of [['styles','mechanical','extra_fields'],['styles.style_name','styles.style_description','styles.exterior_color','mechanical.drivetrain','mechanical.fuel_type','mechanical.engine','extra_fields.title']]){
+            const res=await fetch(cfg.search+'/search',{method:'POST',headers:{'content-type':'application/json','x-api-key':cfg.apiKey},body:JSON.stringify({page:1,perPage:100,filters:{status:cfg.statuses,type_slug:feed.typeSlugs},requestedFields:[...common,...fields]})});
+            const body=await res.json();const rows=body?.data?.listings??body?.listings??[];
+            console.log(JSON.stringify({projection:fields,status:res.status,truckSamples:rows.filter(l=>/F-?150|F-?250|Silverado|Sierra/i.test(String(l.model??''))).slice(0,3).map(l=>({keys:Object.keys(l),type:l.type,model:l.model,mileage:l.mileage,styles:l.styles,mechanical:l.mechanical,extra_fields:l.extra_fields}))}));
+          }
+          JS
