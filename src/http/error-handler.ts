@@ -24,6 +24,10 @@ export function registerErrorHandler(app: FastifyInstance) {
       return reply.code(409).send({ error:err.message });
     }
 
+    if (err instanceof Error && ['service_credential_ineligible', 'offer_required_service_immutable'].includes(err.message)) {
+      return reply.code(409).send({ error: err.message });
+    }
+
     const statusCode = (err as { statusCode?: number }).statusCode;
     if (typeof statusCode === 'number' && statusCode >= 400 && statusCode < 500) {
       return reply.code(statusCode).send({ error:err instanceof Error ? err.message : 'request_error' });

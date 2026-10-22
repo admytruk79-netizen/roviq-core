@@ -236,6 +236,11 @@ async function productionLifecycle(browser) {
   const businessRegistry = await requestJson('/api/admin/business-onboarding', { token: adminToken });
   assert.ok(Array.isArray(businessRegistry.businesses), 'Business onboarding registry is not available to Ops');
   await screenshot(ops, 'lifecycle-01b-business-onboarding');
+  await gotoStable(ops, `${PORTALS.ops}#/eligibility`);
+  await ops.getByRole('heading', { name: 'Service eligibility', exact: true }).waitFor({ state: 'visible', timeout: 30_000 });
+  const eligibilityRegistry = await requestJson('/api/admin/service-eligibility', { token: adminToken });
+  assert.ok(Array.isArray(eligibilityRegistry.review), 'Credential review registry unavailable');
+  await screenshot(ops, 'lifecycle-01c-service-eligibility');
   await gotoStable(ops, `${PORTALS.ops}#/cases/${caseId}`);
 
   let liveCase = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken });

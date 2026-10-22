@@ -1,3 +1,4 @@
+import { ServiceEligibility } from './pages/ServiceEligibility';
 import { BusinessOnboarding } from './pages/BusinessOnboarding';
 import { BrowserRouter, HashRouter, Route, Routes } from 'react-router-dom';
 import { AuthProvider } from './lib/auth';
@@ -56,6 +57,7 @@ function App() {
               <Route path="/integrations" element={<IntegrationHealth />} />
               <Route path="/notifications" element={<NotificationOperations />} />
               <Route path="/financials" element={<FinancialOperations />} />
+              <Route path="/eligibility" element={<ServiceEligibility />} />
               <Route path="/businesses" element={<BusinessOnboarding />} />
               <Route path="/pilot" element={<PilotReadinessPage />} />
               <Route path="/map" element={<NetworkMap />} />

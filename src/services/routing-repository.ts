@@ -65,7 +65,7 @@ export async function loadRoutingCandidates(requiredCapability:string){
        join actor_capabilities ac on ac.actor_id=a.id and ac.active=true
        join capabilities c on c.id=ac.capability_id
        left join partner_controls pc on pc.actor_id=a.id
-      where a.status='active' and c.capability_code=$1`,
+      where a.status='active' and c.capability_code=$1 and actor_service_eligible(a.id,$1)`,
     [requiredCapability]
   );
   return result.rows;
