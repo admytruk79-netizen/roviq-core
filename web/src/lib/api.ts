@@ -48,7 +48,7 @@ async function doFetch(path: string, options: RequestInit, headers: Headers) {
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getToken();
   const headers = new Headers(options.headers);
-  headers.set('Content-Type', 'application/json');
+  if (options.body !== undefined && options.body !== null) headers.set('Content-Type', 'application/json');
   if (token) headers.set('Authorization', `Bearer ${token}`);
 
   const method = (options.method ?? 'GET').toUpperCase();
