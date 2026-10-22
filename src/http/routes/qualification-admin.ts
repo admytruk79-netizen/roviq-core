@@ -92,4 +92,73 @@ export async function qualificationAdminRoutes(app: FastifyInstance) {
     } catch (error) { await client.query('rollback'); throw error; }
     finally { client.release(); }
   });
+  // An identified administrator may activate a specific requirement on a case.
+  // Once provider selection begins this endpoint is closed: change management
+  // must go through the existing case exception/reassessment workflow.
+  app.put('/api/admin/qualifications/cases/:caseId/requirements/:requirementKey', admin, async (req, reply) => {
+    const params = z.object({
+      caseId: z.string().uuid(), requirementKey: z.string().trim().min(1).max(150)
+    }).parse(req.params);
+    const body = z.object({
+      kind: kinds,
+      scope: z.string().trim().min(1).max(200).nullable(),
+      mandatory: z.boolean(),
+      reason: z.string().trim().min(5).max(500)
+    }).strict().parse(req.body);
+    const identity = validIdentityId(req.principal.identityId);
+    if (!identity) return reply.code(403).send({ error: 'identified_admin_required' });
+    const client = await pool.connect();
+    try {
+      await client.query('begin');
+      const serviceCase = await client.query(
+        'select id,state,selected_actor_id from service_cases where id=$1 for update',
+        [params.caseId]
+      );
+      if (!serviceCase.rowCount) {
+        await client.query('rollback');
+        return reply.code(404).send({ error: 'case_not_found' });
+      }
+      if (serviceCase.rows[0].selected_actor_id ||
+          !['triage','diagnostic_pending','diagnostic_in_progress','provider_selection'].includes(serviceCase.rows[0].state)) {
+        await client.query('rollback');
+        return reply.code(409).send({ error: 'case_not_open_for_requirements' });
+      }
+      const previous = await client.query(
+        'select * from case_qualification_requirements where service_case_id=$1 and requirement_key=$2',
+        [params.caseId,params.requirementKey]
+      );
+      const result = await client.query(
+        `insert into case_qualification_requirements(service_case_id,requirement_key,kind,scope,mandatory)
+         values($1,$2,$3,$4,$5)
+         on conflict(service_case_id,requirement_key)
+         do update set kind=excluded.kind,scope=excluded.scope,mandatory=excluded.mandatory
+         returning *`,
+        [params.caseId,params.requirementKey,body.kind,body.scope,body.mandatory]
+      );
+      await client.query(
+        `insert into audit_log(principal_role,principal_identity_id,action,object_type,object_id,metadata)
+         values('admin',$1,'upsert_case_qualification','case_qualification_requirement',$2,$3)`,
+        [identity,result.rows[0].id,JSON.stringify({
+          caseId:params.caseId, before:previous.rows[0]??null, after:result.rows[0], reason:body.reason
+        })]
+      );
+      await client.query('commit');
+      return { requirement:result.rows[0], rerouteRequired:true };
+    } catch (error) {
+      await client.query('rollback');
+      throw error;
+    } finally { client.release(); }
+  });
+
+  app.get('/api/admin/qualifications/cases/:caseId/requirements', admin, async (req, reply) => {
+    const { caseId } = z.object({ caseId:z.string().uuid() }).parse(req.params);
+    const serviceCase = await pool.query('select id from service_cases where id=$1', [caseId]);
+    if (!serviceCase.rowCount) return reply.code(404).send({ error:'case_not_found' });
+    const requirements = await pool.query(
+      'select * from case_qualification_requirements where service_case_id=$1 order by requirement_key',
+      [caseId]
+    );
+    return { requirements:requirements.rows };
+  });
+
 }
