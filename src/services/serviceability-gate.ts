@@ -276,7 +276,7 @@ async function loadConstraints(caseId:string,queryable:Queryable):Promise<Servic
     details:row.details ?? {}
   }));
 }
-async function loadActorQualifications(
+export async function loadActorQualifications(
   caseId:string,actorId:string,db:Queryable,at:Date
 ){
   const reqRows=await db.query(
