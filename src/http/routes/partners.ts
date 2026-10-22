@@ -301,26 +301,37 @@ export async function partnerRoutes(app: FastifyInstance) {
       return {offer:acceptedOffer,case:acceptedCase};
     }
 
-    const pending = await pool.query(`select case_id from matches_offers where id=$1 and actor_id=$2 and outcome='offered'`,[id,req.principal.actorId]);
-    const pendingCaseId = pending.rows[0]?.case_id as string|null|undefined;
-    if (pendingCaseId && (await qualificationBlockingReasons(pendingCaseId,req.principal.actorId!)).length) {
-      return reply.code(403).send({ error: 'qualification_required' });
-    }
-
-    const r = await pool.query(
-      `update matches_offers set outcome=$1, responded_at=now()
-       where id=$2 and actor_id=$3 and outcome='offered' returning *`,
-      [body.outcome,id,req.principal.actorId]
-    );
-    if (!r.rowCount) return reply.code(404).send({ error: 'offer_not_found_or_not_owned' });
-    const offer = r.rows[0];
+    const client = await pool.connect();
+    let offer: any;
+    try {
+      await client.query('begin');
+      const pending = await client.query(`select case_id from matches_offers where id=$1 and actor_id=$2 and outcome='offered'`,[id,req.principal.actorId]);
+      if (!pending.rowCount) { await client.query('rollback'); return reply.code(404).send({ error: 'offer_not_found_or_not_owned' }); }
+      const pendingCaseId = pending.rows[0].case_id as string|null;
+      if (pendingCaseId) {
+        // Same order as provider selection and requirement administration: case, then actor.
+        await client.query('select id from service_cases where id=$1 for update', [pendingCaseId]);
+        if ((await qualificationBlockingReasons(pendingCaseId,req.principal.actorId!,client)).length) {
+          await client.query('rollback'); return reply.code(403).send({ error: 'qualification_required' });
+        }
+      }
+      const result = await client.query(
+        `update matches_offers set outcome=$1, responded_at=now()
+         where id=$2 and actor_id=$3 and outcome='offered' returning *`,
+        [body.outcome,id,req.principal.actorId]
+      );
+      if (!result.rowCount) { await client.query('rollback'); return reply.code(404).send({ error: 'offer_not_found_or_not_owned' }); }
+      offer = result.rows[0];
+      if (offer.case_id) await client.query('update service_cases set current_owner_role=$1,current_owner_actor_id=$2,updated_at=now() where id=$3', [req.principal.role,req.principal.actorId,offer.case_id]);
+      await client.query('commit');
+    } catch (error) { await client.query('rollback'); throw error; }
+    finally { client.release(); }
 
     let serviceCase = null;
     if (offer.case_id) {
       const c = await pool.query('select * from service_cases where id=$1',[offer.case_id]);
       serviceCase = c.rows[0] ?? null;
       if (serviceCase && body.outcome === 'accepted') {
-        await pool.query('update service_cases set current_owner_role=$1,current_owner_actor_id=$2,updated_at=now() where id=$3',[req.principal.role,req.principal.actorId,offer.case_id]);
         const target = req.principal.role === 'diagnostic' ? 'diagnostic_in_progress' : req.principal.role === 'tow' ? 'tow_in_progress' : req.principal.role === 'parts' ? 'repair_in_progress' : 'repair_in_progress';
         try { serviceCase = await transitionCase(req.principal,offer.case_id,target); }
         catch (error) {

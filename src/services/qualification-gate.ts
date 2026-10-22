@@ -17,11 +17,15 @@ export class QualificationBlockedError extends Error {
 }
 
 /** Mandatory requirements this actor does not meet for this case, as `kind:key:reason`. */
-export async function qualificationBlockingReasons(caseId: string, actorId: string, db: Queryable = pool, at = new Date()) {
-  return (await loadActorQualifications(caseId, actorId, db, at)).blockingReasons;
+export async function qualificationBlockingReasons(caseId: string, actorId: string, db: Queryable = pool, at?: Date) {
+  // Write callers pass their transaction client after locking the case. Evidence reviews
+  // take FOR UPDATE on this same actor, so the proof read cannot race their commit.
+  // The default pool is for advisory/read-only checks and must not take a transient lock.
+  if (db !== pool) await db.query('select id from actors where id=$1 for share /* qualification_write_guard */', [actorId]);
+  return (await loadActorQualifications(caseId, actorId, db, at ?? new Date())).blockingReasons;
 }
 
-export async function assertQualified(caseId: string | null | undefined, actorId: string, db: Queryable = pool, at = new Date()) {
+export async function assertQualified(caseId: string | null | undefined, actorId: string, db: Queryable = pool, at?: Date) {
   if (!caseId) return;
   const reasons = await qualificationBlockingReasons(caseId, actorId, db, at);
   if (reasons.length) throw new QualificationBlockedError(reasons);
