@@ -79,6 +79,7 @@ export function CaseDetail() {
       const caseRes = await api.get<{ case: ServiceCase; customerSnapshot: CustomerSnapshot }>(`/api/maintenance/cases/${id}`);
       setCaseData(caseRes.case);
       setSnapshot(caseRes.customerSnapshot);
+      window.dispatchEvent(new CustomEvent('roviq:case-state-loaded',{detail:{id}}));
       if (caseRes.case.state !== 'provider_selection') {
         setRoutingCandidates([]);
         setRepairActorId('');
