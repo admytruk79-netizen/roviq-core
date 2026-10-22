@@ -28,7 +28,7 @@ export function Layout() {
               <span className="text-xs font-bold uppercase tracking-[.16em] text-[var(--roviq-muted)]">Ops</span>
             </div>
             <div className="flex items-center gap-2">
-              <nav className="hidden items-center gap-1 sm:flex" aria-label="Operations navigation">
+              <nav className="hidden flex-wrap items-center justify-end gap-1 xl:flex" aria-label="Operations navigation">
                 <Link to="/" className={navClass('/')}>Command</Link>
                 <Link to="/core-cases" className={navClass('/core-cases')}>Core Cases</Link>
                 <Link to="/cases" className={navClass('/cases')}>Service Cases</Link>
@@ -36,10 +36,11 @@ export function Layout() {
                 <Link to="/integrations" className={navClass('/integrations')}>Integrations</Link>
                 <Link to="/notifications" className={navClass('/notifications')}>Notifications</Link>
                 <Link to="/financials" className={navClass('/financials')}>Financials</Link>
+                <Link to="/businesses" className={navClass('/businesses')}>Businesses</Link>
                 <Link to="/pilot" className={navClass('/pilot')}>Pilot</Link>
                 <Link to="/map" className={navClass('/map')}>Map</Link>
               </nav>
-              <details className="relative sm:hidden">
+              <details className="relative xl:hidden">
                 <summary className="roviq-btn-secondary cursor-pointer list-none text-sm">More</summary>
                 <nav className="absolute right-0 top-11 z-50 grid min-w-40 gap-1 rounded-xl border border-white/10 bg-[var(--roviq-navy)] p-2 shadow-2xl" aria-label="Operations navigation">
                   <Link to="/" className={navClass('/')}>Command</Link>
@@ -49,7 +50,8 @@ export function Layout() {
                   <Link to="/integrations" className={navClass('/integrations')}>Integrations</Link>
                   <Link to="/notifications" className={navClass('/notifications')}>Notifications</Link>
                   <Link to="/financials" className={navClass('/financials')}>Financials</Link>
-                  <Link to="/pilot" className={navClass('/pilot')}>Pilot</Link>
+                  <Link to="/businesses" className={navClass('/businesses')}>Businesses</Link>
+                <Link to="/pilot" className={navClass('/pilot')}>Pilot</Link>
                   <Link to="/map" className={navClass('/map')}>Map</Link>
                 </nav>
               </details>

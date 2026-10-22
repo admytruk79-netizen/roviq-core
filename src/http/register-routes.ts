@@ -1,3 +1,4 @@
+import { businessOnboardingRoutes } from './routes/business-onboarding.js';
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import { healthRoutes } from './routes/health.js';
 import { authRoutes } from './routes/auth.js';
@@ -57,7 +58,7 @@ type RouteModule = {
 };
 
 const routeModules: RouteModule[] = [
-  { name: 'platform', plugins: [authRoutes, coreRoutes, meRoutes, caseKernelRoutes, capabilityRoutes, connectorGatewayRoutes, sagaRoutes, policyRoutes, coreApprovalToolRoutes, tradeCaseRoutes, coreOperationsRoutes, coreActorSurfaceRoutes] },
+  { name: 'platform', plugins: [authRoutes, businessOnboardingRoutes, coreRoutes, meRoutes, caseKernelRoutes, capabilityRoutes, connectorGatewayRoutes, sagaRoutes, policyRoutes, coreApprovalToolRoutes, tradeCaseRoutes, coreOperationsRoutes, coreActorSurfaceRoutes] },
   { name: 'case-lifecycle', plugins: [demandRoutes, caseRoutes, caseVehicleRoutes, exceptionRoutes, servicePlanRoutes, quoteRoutes, caseAddonItemRoutes] },
   { name: 'coordination', plugins: [routingRoutes, triageRoutes, triageEvaluationRoutes, coherenceRoutes, connectedVehicleRoutes, networkOrchestrationRoutes, networkInventoryRoutes] },
   { name: 'service-operations', plugins: [diagnosticRoutes, openJobRoutes, fieldServiceRoutes, transportRoutes, mobilityRoutes, partsRoutes] },
