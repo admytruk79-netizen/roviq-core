@@ -132,11 +132,14 @@ export function toFeedVehicle(listing, feed) {
   // "Certified Used" counts as used; it is flagged so customers see the CPO status.
   if (!model || (condition === 'used' ? !/\bused\b/.test(type) : type !== condition)) return null;
   const certified = condition === 'used' && /certified/.test(type);
-  const mileage = Number(listing.mileage) || 0;
+  const mileage = condition === 'used' ? Number(listing.mileage) : Number(listing.mileage) || 0;
   if (mileage < 0 || (condition === 'used' && !validUsedMileage(listing.mileage, mileage))) return null;
   const style = listing.styles?.style_name || listing.styles?.style_description || '';
   const descriptor = [style, listing.trim, listing.extra_fields?.title].filter(Boolean).join(' ');
-  if (!/super\s*crew|crew\s*cab/i.test(descriptor) && !evCrewCab(listing.model)) return null;
+  const listedCrewCab = /super\s*crew|crew\s*cab/i.test(descriptor);
+  const explicitOtherCab = /super\s*cab|reg(?:ular)?\s*cab|double\s*cab|extended\s*cab/i.test(descriptor);
+  const vinCrewCab = !explicitOtherCab && String(listing.vin || '').length === 17 && fordCrewVin(listing.make, listing.vin);
+  if (!listedCrewCab && !vinCrewCab && !evCrewCab(listing.model)) return null;
   const p = listing.pricing || {};
   const price = [p.our_price, p.internet_price, p.price].map(Number).find(n => Number.isFinite(n) && n >= 1000);
   if (!listing.vin || !price) return null;
@@ -147,7 +150,7 @@ export function toFeedVehicle(listing, feed) {
     year: listing.year,
     make: listing.make || 'Ford',
     model: model.label(String(listing.model)),
-    trim: [listing.trim, /super\s*crew/i.test(descriptor) ? 'SuperCrew' : 'Crew Cab', certified ? '· Certified Pre-Owned' : ''].filter(Boolean).join(' '),
+    trim: [listing.trim, (/super\s*crew/i.test(descriptor) || (vinCrewCab && /^F-?150\b/i.test(String(listing.model)))) ? 'SuperCrew' : 'Crew Cab', certified ? '· Certified Pre-Owned' : ''].filter(Boolean).join(' '),
     mileage,
     exteriorColor: listing.styles?.exterior_color || undefined,
     drivetrain: listing.mechanical?.drivetrain || undefined,
@@ -158,7 +161,7 @@ export function toFeedVehicle(listing, feed) {
     dealerName: feed.dealerName,
     dealerUrl: listing.vdp_url || undefined,
     raw: {
-      source: 'cars-commerce-search', certified, stock: listing.stock, style, engine: listing.mechanical?.engine,
+      source: 'cars-commerce-search', certified, cabEvidence: listedCrewCab ? 'listing_description' : vinCrewCab ? 'ford_vin' : 'crew_cab_only_model', stock: listing.stock, style, engine: listing.mechanical?.engine,
       msrp: p.msrp, dealerPrice: price, statusLabel: listing.extra_fields?.lightning?.statusLabel,
       priceFields: { ...priceFields(p), ...Object.fromEntries(Object.entries(p || {}).filter(([k, v]) => v && typeof v === 'object').map(([k, v]) => [k, JSON.stringify(v).slice(0, 300)])) }
     }
@@ -434,17 +437,24 @@ export async function loadSearchConfig(feed, fetcher = fetch) {
   throw new Error(`search_config_not_found (${seen.join(', ')})`);
 }
 
+// Do not depend on the dealer page or search service's changing default projection.
+// Dotted selectors restore cab evidence without fetching arbitrary extra-field HTML.
+const REQUIRED_SEARCH_FIELDS = ['vin', 'stock', 'year', 'make', 'model', 'trim', 'type', 'vdp_url', 'mileage', 'pricing', 'media',
+  'styles.style_name', 'styles.style_description', 'styles.exterior_color',
+  'mechanical.drivetrain', 'mechanical.fuel_type', 'mechanical.engine', 'extra_fields.title'];
+
 export async function fetchFeed(feed, fetcher = fetch) {
   if (feed.platform === 'dealer-com') return fetchDealerComFeed(feed, fetcher);
   if (feed.platform === 'dealeron') return fetchDealerOnFeed(feed, fetcher);
   if (feed.platform === 'jazel') return fetchJazelFeed(feed, fetcher);
   const cfg = await loadSearchConfig(feed, fetcher);
+  const requestedFields = [...new Set([...REQUIRED_SEARCH_FIELDS, ...(Array.isArray(cfg.requestedFields) ? cfg.requestedFields : [])].filter(field => typeof field === 'string'))];
   const listings = [];
   for (let n = 1; n <= 20; n++) {
     const res = await fetcher(cfg.search + '/search', {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json', 'x-api-key': cfg.apiKey },
-      body: JSON.stringify({ page: n, perPage: 100, filters: { status: cfg.statuses, type_slug: feed.typeSlugs ?? [feed.typeSlug] }, requestedFields: cfg.requestedFields })
+      body: JSON.stringify({ page: n, perPage: 100, filters: { status: cfg.statuses, type_slug: feed.typeSlugs ?? [feed.typeSlug] }, requestedFields })
     });
     if (!res.ok) throw new Error(`search_service_${res.status}`);
     const body = await res.json();
