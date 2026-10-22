@@ -52,6 +52,7 @@ export async function onboardBusiness(principal: Principal, input: z.infer<typeo
     const organization = await client.query(`insert into organizations(organization_type,display_name,status)
       values($1,$2,'active') returning id`, [organizationType[input.role], input.businessName]);
     const organizationId = organization.rows[0].id;
+    await client.query('insert into business_service_policies(organization_id) values($1)', [organizationId]);
     const location = await client.query(`insert into locations(organization_id,name,address,city,region,country_code)
       values($1,$2,$3,$4,$5,$6) returning id`, [organizationId, input.location.name, input.location.address,
       input.location.city, input.location.region, input.location.countryCode]);
