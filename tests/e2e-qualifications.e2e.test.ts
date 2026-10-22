@@ -113,4 +113,51 @@ describe('qualification gates', () => {
     expect((await app.inject({ method: 'GET', url: `/api/admin/qualifications/cases/${caseId}/candidates`, headers: as('diagnostic', qualified) })).statusCode).toBe(403);
     expect((await app.inject({ method: 'GET', url: `/api/admin/qualifications/cases/00000000-0000-4000-8000-000000000000/candidates`, headers: admin })).statusCode).toBe(404);
   });
+
+  it.each(['offer','claim'])('serializes %s acceptance behind an in-flight credential revocation', async (path) => {
+    const tech = await actor('diagnostic');
+    const evidenceId = randomUUID();
+    expect((await review(tech,evidenceId)).statusCode).toBe(200);
+    const {caseId,demandId} = await newCase();
+    expect((await requireEv(caseId)).statusCode).toBe(200);
+    let accept: () => ReturnType<typeof app.inject>;
+    let offerId: string | undefined;
+    let jobId: string | undefined;
+    if (path==='offer') {
+      await app.inject({method:'POST',url:`/api/maintenance/cases/${caseId}/transition`,headers:admin,payload:{toState:'diagnostic_pending'}});
+      const offered = await app.inject({method:'POST',url:'/api/admin/offers',headers:admin,payload:{demandId,actorId:tech}});
+      expect(offered.statusCode).toBe(201); offerId = offered.json().offer.id;
+      accept = () => app.inject({method:'POST',url:`/api/offers/${offerId}/respond`,headers:as('diagnostic',tech),payload:{outcome:'accepted'}});
+    } else {
+      jobId = await publish(caseId);
+      accept = () => claim(tech,jobId!);
+    }
+    const revoker = await pool.connect();
+    let pending: Promise<unknown> | undefined;
+    try {
+      await revoker.query('begin');
+      await revoker.query('select id from actors where id=$1 for update',[tech]);
+      await revoker.query(`update actor_qualification_evidence set evidence_status='revoked' where id=$1`,[evidenceId]);
+      let settled = false;
+      const response = Promise.resolve(accept()).then(r => { settled=true; return r; }); pending = response;
+      const deadline = Date.now()+4000;
+      let waiting = false;
+      while (Date.now()<deadline && !settled) {
+        const locks = await pool.query(`select exists(select 1 from pg_stat_activity
+          where wait_event_type='Lock' and query like '%qualification_write_guard%') as waiting`);
+        if (locks.rows[0].waiting) { waiting=true; break; }
+        await new Promise(resolve=>setTimeout(resolve,20));
+      }
+      expect(waiting,'acceptance must wait on the credential reviewer, not use old evidence').toBe(true);
+      expect(settled).toBe(false);
+      await revoker.query('commit');
+      expect((await response).statusCode).toBe(403);
+      if (offerId) expect((await pool.query('select outcome from matches_offers where id=$1',[offerId])).rows[0].outcome).toBe('offered');
+      if (jobId) expect((await pool.query('select state from open_jobs where id=$1',[jobId])).rows[0].state).toBe('open');
+      expect((await pool.query('select current_owner_actor_id from service_cases where id=$1',[caseId])).rows[0].current_owner_actor_id).not.toBe(tech);
+    } finally {
+      await revoker.query('rollback'); revoker.release();
+      await pending;
+    }
+  },15000);
 });
