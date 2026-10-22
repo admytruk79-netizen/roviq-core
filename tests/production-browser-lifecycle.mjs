@@ -209,7 +209,10 @@ async function productionLifecycle(browser) {
   assert.ok(savedCare.history.some(r => r.value === 25000 && r.unit === 'miles'), 'Odometer reading missing from durable history');
   assert.ok(savedCare.reminders.some(r => r.title === marker && r.due), 'Reminder is not due at recorded mileage');
   await screenshot(customer, 'lifecycle-01a-vehicle-care');
+  const reminderCompleted = customer.waitForResponse(r => r.request().method() === 'POST' && /\/reminders\/[^/]+\/complete$/.test(r.url()));
   await reminderCard.getByRole('button', { name: 'Mark done', exact: true }).click();
+  const completionResponse = await reminderCompleted;
+  assert.ok(completionResponse.ok(), `Reminder completion failed: ${completionResponse.status()} ${(await completionResponse.text()).slice(0, 500)}`);
   await reminderCard.waitFor({ state: 'hidden', timeout: 20_000 });
   await screenshot(customer, 'lifecycle-01-customer-created');
 
