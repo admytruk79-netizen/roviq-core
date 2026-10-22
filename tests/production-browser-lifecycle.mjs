@@ -241,6 +241,17 @@ async function productionLifecycle(browser) {
   const eligibilityRegistry = await requestJson('/api/admin/service-eligibility', { token: adminToken });
   assert.ok(Array.isArray(eligibilityRegistry.review), 'Credential review registry unavailable');
   await screenshot(ops, 'lifecycle-01c-service-eligibility');
+  await gotoStable(ops, `${PORTALS.ops}#/qualifications`);
+  await ops.getByRole('heading', { name: 'Operator qualifications', exact: true }).waitFor({ state: 'visible', timeout: 30_000 });
+  await ops.getByLabel('Find operator', { exact: true }).fill(partnerSession.principal.actorId);
+  await ops.getByRole('button', { name: 'Search', exact: true }).click();
+  await ops.getByLabel('Operator', { exact: true }).locator(`option[value="${partnerSession.principal.actorId}"]`).waitFor({ state: 'attached' });
+  await ops.getByLabel('Operator', { exact: true }).selectOption(partnerSession.principal.actorId);
+  await ops.getByRole('heading', { name: 'Check case qualifications', exact: true }).waitFor({ state: 'visible' });
+  await ops.getByLabel('Case ID', { exact: true }).fill(caseId);
+  await ops.getByRole('button', { name: 'Check requirements', exact: true }).click();
+  await ops.getByText('No qualification requirements registered', { exact: true }).waitFor({ state: 'visible' });
+  await screenshot(ops, 'lifecycle-01d-operator-qualifications');
   await gotoStable(ops, `${PORTALS.ops}#/cases/${caseId}`);
 
   let liveCase = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken });

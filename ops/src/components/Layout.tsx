@@ -36,6 +36,7 @@ export function Layout() {
                 <Link to="/integrations" className={navClass('/integrations')}>Integrations</Link>
                 <Link to="/notifications" className={navClass('/notifications')}>Notifications</Link>
                 <Link to="/financials" className={navClass('/financials')}>Financials</Link>
+                <Link to="/qualifications" className={navClass('/qualifications')}>Qualifications</Link>
                 <Link to="/eligibility" className={navClass('/eligibility')}>Eligibility</Link>
                 <Link to="/businesses" className={navClass('/businesses')}>Businesses</Link>
                 <Link to="/pilot" className={navClass('/pilot')}>Pilot</Link>
@@ -51,7 +52,8 @@ export function Layout() {
                   <Link to="/integrations" className={navClass('/integrations')}>Integrations</Link>
                   <Link to="/notifications" className={navClass('/notifications')}>Notifications</Link>
                   <Link to="/financials" className={navClass('/financials')}>Financials</Link>
-                  <Link to="/eligibility" className={navClass('/eligibility')}>Eligibility</Link>
+                  <Link to="/qualifications" className={navClass('/qualifications')}>Qualifications</Link>
+                <Link to="/eligibility" className={navClass('/eligibility')}>Eligibility</Link>
                 <Link to="/businesses" className={navClass('/businesses')}>Businesses</Link>
                 <Link to="/pilot" className={navClass('/pilot')}>Pilot</Link>
                   <Link to="/map" className={navClass('/map')}>Map</Link>
