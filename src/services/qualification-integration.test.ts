@@ -21,6 +21,10 @@ describe('MACRE evidence retrieval',()=>{
    const evidence=[{requirement_key:'ev-hv',kind:'training',scope:'vehicle-x/hv',evidence_status:'verified',verified_source:null}];
    expect((await loadActorQualifications('case','actor',db([requirement],evidence),at)).decision).toBe('blocked');
  });
+ it('rejects a whitespace-only verification source',async()=>{
+   const evidence=[{requirement_key:'ev-hv',kind:'training',scope:'vehicle-x/hv',evidence_status:'verified',verified_source:'   '}];
+   expect((await loadActorQualifications('case','actor',db([requirement],evidence),at)).decision).toBe('blocked');
+ });
  it('accepts current evidence with provenance and matching scope',async()=>{
    const evidence=[{requirement_key:'ev-hv',kind:'training',scope:'vehicle-x/hv',evidence_status:'verified',verified_source:'oem-portal',valid_until:'2027-01-01'}];
    expect((await loadActorQualifications('case','actor',db([requirement],evidence),at)).decision).toBe('eligible');

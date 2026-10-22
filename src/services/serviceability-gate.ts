@@ -296,7 +296,7 @@ export async function loadActorQualifications(
   const evidence:Evidence[]=evidenceRows.rows.filter((row:any)=>requirements.some(r=>r.id===row.requirement_key&&r.kind===row.kind)).map((row:any)=>({
     requirementId:row.requirement_key,
     // "verified" must carry a provenance reference; status alone is insufficient.
-    status:row.evidence_status==='verified'&&!row.verified_source?'unverified':row.evidence_status,
+    status:row.evidence_status==='verified'&&!row.verified_source?.trim()?'unverified':row.evidence_status,
     scope:row.scope??undefined,
     source:row.verified_source??undefined,
     validUntil:row.valid_until?new Date(row.valid_until).toISOString():undefined
