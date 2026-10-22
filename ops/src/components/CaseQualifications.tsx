@@ -4,6 +4,8 @@ import { QUALIFICATION_KINDS, QUALIFICATION_PRESETS, kindLabel, type Qualificati
 
 // What this job requires (EV training, OEM access, equipment...). With requirements set, only
 // technicians holding current verified credentials can be offered, see or claim the case.
+// Requirements are written through the audited qualification admin API (named admin, reason,
+// closed once a provider is selected); credentials are reviewed on the Qualifications page.
 
 type Requirement = { requirement_key: string; kind: string; scope: string | null; mandatory: boolean };
 type Candidate = { actorId: string; name: string | null; decision: 'eligible' | 'blocked' | 'review_required'; blockingReasons: string[]; reviewReasons: string[] };
@@ -25,14 +27,15 @@ export function CaseQualifications({ caseId }: { caseId: string }) {
   const [kind, setKind] = useState<QualificationKind>('training');
   const [scope, setScope] = useState('');
   const [mandatory, setMandatory] = useState(true);
+  const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
   const load = useCallback(async () => {
     try {
       const [r, c] = await Promise.all([
-        api.get<{ requirements: Requirement[] }>(`/api/admin/cases/${caseId}/qualifications`),
-        api.get<{ candidates: Candidate[] }>(`/api/admin/cases/${caseId}/qualifications/candidates?actorType=${actorType}`)
+        api.get<{ requirements: Requirement[] }>(`/api/admin/qualifications/cases/${caseId}/requirements`),
+        api.get<{ candidates: Candidate[] }>(`/api/admin/qualifications/cases/${caseId}/candidates?actorType=${actorType}`)
       ]);
       setRequirements(r.requirements);
       setCandidates(c.candidates);
@@ -50,19 +53,15 @@ export function CaseQualifications({ caseId }: { caseId: string }) {
     e.preventDefault();
     setBusy(true); setError('');
     try {
-      await api.put(`/api/admin/cases/${caseId}/qualifications`, { requirementKey: key.trim(), kind, scope: scope.trim() || undefined, mandatory });
-      setPreset(''); setKey(''); setScope('');
+      await api.put(`/api/admin/qualifications/cases/${caseId}/requirements/${encodeURIComponent(key.trim())}`, { kind, scope: scope.trim() || null, mandatory, reason: reason.trim() });
+      setPreset(''); setKey(''); setScope(''); setReason('');
       await load();
     } catch (err) {
-      setError(err instanceof ApiError && err.status === 400 ? 'Use a key of lowercase letters, digits and _ . : -' : 'Could not save the requirement.');
+      const code = err instanceof ApiError ? err.message : '';
+      setError(code === 'case_not_open_for_requirements' ? 'A provider is already selected or the case has moved on. Change requirements through a case exception instead.'
+        : code === 'identified_admin_required' ? 'Sign in with your own admin account to change requirements.'
+        : 'Could not save the requirement. Check the key and give a reason of at least 5 characters.');
     } finally { setBusy(false); }
-  }
-
-  async function remove(requirementKey: string) {
-    setBusy(true); setError('');
-    try { await api.delete(`/api/admin/cases/${caseId}/qualifications/${encodeURIComponent(requirementKey)}`); await load(); }
-    catch { setError('Could not remove the requirement.'); }
-    finally { setBusy(false); }
   }
 
   const qualified = candidates?.filter((c) => c.decision !== 'blocked').length ?? 0;
@@ -77,9 +76,8 @@ export function CaseQualifications({ caseId }: { caseId: string }) {
       {requirements.length > 0 && (
         <ul className="mt-3 divide-y divide-slate-200 rounded border border-slate-200">
           {requirements.map((r) => (
-            <li key={r.requirement_key} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm">
-              <span><b>{QUALIFICATION_PRESETS.find((p) => p.key === r.requirement_key)?.label ?? r.requirement_key}</b> · {kindLabel(r.kind)}{r.scope ? ` · ${r.scope}` : ''}{r.mandatory ? '' : ' · optional (review)'}</span>
-              <button type="button" className="roviq-btn-secondary" disabled={busy} onClick={() => void remove(r.requirement_key)}>Remove</button>
+            <li key={r.requirement_key} className="px-3 py-2 text-sm">
+              <b>{QUALIFICATION_PRESETS.find((p) => p.key === r.requirement_key)?.label ?? r.requirement_key}</b> · {kindLabel(r.kind)}{r.scope ? ` · ${r.scope}` : ''}{r.mandatory ? '' : ' · optional (review)'}
             </li>
           ))}
         </ul>
@@ -102,11 +100,15 @@ export function CaseQualifications({ caseId }: { caseId: string }) {
         <label className="text-sm">Scope (optional)
           <input id="req-scope" className={field} value={scope} onChange={(e) => setScope(e.target.value)} placeholder="e.g. Tesla, Ontario" />
         </label>
+        <label className="text-sm sm:col-span-2">Reason
+          <input id="req-reason" required minLength={5} maxLength={500} className={field} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. EV high-voltage work on a 2015 Leaf" />
+        </label>
         <label className="flex items-center gap-2 text-sm sm:col-span-2">
           <input id="req-mandatory" type="checkbox" checked={mandatory} onChange={(e) => setMandatory(e.target.checked)} />
-          Required (unchecked: missing it sends the assignment to review instead of blocking)
+          Required (unchecked: missing it sends the assignment to review instead of blocking). Re-saving a key updates it.
         </label>
-        <div className="sm:col-span-2"><button type="submit" className="roviq-btn-primary" disabled={busy || !key.trim()}>{busy ? 'Saving…' : 'Add requirement'}</button></div>
+        <div className="sm:col-span-2"><button type="submit" className="roviq-btn-primary" disabled={busy || !key.trim() || reason.trim().length < 5}>{busy ? 'Saving…' : 'Save requirement'}</button></div>
+        <p className="text-xs text-slate-500 sm:col-span-2">Credentials are reviewed on the Qualifications page; their keys, type and scope must match these exactly.</p>
       </form>
       {error && <p className="mt-2 text-sm text-red-600" role="alert">{error}</p>}
       {requirements.length > 0 && candidates && (

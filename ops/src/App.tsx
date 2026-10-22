@@ -1,3 +1,4 @@
+import { Qualifications } from './pages/Qualifications';
 import { ServiceEligibility } from './pages/ServiceEligibility';
 import { BusinessOnboarding } from './pages/BusinessOnboarding';
 import { BrowserRouter, HashRouter, Route, Routes } from 'react-router-dom';
@@ -8,7 +9,6 @@ import { Login } from './pages/Login';
 import { Cases } from './pages/Cases';
 import { Exceptions } from './pages/Exceptions';
 import { CaseDetail } from './pages/CaseDetail';
-import { Credentials } from './pages/Credentials';
 import { CaseActionView } from './pages/CaseActionView';
 import { PartsHandoff } from './pages/PartsHandoff';
 import { PaymentHandoff } from './pages/PaymentHandoff';
@@ -58,8 +58,8 @@ function App() {
               <Route path="/integrations" element={<IntegrationHealth />} />
               <Route path="/notifications" element={<NotificationOperations />} />
               <Route path="/financials" element={<FinancialOperations />} />
+              <Route path="/qualifications" element={<Qualifications />} />
               <Route path="/eligibility" element={<ServiceEligibility />} />
-              <Route path="/credentials" element={<Credentials />} />
               <Route path="/businesses" element={<BusinessOnboarding />} />
               <Route path="/pilot" element={<PilotReadinessPage />} />
               <Route path="/map" element={<NetworkMap />} />

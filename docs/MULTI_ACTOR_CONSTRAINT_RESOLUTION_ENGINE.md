@@ -1,5 +1,5 @@
 # ROVIQ Core — Multi-Actor Constraint & Resolution Engine (MACRE)
-Status: **Architectural requirement / proposed capability — not verified as implemented**
+Status: **Partial implementation: opt-in qualification routing/selection gate and Ops evidence administration; broader engine remains proposed**
 Date: 2026-10-22
 Parent reference: ROVIQ Platform Master Technical Specification v2.3 (2026-09-18)
 
@@ -48,6 +48,9 @@ P3: Broader network-wide multi-actor resolution, proactive gap detection and mea
 - No new public claims of automatic qualification verification before operational evidence and implementation testing.
 
 ## Latest build snapshot (reviewed 2026-10-22)
+The opt-in case qualification tables and deterministic evaluator now feed the serviceability gate. Ops qualification administration adds identified administrator reviews, evidence references, expiry, revocation, version conflicts and atomic audit history. See [qualification administration](qualification-administration.md) for its tested scope and limits. Requirements must still be explicitly registered; automatic VIN/task inference, issuer integrations and universal dispatch/acceptance enforcement remain outstanding.
+
+### Earlier source-history snapshot
 Repository: https://github.com/admytruk79-netizen/roviq-core
 Most recent commit observed: 6fcd1bf223603afe1037cd91769ecabccb8fc8d8 — "Add Ops onboarding for independent business accounts" (2026-10-22 05:29 UTC).
 Earlier observed: e728179b804aa878f1d5912694377d94383863f3 — customer actions with empty request bodies; d9d47a72ca396cc2342b0e202479feb176448aba — vehicle-care dropdown matching browser checks.
