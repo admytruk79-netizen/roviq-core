@@ -8,6 +8,7 @@ import {
   createCustomerVehicle, listCustomerVehicles, loadCaseVehicle, loadOwnedVehicle, newVehicleSchema, projectVehicle,
   updateVehicle, vehicleForCustomer, vehicleUpdateSchema, VehicleError, type VehicleRow
 } from '../../services/case-vehicle.js';
+import { loadVehicleCare, createServiceReminder, completeServiceReminder, reminderSchema } from '../../services/vehicle-care.js';
 import { requireRole } from '../middleware/principal.js';
 
 function sendVehicleError(reply: FastifyReply, error: unknown) {
@@ -41,6 +42,25 @@ export async function caseVehicleRoutes(app: FastifyInstance) {
       await audit(req.principal, 'update_vehicle', 'customer_vehicle', vehicleId, 'customer_garage', { fields: Object.keys(body) });
       return { vehicle: vehicleForCustomer(vehicle) };
     } catch (error) { return sendVehicleError(reply, error); }
+  });
+
+  app.get('/api/me/vehicles/:vehicleId/care', { preHandler: requireRole('customer') }, async (req, reply) => {
+    const { vehicleId } = z.object({ vehicleId: z.string().uuid() }).parse(req.params);
+    try { return await loadVehicleCare(req.principal.actorId!, vehicleId); }
+    catch (error) { return sendVehicleError(reply, error); }
+  });
+
+  app.post('/api/me/vehicles/:vehicleId/reminders', { preHandler: requireRole('customer') }, async (req, reply) => {
+    const { vehicleId } = z.object({ vehicleId: z.string().uuid() }).parse(req.params);
+    const body = reminderSchema.parse(req.body);
+    try { return await createServiceReminder(req.principal.actorId!, vehicleId, body); }
+    catch (error) { return sendVehicleError(reply, error); }
+  });
+
+  app.post('/api/me/vehicles/:vehicleId/reminders/:reminderId/complete', { preHandler: requireRole('customer') }, async (req, reply) => {
+    const { vehicleId, reminderId } = z.object({ vehicleId: z.string().uuid(), reminderId: z.string().uuid() }).parse(req.params);
+    try { return await completeServiceReminder(req.principal.actorId!, vehicleId, reminderId); }
+    catch (error) { return sendVehicleError(reply, error); }
   });
 
   // Removing a vehicle hides it from the garage; cases, repair orders and history keep their link.

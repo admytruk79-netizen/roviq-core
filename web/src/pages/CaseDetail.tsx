@@ -1,3 +1,4 @@
+import { VehicleCarePanel } from '../components/VehicleCarePanel';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
@@ -380,6 +381,8 @@ export function CaseDetail() {
           </span>
         </section>
       )}
+
+      {vehicle && <VehicleCarePanel key={vehicle.id} vehicleId={vehicle.id} />}
 
       {id && vehicle && !['completed','cancelled'].includes(caseData.state) && <ObdScanPanel key={id} caseId={id}/>}
 
