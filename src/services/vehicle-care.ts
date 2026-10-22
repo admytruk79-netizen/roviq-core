@@ -4,7 +4,7 @@ import { loadOwnedVehicle, VehicleError } from './case-vehicle.js';
 
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(v => {
   const parsed = new Date(`${v}T00:00:00Z`);
-  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === v;
+  return v >= '1900-01-01' && !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === v;
 }, 'Use a valid calendar date');
 export const reminderSchema = z.object({
   id: z.string().uuid(), title: z.string().trim().min(1).max(120),
