@@ -20,8 +20,9 @@ export class QualificationBlockedError extends Error {
 export async function qualificationBlockingReasons(caseId: string, actorId: string, db: Queryable = pool, at?: Date) {
   // Write callers pass their transaction client after locking the case. Evidence reviews
   // take FOR UPDATE on this same actor, so the proof read cannot race their commit.
+  // Match provider selection's exclusive lock to avoid a later shared-to-exclusive upgrade.
   // The default pool is for advisory/read-only checks and must not take a transient lock.
-  if (db !== pool) await db.query('select id from actors where id=$1 for share /* qualification_write_guard */', [actorId]);
+  if (db !== pool) await db.query('select id from actors where id=$1 for update /* qualification_write_guard */', [actorId]);
   return (await loadActorQualifications(caseId, actorId, db, at ?? new Date())).blockingReasons;
 }
 
