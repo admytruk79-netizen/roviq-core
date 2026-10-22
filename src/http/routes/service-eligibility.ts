@@ -22,11 +22,13 @@ export async function serviceEligibilityRoutes(app: FastifyInstance) {
         case when c.state='verified' and c.expires_at<=clock_timestamp() then 'expired'
           when c.state='verified' and c.valid_from>clock_timestamp() then 'not_yet_valid' else c.state end as effective_state
         from business_service_authorizations c order by c.updated_at desc limit 1000`),
-      pool.query(`select w.*,a.organization_id,o.display_name as business_name from business_service_work w
-        join actors a on a.id=w.actor_id join organizations o on o.id=a.organization_id
-        join business_service_policies p on p.organization_id=a.organization_id
-        join service_cases sc on sc.id=w.case_id
-        where sc.state not in ('completed','cancelled','payment_pending') and not actor_service_eligible(w.actor_id,w.service)
+      pool.query(`select w.*,coalesce(w.organization_id,a.organization_id) as organization_id,o.display_name as business_name from business_service_work w
+        left join actors a on a.id=w.actor_id join organizations o on o.id=coalesce(w.organization_id,a.organization_id)
+        join business_service_policies p on p.organization_id=o.id
+        left join service_cases sc on sc.id=w.case_id
+        where (w.case_id is null or sc.state not in ('completed','cancelled','payment_pending')) and not
+          case when w.reference_type='shop_repair_order' then organization_service_eligible(o.id,w.service)
+            else actor_service_eligible(w.actor_id,w.service) end
         order by w.case_id,w.reference_type,w.reference_id limit 500`)
     ]);
     return { organizations: organizations.rows, authorizations: authorizations.rows, review: review.rows };

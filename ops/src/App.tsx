@@ -24,7 +24,7 @@ import { AiFirstRead } from './pages/AiFirstRead';
 function CaseControl() {
   return (
     <div className="space-y-4">
-      <CaseActionView />
+      <CaseActionView showActions={false} />
       <AiFirstRead />
       <details open className="rounded-xl border border-slate-200 bg-white">
         <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-700">Case tools & details</summary>
