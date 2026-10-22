@@ -109,7 +109,9 @@ create trigger transport_service_eligibility before insert or update on transpor
 create trigger mobility_service_eligibility before insert or update on mobility_allocations for each row execute function check_job_service_eligibility();
 create trigger parts_service_eligibility before insert or update on parts_orders for each row execute function check_job_service_eligibility();
 create trigger selected_shop_service_eligibility before insert or update on service_cases for each row execute function check_job_service_eligibility();
-create trigger handoff_service_eligibility before insert or update on network_handoffs for each row execute function check_job_service_eligibility();
+-- AFTER avoids checking the speculative INSERT of an UPSERT when an existing handoff is only progressing.
+-- An exception still rolls back the entire assignment transaction.
+create trigger handoff_service_eligibility after insert or update on network_handoffs for each row execute function check_job_service_eligibility();
 
 create view business_service_work as
 select m.case_id,m.actor_id,coalesce(m.required_service,case when a.actor_type='diagnostic' then 'diagnostic' else 'repair' end) as service,
