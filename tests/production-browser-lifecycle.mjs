@@ -230,6 +230,12 @@ async function productionLifecycle(browser) {
   const opsContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const ops = await opsContext.newPage();
   await setPortalSession(ops, PORTALS.ops, 'roviq_ops_token', 'roviq_ops_principal', admin);
+  await gotoStable(ops, `${PORTALS.ops}#/businesses`);
+  await ops.getByRole('heading', { name: 'Business onboarding', exact: true }).waitFor({ state: 'visible', timeout: 30_000 });
+  await ops.getByLabel('Business name', { exact: true }).waitFor({ state: 'visible' });
+  const businessRegistry = await requestJson('/api/admin/business-onboarding', { token: adminToken });
+  assert.ok(Array.isArray(businessRegistry.businesses), 'Business onboarding registry is not available to Ops');
+  await screenshot(ops, 'lifecycle-01b-business-onboarding');
   await gotoStable(ops, `${PORTALS.ops}#/cases/${caseId}`);
 
   let liveCase = await requestJson(`/api/maintenance/cases/${caseId}`, { token: adminToken });
