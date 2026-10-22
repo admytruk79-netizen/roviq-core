@@ -492,6 +492,12 @@ async function productionLifecycle(browser) {
   if (prePaymentCase.case.state === 'repair_in_progress') {
     const transitions = await requestJson(`/api/maintenance/cases/${caseId}/transitions`, { token: adminToken });
     if ((transitions.transitions ?? []).some(t => t.toState === 'payment_pending')) {
+      // The case detail panel keeps secondary transitions inside an explicit disclosure.
+      const paymentControl = ops.getByRole('button', { name: 'Request payment', exact: true, includeHidden: true });
+      await paymentControl.waitFor({ state: 'attached', timeout: 30_000 });
+      if (!await paymentControl.isVisible()) {
+        await ops.getByText('Other available actions', { exact: true }).click();
+      }
       const paymentAction = await waitForButton(ops, 'Request payment');
       await paymentAction.click();
       await waitForCaseState(caseId, adminToken, 'payment_pending');
