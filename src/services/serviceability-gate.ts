@@ -1,3 +1,4 @@
+import { evaluateQualification, type Requirement, type Evidence } from './qualification-feasibility.js';
 import type { PoolClient } from 'pg';
 import {
   CAPACITY_CURRENT_MAX_AGE_MS,
@@ -125,6 +126,20 @@ export async function evaluateActorServiceability(
 
   if(a.status!=='active') constraints.push({type:'provider',status:'blocked',details:{actorId,actorStatus:a.status??'unknown'}});
   if(serviceCategory && a.has_active_capability!==true) constraints.push({type:'capability',status:'blocked',details:{actorId,serviceCategory}});
+  // MACRE: inspect case-specific qualifications and the candidate's verified evidence.
+  // An unconfigured case remains on the legacy serviceability path. Any configured
+  // mandatory qualification fails closed, including unknown or expired evidence.
+  if(caseId){
+    const qualification=await loadActorQualifications(caseId,actorId,db,serviceTargetAt);
+    for(const reason of qualification.blockingReasons){
+      constraints.push({type:'authorization',status:'blocked',details:{actorId,qualificationReason:reason}});
+    }
+    for(const reason of qualification.reviewReasons){
+      if(intent==='confirm'||intent==='hold'){
+        constraints.push({type:'authorization',status:'unknown',details:{actorId,qualificationReason:reason}});
+      }
+    }
+  }
   const requirementsProjected=Boolean(caseId && serviceCategory);
   const canonical = await db.query<CanonicalWindowRow>(
     `select cw.id,cw.capacity_state,cw.confidence,cw.sync_state,
@@ -260,4 +275,31 @@ async function loadConstraints(caseId:string,queryable:Queryable):Promise<Servic
     required:true,
     details:row.details ?? {}
   }));
+}
+async function loadActorQualifications(
+  caseId:string,actorId:string,db:Queryable,at:Date
+){
+  const reqRows=await db.query(
+    `select requirement_key,kind,scope,mandatory from case_qualification_requirements where service_case_id=$1 order by requirement_key`,
+    [caseId]
+  );
+  const requirements:Requirement[]=reqRows.rows.map((row:any)=>({
+    id:row.requirement_key,kind:row.kind,scope:row.scope??undefined,mandatory:row.mandatory
+  }));
+  if(!requirements.length)return evaluateQualification([],[],at);
+  const evidenceRows=await db.query(
+    `select requirement_key,kind,scope,evidence_status,verified_source,valid_until
+       from actor_qualification_evidence
+      where actor_id=$1 and requirement_key=any($2::text[])`,
+    [actorId,requirements.map(r=>r.id)]
+  );
+  const evidence:Evidence[]=evidenceRows.rows.map((row:any)=>({
+    requirementId:row.requirement_key,
+    // "verified" must carry a provenance reference; status alone is insufficient.
+    status:row.evidence_status==='verified'&&!row.verified_source?'unverified':row.evidence_status,
+    scope:row.scope??undefined,
+    source:row.verified_source??undefined,
+    validUntil:row.valid_until?new Date(row.valid_until).toISOString():undefined
+  }));
+  return evaluateQualification(requirements,evidence,at);
 }
