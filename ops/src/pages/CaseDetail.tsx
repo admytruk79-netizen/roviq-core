@@ -4,6 +4,7 @@ import { api, ApiError } from '../lib/api';
 import { formatAmount, formatDateTime, formatMinorAmount, humanizeToken } from '../lib/format';
 import { StatusBadge } from '../components/StatusBadge';
 import { OpenJobControl } from '../components/OpenJobControl';
+import { CaseQualifications } from '../components/CaseQualifications';
 import { actionCopy, safeTransitions, splitTransitions } from '../lib/actionCopy';
 import type {
   ActorSummary,
@@ -237,6 +238,8 @@ export function CaseDetail() {
       </section>
 
       {(caseData.state === 'triage' || caseData.state === 'diagnostic_pending') && <section className="rounded-lg border border-slate-200 bg-white p-4"><h2 className="text-sm font-semibold text-slate-700">Diagnostic handoff</h2>{caseData.state === 'triage' ? <p className="mt-2 text-sm text-slate-500">Use the next action above to request diagnosis. Provider assignment appears here once the case is ready.</p> : !caseData.demand_id ? <p className="mt-2 text-sm text-red-600">This case is missing its originating demand and cannot be dispatched.</p> : diagnostics.length === 0 ? <p className="mt-2 text-sm text-slate-500">No active diagnostic providers are registered yet.</p> : <form onSubmit={dispatchDiagnostic} className="mt-2 flex flex-wrap items-center gap-2"><select value={diagnosticActorId} onChange={(e) => setDiagnosticActorId(e.target.value)} className="min-h-11 min-w-64 rounded-md border border-slate-300 px-3 py-2 text-sm"><option value="">Select diagnostic provider…</option>{diagnostics.map((actor) => <option key={actor.id} value={actor.id}>{actorLabel(actor)}</option>)}</select><button type="submit" disabled={!diagnosticActorId || dispatchingDiagnostic} className="min-h-11 rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{dispatchingDiagnostic ? 'Sending…' : 'Send diagnostic offer'}</button></form>}{diagnosticDispatchError && <p className="mt-2 text-sm text-red-600">{diagnosticDispatchError}</p>}{diagnosticDispatchSuccess && <p className="mt-2 text-sm text-emerald-700">{diagnosticDispatchSuccess}</p>}</section>}
+
+      <CaseQualifications caseId={caseData.id} />
 
       <OpenJobControl caseId={caseData.id} caseState={caseData.state} onChange={() => void load()} />
 

@@ -8,6 +8,7 @@ import { confirmCaseCapacity, releaseCaseCapacity } from '../../services/capacit
 import { createShopWaitlistEntry } from '../../services/shop-os-waitlist.js';
 import { requireRole } from '../middleware/principal.js';
 import { syncFulfillmentParticipantDecision, upsertNetworkHandoff } from '../../services/network-execution.js';
+import { qualificationBlockingReasons } from '../../services/qualification-gate.js';
 
 const capacityBody = z.object({
   capacityType: z.string().min(1), quantity: z.number().nonnegative(), startAt: z.string().datetime(), endAt: z.string().datetime(), source: z.string().default('partner_declared')
@@ -224,6 +225,12 @@ export async function partnerRoutes(app: FastifyInstance) {
           await client.query('rollback');
           return reply.code(409).send({error:'offer_not_current_selection'});
         }
+        // Credentials can expire between selection and acceptance: check again now.
+        const qualificationGaps=await qualificationBlockingReasons(caseId,req.principal.actorId!,client);
+        if(qualificationGaps.length){
+          await client.query('rollback');
+          return reply.code(403).send({error:'qualification_required'});
+        }
 
         const transition=await client.query(
           `select allowed_roles from case_transition_rules where from_state='provider_pending' and to_state='repair_in_progress'`
@@ -292,6 +299,12 @@ export async function partnerRoutes(app: FastifyInstance) {
 
       await audit(req.principal,'respond_offer','match_offer',id,'actor_scoped_offer',{outcome:'accepted',caseId:committedCaseId});
       return {offer:acceptedOffer,case:acceptedCase};
+    }
+
+    const pending = await pool.query(`select case_id from matches_offers where id=$1 and actor_id=$2 and outcome='offered'`,[id,req.principal.actorId]);
+    const pendingCaseId = pending.rows[0]?.case_id as string|null|undefined;
+    if (pendingCaseId && (await qualificationBlockingReasons(pendingCaseId,req.principal.actorId!)).length) {
+      return reply.code(403).send({ error: 'qualification_required' });
     }
 
     const r = await pool.query(
