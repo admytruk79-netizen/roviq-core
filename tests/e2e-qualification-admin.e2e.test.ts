@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.js';
 import { pool } from '../src/db/pool.js';
@@ -100,10 +100,13 @@ describe('identified Ops qualification reviews and routing evidence', () => {
     await pool.query(`create function reject_qualification_test_audit() returns trigger language plpgsql as $$
       begin if new.object_id='${id}' then raise exception 'qualification_test_audit_failure'; end if; return new; end $$`);
     await pool.query(`create trigger reject_qualification_test_audit before insert on audit_log for each row execute function reject_qualification_test_audit()`);
+    const errors = vi.spyOn(console,'error').mockImplementation(() => {});
     try {
       expect((await save(id)).statusCode).toBe(500);
+      expect(errors.mock.calls.some(call => JSON.stringify(call).includes('qualification_test_audit_failure'))).toBe(true);
       expect((await pool.query('select id from actor_qualification_evidence where id=$1',[id])).rowCount).toBe(0);
     } finally {
+      errors.mockRestore();
       await pool.query('drop trigger reject_qualification_test_audit on audit_log');
       await pool.query('drop function reject_qualification_test_audit()');
     }

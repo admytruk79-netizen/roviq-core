@@ -78,7 +78,7 @@ export async function qualificationAdminRoutes(app: FastifyInstance) {
       const result = await client.query(`insert into actor_qualification_evidence
         (id,actor_id,requirement_key,kind,scope,evidence_status,verified_source,verified_by,valid_until,
           review_version,review_reason,reviewed_by_identity_id,reviewed_at)
-        values($1,$2,$3,$4,$5,$6,$7,case when $6='verified' then $8 else null end,$9,1,$10,$8,clock_timestamp())
+        values($1,$2,$3,$4,$5,$6,$7,case when $6='verified' then $8::text else null end,$9,1,$10,$8::uuid,clock_timestamp())
         on conflict(id) do update set evidence_status=excluded.evidence_status,verified_source=excluded.verified_source,
           verified_by=excluded.verified_by,valid_until=excluded.valid_until,review_version=actor_qualification_evidence.review_version+1,
           review_reason=excluded.review_reason,reviewed_by_identity_id=excluded.reviewed_by_identity_id,
