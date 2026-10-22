@@ -3,6 +3,7 @@ import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
 import { audit } from './audit.js';
 import { transitionCase } from './orchestration.js';
+import { assertQualified, casesWithRequirements, qualificationBlockingReasons } from './qualification-gate.js';
 
 // Open job board, Uber-style. Ops (or auto-publish) opens a case to nearby technicians; they claim
 // it, first claim wins. Every job is ranked premium / standard / basic from the vehicle, urgency and
@@ -202,7 +203,14 @@ export async function listOpenJobs(principal: Principal, here: { lat: number; ln
   );
   const now = Date.now();
   const order: Record<JobRank, number> = { premium: 0, standard: 1, basic: 2 };
+  // Jobs whose case requires qualifications this technician does not hold are not shown at all.
+  const gated = await casesWithRequirements(r.rows.map((o) => o.case_id));
+  const blocked = new Set<string>();
+  for (const caseId of gated) {
+    if ((await qualificationBlockingReasons(caseId, principal.actorId)).length) blocked.add(caseId);
+  }
   const jobs = r.rows
+    .filter((o) => !blocked.has(o.case_id))
     .map((o) => {
       const delay = releaseDelaySeconds(o.job_rank, standing.tier, o.urgency);
       const openAt = new Date(o.published_at).getTime() + delay * 1000;
@@ -253,6 +261,7 @@ export async function claimOpenJob(principal: Principal, jobId: string, here: { 
       await client.query('commit');
       throw new Error('open_job_taken');
     }
+    await assertQualified(job.case_id, actorId, client);
     const offer = await client.query(
       `insert into matches_offers(demand_id,case_id,actor_id,score,rank,rule_basis,outcome,responded_at)
        values($1,$2,$3,$4,1,$5,'accepted',now()) returning id`,

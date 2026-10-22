@@ -5,6 +5,7 @@ import {
   claimOpenJob, listOpenJobs, openJobForCase, publishOpenJob, rateProvider, rateableProviders, technicianStanding, withdrawOpenJob
 } from '../../services/open-jobs.js';
 import { audit } from '../../services/audit.js';
+import { QualificationBlockedError } from '../../services/qualification-gate.js';
 
 // Open job board: Ops opens a case to nearby technicians, better-ranked technicians see better jobs
 // first, first claim wins. Customers rate the providers who worked their case, which feeds the rank.
@@ -18,6 +19,7 @@ const STATUS: Record<string, number> = {
 };
 
 function mapped(reply: FastifyReply, error: unknown) {
+  if (error instanceof QualificationBlockedError) return reply.code(403).send({ error: 'qualification_required' });
   const message = error instanceof Error ? error.message : '';
   const status = STATUS[message];
   if (!status) throw error;

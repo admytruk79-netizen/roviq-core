@@ -6,6 +6,7 @@ import { authorizeExistingOfferSelection } from '../../services/selection-author
 import { requireRole } from '../middleware/principal.js';
 import { getOperationalHealthSummary } from '../../services/operations.js';
 import { withdrawOpenJob } from '../../services/open-jobs.js';
+import { qualificationBlockingReasons } from '../../services/qualification-gate.js';
 
 const partnerRepairActorTypes = new Set(['partner','shop','repair_shop','service_provider','dealer','dealership']);
 
@@ -65,6 +66,13 @@ export async function adminRoutes(app: FastifyInstance) {
       if(!actor.rowCount||actor.rows[0].status!=='active'){
         await client.query('rollback');
         return reply.code(409).send({error:'offer_actor_unavailable'});
+      }
+
+      // Ops picking a provider by hand still cannot bypass the case's mandatory qualifications.
+      const qualificationGaps=caseId?await qualificationBlockingReasons(caseId,body.actorId,client):[];
+      if(qualificationGaps.length){
+        await client.query('rollback');
+        return reply.code(409).send({error:'qualification_blocked',reasons:qualificationGaps});
       }
 
       const r = await client.query(
