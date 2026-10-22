@@ -195,13 +195,13 @@ async function productionLifecycle(browser) {
   const carePanel = customer.getByRole('region', { name: 'Vehicle care', exact: true });
   await carePanel.getByLabel('Current reading', { exact: true }).waitFor({ state: 'visible', timeout: 30_000 });
   await carePanel.getByLabel('Current reading', { exact: true }).fill('25000');
-  await carePanel.getByLabel('Odometer unit', { exact: true }).selectOption('miles');
+  await carePanel.getByLabel(/^Odometer unit/).selectOption('miles');
   const readingSaved = customer.waitForResponse(r => r.request().method() === 'PATCH' && r.url().endsWith(`/api/me/vehicles/${caseVehicle.vehicle.id}`));
   await carePanel.getByRole('button', { name: 'Save reading', exact: true }).click();
   assert.ok((await readingSaved).ok(), 'Customer odometer update failed');
   await carePanel.getByLabel('Service name', { exact: true }).fill(marker);
   await carePanel.getByLabel('Odometer threshold (optional)', { exact: true }).fill('24999');
-  await carePanel.getByLabel('Threshold unit', { exact: true }).selectOption('miles');
+  await carePanel.getByLabel(/^Threshold unit/).selectOption('miles');
   await carePanel.getByRole('button', { name: 'Save reminder', exact: true }).click();
   const reminderCard = carePanel.locator('li').filter({ hasText: marker });
   await reminderCard.getByText('— Due', { exact: true }).waitFor({ state: 'visible', timeout: 20_000 });
