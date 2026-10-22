@@ -37,7 +37,10 @@ const vehicleFields = {
 /** A customer adding a vehicle: year, make and model are required, the rest help the network. */
 export const newVehicleSchema = z.object(vehicleFields);
 /** Any correction to an existing vehicle; only supplied fields change. */
-export const vehicleUpdateSchema = z.object(vehicleFields).partial();
+export const vehicleUpdateSchema = z.object(vehicleFields).partial().refine(
+  (v) => v.odometerUnit === undefined || v.odometerValue !== undefined,
+  { message: 'Supply the odometer reading when choosing its unit', path: ['odometerValue'] }
+);
 export type NewVehicle = z.infer<typeof newVehicleSchema>;
 export type VehicleUpdate = z.infer<typeof vehicleUpdateSchema>;
 

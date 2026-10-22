@@ -192,6 +192,25 @@ async function productionLifecycle(browser) {
   assert.ok(customerToken, 'Customer UI did not persist its scoped access token');
   const caseVehicle = await requestJson(`/api/maintenance/cases/${caseId}/vehicle`, { token: customerToken });
   assert.ok(caseVehicle?.vehicle?.make, 'Customer case was created without its vehicle');
+  const carePanel = customer.getByRole('region', { name: 'Vehicle care', exact: true });
+  await carePanel.getByLabel('Current reading', { exact: true }).waitFor({ state: 'visible', timeout: 30_000 });
+  await carePanel.getByLabel('Current reading', { exact: true }).fill('25000');
+  await carePanel.getByLabel('Odometer unit', { exact: true }).selectOption('miles');
+  const readingSaved = customer.waitForResponse(r => r.request().method() === 'PATCH' && r.url().endsWith(`/api/me/vehicles/${caseVehicle.vehicle.id}`));
+  await carePanel.getByRole('button', { name: 'Save reading', exact: true }).click();
+  assert.ok((await readingSaved).ok(), 'Customer odometer update failed');
+  await carePanel.getByLabel('Service name', { exact: true }).fill(marker);
+  await carePanel.getByLabel('Odometer threshold (optional)', { exact: true }).fill('24999');
+  await carePanel.getByLabel('Threshold unit', { exact: true }).selectOption('miles');
+  await carePanel.getByRole('button', { name: 'Save reminder', exact: true }).click();
+  const reminderCard = carePanel.locator('li').filter({ hasText: marker });
+  await reminderCard.getByText('— Due', { exact: true }).waitFor({ state: 'visible', timeout: 20_000 });
+  const savedCare = await requestJson(`/api/me/vehicles/${caseVehicle.vehicle.id}/care`, { token: customerToken });
+  assert.ok(savedCare.history.some(r => r.value === 25000 && r.unit === 'miles'), 'Odometer reading missing from durable history');
+  assert.ok(savedCare.reminders.some(r => r.title === marker && r.due), 'Reminder is not due at recorded mileage');
+  await screenshot(customer, 'lifecycle-01a-vehicle-care');
+  await reminderCard.getByRole('button', { name: 'Mark done', exact: true }).click();
+  await reminderCard.waitFor({ state: 'hidden', timeout: 20_000 });
   await screenshot(customer, 'lifecycle-01-customer-created');
 
   log('2/10 Core: obtain the same real admin session and scoped test-role sessions used by each portal.');
