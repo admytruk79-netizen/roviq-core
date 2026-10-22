@@ -5,7 +5,7 @@ import { api } from '../lib/api';
 type Registry = {
   organizations: { id: string; name: string; managed: boolean }[];
   authorizations: { organization_id: string; service: string; eligible: boolean; effective_state: string; expires_at: string | null; evidence_reference: string; review_reason: string }[];
-  review: { organization_id: string; case_id: string; service: string; reference_type: string; reference_id: string; business_name: string }[];
+  review: { organization_id: string; case_id: string | null; service: string; reference_type: string; reference_id: string; business_name: string }[];
 };
 const services = ['repair','diagnostic','tow','valet','parts','mobility'];
 const field = 'mt-1 w-full rounded border border-slate-300 bg-white p-2 text-slate-900';
@@ -75,7 +75,7 @@ export function ServiceEligibility() {
     </section>
     <section className="rounded-xl border border-slate-200 bg-white p-5 text-slate-900"><h2 className="font-semibold">Existing work requiring credential review ({registry?.review.length ?? 0})</h2>
       <p className="mt-2 text-sm text-slate-600">Review safety and arrange reassignment when needed. Jobs are not automatically cancelled. This list refreshes every 30 seconds.</p>
-      <ul className="mt-3 space-y-2 text-sm">{registry?.review.map(r => <li key={`${r.reference_type}-${r.reference_id}`} className="rounded border border-amber-300 p-3">{r.business_name} · {r.service} · {r.reference_type}<br /><a className="underline" href={`#/cases/${r.case_id}`}>Review case {r.case_id}</a></li>)}</ul>
+      <ul className="mt-3 space-y-2 text-sm">{registry?.review.map(r => <li key={`${r.reference_type}-${r.reference_id}`} className="rounded border border-amber-300 p-3">{r.business_name} · {r.service} · {r.reference_type}<br />{r.case_id ? <a className="underline" href={`#/cases/${r.case_id}`}>Review case {r.case_id}</a> : <span>Standalone repair order {r.reference_id}</span>}</li>)}</ul>
     </section>
   </div>;
 }

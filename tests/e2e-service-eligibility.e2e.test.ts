@@ -129,4 +129,40 @@ describe('business credential handshake at authoritative write boundaries', () =
       payload: { state: 'verified', validFrom: '2040-01-01T00:00:00Z', expiresAt: '2050-01-01T00:00:00Z', evidenceReference: 'future-license', reason: 'Future dated credential' } });
     expect(future.statusCode).toBe(200); expect(await eligible('tow')).toBe(false); await review('tow');
   });
+  it('gates standalone repair approval and first start while preserving an already-started job', async () => {
+    await review('repair', '2050-01-01T00:00:00Z', 'revoked');
+    const order = await pool.query(`insert into shop_repair_orders(organization_id,repair_order_number,created_by_actor_id)
+      values($1,$2,$3) returning id`, [org,randomUUID(),actor]);
+    const id = order.rows[0].id;
+    await expect(pool.query(`update shop_repair_orders set status='approved' where id=$1`, [id])).rejects.toMatchObject({ message: 'service_credential_ineligible' });
+    await review('repair'); await pool.query(`update shop_repair_orders set status='approved' where id=$1`, [id]);
+    await review('repair', '2050-01-01T00:00:00Z', 'revoked');
+    await expect(pool.query(`update shop_repair_orders set status='in_progress',started_at=now() where id=$1`, [id])).rejects.toMatchObject({ message: 'service_credential_ineligible' });
+    await review('repair'); await pool.query(`update shop_repair_orders set status='in_progress',started_at=now() where id=$1`, [id]);
+    await review('repair', '2050-01-01T00:00:00Z', 'revoked');
+    await pool.query(`update shop_repair_orders set status='quality_control' where id=$1`, [id]);
+    const registry = (await app.inject({ method: 'GET', url: '/api/admin/service-eligibility', headers: admin })).json();
+    expect(registry.review.some((r: { reference_id: string; case_id: string | null }) => r.reference_id === id && r.case_id === null)).toBe(true);
+    await review('repair');
+  });
+
+  it('requires repair credentials when a diagnostic job upgrades to physical field repair', async () => {
+    const c = await openCase();
+    const decision = await pool.query(`insert into field_service_decisions(case_id,created_by_actor_id,action,status,summary,operator_context)
+      values($1,$2,'field_repair','proposed','Credential gate validation',$3) returning id`, [c.id,actor,JSON.stringify({operatorActorId:actor})]);
+    const id = decision.rows[0].id;
+    await review('repair', '2050-01-01T00:00:00Z', 'revoked');
+    expect(await eligible('diagnostic')).toBe(true);
+    await expect(pool.query(`update field_service_decisions set status='authorized' where id=$1`, [id])).rejects.toMatchObject({ message: 'service_credential_ineligible' });
+    await review('repair'); await pool.query(`update field_service_decisions set status='authorized' where id=$1`, [id]);
+    await review('repair', '2050-01-01T00:00:00Z', 'revoked');
+    await expect(pool.query(`update field_service_decisions set status='in_progress' where id=$1`, [id])).rejects.toMatchObject({ message: 'service_credential_ineligible' });
+    await review('repair'); await pool.query(`update field_service_decisions set status='in_progress' where id=$1`, [id]);
+    await review('repair', '2050-01-01T00:00:00Z', 'revoked');
+    const registry = (await app.inject({ method: 'GET', url: '/api/admin/service-eligibility', headers: admin })).json();
+    expect(registry.review.some((r: { reference_id: string }) => r.reference_id === id)).toBe(true);
+    await pool.query(`update field_service_decisions set status='completed' where id=$1`, [id]);
+    await review('repair');
+  });
+
 });

@@ -4,7 +4,7 @@ Scope: Customer and Actor products, Core/Worker builds, all automotive assignmen
 
 ## Closed in this change
 
-Service qualification previously had no central, expiring business credential record. Actor type and capability flags could remain active after a license expired, and checking only the UI would miss alternate API/claim paths. Migration 090 adds authoritative credential checks at database assignment boundaries and locks them against credential changes. Ops can attest, suspend, renew and audit authorizations; expired/missing credentials appear on existing-work review. New onboarding enrolls automatically. Whole-build CI must pass before rollout.
+Service qualification previously had no central, expiring business credential record. Actor type and capability flags could remain active after a license expired, and checking only the UI would miss alternate API/claim paths. Migration 090 adds authoritative credential checks at database assignment boundaries and locks them against credential changes. Ops can attest, suspend, renew and audit authorizations; expired/missing credentials appear on existing-work review. New onboarding enrolls automatically. Follow-up migration 091 covers roadside repair authorization/start after diagnosis and standalone Shop OS repair approval/first start; an existing accepted diagnostic job is not sufficient authorization for physical repair. Whole-build CI must pass before rollout.
 
 ## Material limits and findings still open
 
