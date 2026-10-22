@@ -33,10 +33,18 @@ describe('identified Ops qualification reviews and routing evidence', () => {
   it('requires admin access and an identified reviewer; refuses spoofed reviewer fields', async () => {
     const partner = {'x-roviq-role':'partner','x-roviq-actor-id':actor};
     expect((await app.inject({method:'GET',url:`/api/admin/qualifications/${actor}`,headers:partner})).statusCode).toBe(403);
+    expect((await app.inject({method:'GET',url:'/api/admin/qualifications/actors',headers:partner})).statusCode).toBe(403);
     expect((await save(randomUUID(),payload(),partner)).statusCode).toBe(403);
     expect((await save(randomUUID(),payload(),devAdmin)).statusCode).toBe(403);
     expect((await save(randomUUID(),payload({verified_by:'someone-else'}))).statusCode).toBe(400);
     expect((await registry()).json().evidence).toEqual([]);
+  });
+
+  it('finds the exact operator independently of registry pagination', async () => {
+    const found = await app.inject({method:'GET',url:`/api/admin/qualifications/actors?search=${actor}`,headers:admin});
+    expect(found.statusCode).toBe(200);
+    expect(found.json().actors.map((a: {id:string}) => a.id)).toEqual([actor]);
+    expect(found.json().truncated).toBe(false);
   });
 
   it('registers sourced evidence, evaluates matching requirements, and preserves review provenance', async () => {
@@ -110,5 +118,28 @@ describe('identified Ops qualification reviews and routing evidence', () => {
       await pool.query('drop trigger reject_qualification_test_audit on audit_log');
       await pool.query('drop function reject_qualification_test_audit()');
     }
+  });
+
+  it('audits identified case requirement changes and refuses changes on a closed case', async () => {
+    const url = `/api/admin/qualifications/cases/${caseId}/requirements/safety-hv`;
+    const input = {kind:'training',scope:'vehicle-x/hv',mandatory:true,reason:'Confirmed task-specific safety requirements'};
+    const write = (headers: Record<string,string>, change = {}) => app.inject({method:'PUT',url,headers,payload:{...input,...change}});
+    expect((await write(devAdmin)).statusCode).toBe(403);
+    expect((await write({'x-roviq-role':'partner','x-roviq-actor-id':actor})).statusCode).toBe(403);
+    // Demand intake automatically runs triage/routing; stage the intake guard explicitly.
+    await pool.query(`update service_cases set state='intake',selected_actor_id=null where id=$1`,[caseId]);
+    expect((await write(admin)).statusCode).toBe(409);
+    await pool.query(`update service_cases set state='triage' where id=$1`,[caseId]);
+    const created = await write(admin); expect(created.statusCode).toBe(200);
+    expect(created.json()).toMatchObject({requirement:{requirement_key:'safety-hv',mandatory:true},rerouteRequired:true});
+    expect((await write(admin,{mandatory:false,reason:'Task scope reassessed by administrator'})).statusCode).toBe(200);
+    const requirements = await app.inject({method:'GET',url:`/api/admin/qualifications/cases/${caseId}/requirements`,headers:admin});
+    expect(requirements.statusCode).toBe(200);
+    expect(requirements.json().requirements.find((r: {requirement_key:string}) => r.requirement_key==='safety-hv').mandatory).toBe(false);
+    const audits = await pool.query(`select metadata,principal_identity_id from audit_log where action='upsert_case_qualification' and object_id=$1 order by occurred_at`,[created.json().requirement.id]);
+    expect(audits.rowCount).toBe(2);
+    expect(audits.rows[1]).toMatchObject({principal_identity_id:identityId,metadata:{before:{mandatory:true},after:{mandatory:false}}});
+    await pool.query(`update service_cases set state='cancelled' where id=$1`,[caseId]);
+    expect((await write(admin)).statusCode).toBe(409);
   });
 });

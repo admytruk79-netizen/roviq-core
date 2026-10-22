@@ -50,6 +50,13 @@ jobs:
       - name: Install pinned Playwright runtime
         run: npm install --no-save --ignore-scripts playwright@1.55.0
 
+      - name: Use the canonical Ubuntu package mirror
+        shell: bash
+        run: |
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then
+            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
+          fi
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

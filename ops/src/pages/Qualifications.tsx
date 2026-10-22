@@ -15,6 +15,7 @@ const localDate = (iso: string) => { const d = new Date(iso); return new Date(d.
 
 export function Qualifications() {
   const [search,setSearch] = useState(''); const [query,setQuery] = useState('');
+  const [searchRevision,setSearchRevision] = useState(0);
   const [actors,setActors] = useState<Actor[]>([]); const [truncated,setTruncated] = useState(false);
   const [actor,setActor] = useState(''); const [registry,setRegistry] = useState<Registry | null>(null);
   const [id,setId] = useState(''); const [version,setVersion] = useState(0);
@@ -33,7 +34,7 @@ export function Qualifications() {
       .then(r => { if(active) { setActors(r.actors); setTruncated(r.truncated); } })
       .catch(() => { if(active) setError('Could not load operators. Search again to retry.'); });
     return () => { active=false; };
-  },[query]);
+  },[query,searchRevision]);
   useEffect(() => {
     let active = true; setRegistry(null); setEvaluation(null); setError(''); setNotice(''); reset();
     if(actor) api.get<Registry>(`/api/admin/qualifications/${actor}`).then(r => { if(active) setRegistry(r); })
@@ -77,9 +78,9 @@ export function Qualifications() {
     <p className="text-sm text-slate-500">Review technician and operator evidence against case-specific requirements. Business service authorizations are managed separately in Eligibility. Only identified administrators can record reviews.</p>
     {error && <p role="alert" className="text-red-600">{error}</p>}{notice && <p role="status" className="text-emerald-600">{notice}</p>}
     <section className="space-y-3 rounded-xl border border-slate-200 bg-white p-5 text-slate-900">
-      <form onSubmit={e => { e.preventDefault(); setQuery(search); }} className="flex items-end gap-2"><label className="flex-1">Find operator<input className={field} value={search} onChange={e => setSearch(e.target.value)} placeholder="Business, operator name or actor ID" maxLength={150} /></label><button disabled={busy} className="min-h-11 underline">Search</button></form>
+      <form onSubmit={e => { e.preventDefault(); setError(''); setQuery(search); setSearchRevision(v => v+1); }} className="flex items-end gap-2"><label className="flex-1">Find operator<input className={field} value={search} onChange={e => setSearch(e.target.value)} placeholder="Business, operator name or actor ID" maxLength={150} /></label><button disabled={busy} className="min-h-11 underline">Search</button></form>
       {truncated && <p className="text-sm">Showing the first 100 operators. Narrow your search.</p>}
-      <label className="block">Operator<select disabled={busy} className={field} value={actor} onChange={e => setActor(e.target.value)}><option value="">Choose an operator</option>{actors.map(a => <option key={a.id} value={a.id}>{a.display_name || a.id} · {a.business_name || a.actor_type} · {a.status}</option>)}</select></label>
+      <label className="block">Operator<select aria-label="Operator" disabled={busy} className={field} value={actor} onChange={e => setActor(e.target.value)}><option value="">Choose an operator</option>{actors.map(a => <option key={a.id} value={a.id}>{a.display_name || a.id} · {a.business_name || a.actor_type} · {a.status}</option>)}</select></label>
       {actor && <button disabled={busy} className="min-h-11 underline" onClick={reload}>Reload evidence</button>}
     </section>
     {actor && registry && <>
@@ -92,9 +93,9 @@ export function Qualifications() {
           <legend className="mb-2 font-semibold">{version ? `Review record · version ${version}` : 'Register evidence'}</legend>
           <p className="text-sm sm:col-span-2">Check the document and its issuer outside this form. Record a private evidence reference and your decision. This form does not verify credentials with an issuer. Requirement keys, kind and scope must match the case requirements exactly. Dates use local time.</p>
           <label>Requirement key<input required maxLength={150} readOnly={Boolean(registry.evidence.find(e => e.id===id))} className={field} value={key} onChange={e => setKey(e.target.value)} /></label>
-          <label>Kind<select disabled={busy || Boolean(registry.evidence.find(e => e.id===id))} className={field} value={kind} onChange={e => setKind(e.target.value)}>{kinds.map(k => <option key={k}>{k}</option>)}</select></label>
+          <label>Kind<select aria-label="Kind" disabled={busy || Boolean(registry.evidence.find(e => e.id===id))} className={field} value={kind} onChange={e => setKind(e.target.value)}>{kinds.map(k => <option key={k}>{k}</option>)}</select></label>
           <label>Scope (optional)<input maxLength={200} readOnly={Boolean(registry.evidence.find(e => e.id===id))} className={field} value={scope} onChange={e => setScope(e.target.value)} /></label>
-          <label>Decision<select className={field} value={status} onChange={e => setStatus(e.target.value)}>{['unverified','verified','expired','revoked'].map(s => <option key={s}>{s}</option>)}</select></label>
+          <label>Decision<select aria-label="Decision" className={field} value={status} onChange={e => setStatus(e.target.value)}>{['unverified','verified','expired','revoked'].map(s => <option key={s}>{s}</option>)}</select></label>
           <label className="sm:col-span-2">Evidence source / reference<input required minLength={3} maxLength={500} className={field} value={source} onChange={e => setSource(e.target.value)} /></label>
           <label>Expires at<input type="datetime-local" required={!noExpiry} disabled={noExpiry} className={field} value={expiry} onChange={e => setExpiry(e.target.value)} /></label>
           <label className="flex items-center gap-2"><input type="checkbox" checked={noExpiry} onChange={e => setNoExpiry(e.target.checked)} />Evidence has no recorded expiry</label>
