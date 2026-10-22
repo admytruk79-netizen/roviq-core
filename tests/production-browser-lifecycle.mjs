@@ -243,6 +243,8 @@ async function productionLifecycle(browser) {
   await screenshot(ops, 'lifecycle-01c-service-eligibility');
   await gotoStable(ops, `${PORTALS.ops}#/qualifications`);
   await ops.getByRole('heading', { name: 'Operator qualifications', exact: true }).waitFor({ state: 'visible', timeout: 30_000 });
+  const qualificationActors = await requestJson(`/api/admin/qualifications/actors?search=${encodeURIComponent(partnerSession.principal.actorId)}`, { token: adminToken });
+  assert.ok(qualificationActors.actors.some(a => a.id === partnerSession.principal.actorId), 'Qualification operator search did not return the scoped test provider');
   await ops.getByLabel('Find operator', { exact: true }).fill(partnerSession.principal.actorId);
   await ops.getByRole('button', { name: 'Search', exact: true }).click();
   await ops.getByLabel('Operator', { exact: true }).locator(`option[value="${partnerSession.principal.actorId}"]`).waitFor({ state: 'attached' });
