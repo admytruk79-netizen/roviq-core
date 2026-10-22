@@ -293,7 +293,7 @@ export async function loadActorQualifications(
       where actor_id=$1 and requirement_key=any($2::text[])`,
     [actorId,requirements.map(r=>r.id)]
   );
-  const evidence:Evidence[]=evidenceRows.rows.map((row:any)=>({
+  const evidence:Evidence[]=evidenceRows.rows.filter((row:any)=>requirements.some(r=>r.id===row.requirement_key&&r.kind===row.kind)).map((row:any)=>({
     requirementId:row.requirement_key,
     // "verified" must carry a provenance reference; status alone is insufficient.
     status:row.evidence_status==='verified'&&!row.verified_source?'unverified':row.evidence_status,
