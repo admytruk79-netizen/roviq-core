@@ -183,4 +183,56 @@ export async function qualificationAdminRoutes(app: FastifyInstance) {
     return { requirements:requirements.rows };
   });
 
+  app.get('/api/admin/qualifications/cases/:caseId/recovery', admin, async (req) => {
+    const {caseId}=z.object({caseId:z.string().uuid()}).parse(req.params);
+    await assertAdminCaseScope(req.principal,caseId,pool);
+    const found=await pool.query('select * from qualification_recovery_cases where case_id=$1 order by created_at desc',[caseId]);
+    return {recoveries:found.rows};
+  });
+
+  app.post('/api/admin/qualifications/recovery/:id/resolve', admin, async (req,reply) => {
+    const {id}=z.object({id:z.string().uuid()}).parse(req.params);
+    const body=z.object({
+      type:z.enum(['verified_alternative','provider_reassigned','case_cancelled']),
+      note:z.string().trim().min(10).max(1500),
+      evidenceReference:z.string().trim().min(3).max(500)
+    }).strict().parse(req.body);
+    const identity=validIdentityId(req.principal.identityId);
+    if(!identity)return reply.code(403).send({error:'identified_admin_required'});
+    const client=await pool.connect();
+    try {
+      await client.query('begin');
+      const found=await client.query('select * from qualification_recovery_cases where id=$1 for update',[id]);
+      if(!found.rowCount){await client.query('rollback');return reply.code(404).send({error:'recovery_not_found'});}
+      const item=found.rows[0];
+      await assertAdminCaseScope(req.principal,item.case_id,client);
+      if(item.state!=='open'){await client.query('rollback');return reply.code(409).send({error:'recovery_already_closed'});}
+      const caseResult=await client.query('select state,selected_actor_id from service_cases where id=$1 for update',[item.case_id]);
+      const sc=caseResult.rows[0];
+      if(!sc){await client.query('rollback');return reply.code(404).send({error:'case_not_found'});}
+      if(body.type==='verified_alternative'){
+        const decision=await loadActorQualifications(item.case_id,item.actor_id,client,new Date());
+        if(decision.decision!=='eligible'){await client.query('rollback');return reply.code(409).send({error:'qualifications_not_satisfied'});}
+      }
+      if(body.type==='provider_reassigned'&&(!sc.selected_actor_id||sc.selected_actor_id===item.actor_id)){
+        await client.query('rollback');return reply.code(409).send({error:'reassignment_not_verified'});
+      }
+      if(body.type==='case_cancelled'&&sc.state!=='cancelled'){
+        await client.query('rollback');return reply.code(409).send({error:'cancellation_not_verified'});
+      }
+      const updated=await client.query(
+        `update qualification_recovery_cases set state='resolved',resolution_type=$2,resolution_note=$3,evidence_reference=$4,
+           resolved_by_identity_id=$5,resolved_at=now(),updated_at=now() where id=$1 returning *`,
+        [id,body.type,body.note,body.evidenceReference,identity]
+      );
+      await client.query(
+        `insert into audit_log(principal_role,principal_identity_id,action,object_type,object_id,metadata)
+           values('admin',$1,'resolve_qualification_recovery','qualification_recovery_case',$2,$3)`,
+        [identity,id,JSON.stringify({caseId:item.case_id,resolutionType:body.type,evidenceReference:body.evidenceReference})]
+      );
+      await client.query('commit');
+      return {recovery:updated.rows[0]};
+    }catch(error){await client.query('rollback');throw error;}finally{client.release();}
+  });
+
 }
