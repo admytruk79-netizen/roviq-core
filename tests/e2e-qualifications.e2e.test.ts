@@ -92,7 +92,7 @@ describe('qualification gates', () => {
     expect((await app.inject({ method: 'POST', url: '/api/admin/offers', headers: admin, payload: { demandId, actorId: qualified } })).statusCode).toBe(201);
   });
 
-  it('checks again at acceptance, so a credential revoked after the offer blocks it', async () => {
+  it('withdraws an open offer when its required credential is revoked', async () => {
     const tech = await actor('diagnostic');
     const evidenceId = randomUUID();
     expect((await review(tech, evidenceId)).statusCode).toBe(200);
@@ -100,12 +100,14 @@ describe('qualification gates', () => {
     await requireEv(caseId);
     await app.inject({ method: 'POST', url: `/api/maintenance/cases/${caseId}/transition`, headers: admin, payload: { toState: 'diagnostic_pending' } });
     const offer = JSON.parse((await app.inject({ method: 'POST', url: '/api/admin/offers', headers: admin, payload: { demandId, actorId: tech } })).body).offer;
-    expect((await review(tech, evidenceId, { expectedVersion: 1, status: 'revoked', reason: 'Issuer revoked the certificate' })).statusCode).toBe(200);
+    const revoked = await review(tech, evidenceId, { expectedVersion: 1, status: 'revoked', reason: 'Issuer revoked the certificate' });
+    expect(revoked.statusCode).toBe(200);
+    expect(revoked.json().impactedCases).toContainEqual({caseId, outcome:'provider_qualification_reroute_required'});
     const accept = await app.inject({ method: 'POST', url: `/api/offers/${offer.id}/respond`, headers: as('diagnostic', tech), payload: { outcome: 'accepted' } });
-    expect(accept.statusCode).toBe(403);
-    expect((await pool.query('select outcome from matches_offers where id=$1', [offer.id])).rows[0].outcome).toBe('offered');
-    // Declining still works.
-    expect((await app.inject({ method: 'POST', url: `/api/offers/${offer.id}/respond`, headers: as('diagnostic', tech), payload: { outcome: 'declined' } })).statusCode).toBe(200);
+    expect(accept.statusCode).toBe(404);
+    expect((await pool.query('select outcome from matches_offers where id=$1', [offer.id])).rows[0].outcome).toBe('declined');
+    expect((await pool.query('select current_owner_actor_id from service_cases where id=$1',[caseId])).rows[0].current_owner_actor_id).not.toBe(tech);
+    expect((await pool.query("select id from case_exceptions where case_id=$1 and exception_code='PROVIDER_QUALIFICATION_REVIEW'",[caseId])).rowCount).toBe(1);
   });
 
   it('keeps the who-qualifies list admin-only', async () => {

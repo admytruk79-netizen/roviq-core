@@ -60,7 +60,10 @@ function fixture() {
     }
     if (sql.startsWith('select actor_id from participant_acceptances')) return rows(state.acceptance?.decision === 'accepted' ? [state.acceptance] : []);
     if (sql.includes('from case_constraints')) return rows(state.constraints);
-    if (sql.includes('from network_handoffs')) return rows(state.handoffs.filter(h => h.fulfillment_plan_id === p[0]));
+    if (sql.includes('from network_handoffs')) return rows(state.handoffs.filter(h =>
+      sql.includes('where service_case_id=$1')
+        ? h.service_case_id === p[0] && (p[1] == null || h.fulfillment_plan_id === p[1] || h.fulfillment_plan_id == null)
+        : h.fulfillment_plan_id === p[0]));
     if (sql.startsWith('insert into completion_outcomes')) {
       state.outcome = { outcome: sql.includes("'cancelled'") ? 'cancelled' : 'completed', snapshot: JSON.parse(p[2]) };
       return rows([state.outcome]);

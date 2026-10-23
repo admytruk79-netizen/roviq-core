@@ -68,8 +68,23 @@ test('accepted plan with fulfilled dependencies records the shared completion sn
   const snapshot = JSON.parse(db.writes[0].params[2]);
   assert.equal(snapshot.handoffs.length, 3);
 });
-test('legacy case without a fulfillment plan currently bypasses network dependency checks', async () => {
+test('a missing plan cannot bypass recorded warranty and handoff dependencies', async () => {
   const db = database(null, [{ constraint_type: 'warranty', status: 'pending' }]);
-  assert.equal((await core.evaluateFulfillmentCompletion('case', db)).ready, true);
-  // This documents an existing compatibility path requiring caller-level review.
+  assert.equal((await core.evaluateFulfillmentCompletion('case', db)).ready, false);
+  await assert.rejects(core.recordCompletionOutcome({caseId:'case'},db),/fulfillment_not_complete/);
+  assert.equal(db.writes.length,0);
+  const unfinished = database(null, [], [{handoff_type:'transport',status:'in_progress'}]);
+  await assert.rejects(core.recordCompletionOutcome({caseId:'case'},unfinished),/fulfillment_not_complete/);
+  assert.equal(unfinished.writes.length,0);
+});
+test('a legacy completion retains its checked dependencies and explicit verification mode', async () => {
+  const db = database(null,[{constraint_type:'authorization',status:'satisfied'}],[{handoff_type:'transport',status:'completed'}]);
+  const result=await core.evaluateFulfillmentCompletion('case',db);
+  assert.equal(result.ready,true);
+  assert.equal(result.verificationMode,'legacy_dependency_check');
+  await core.recordCompletionOutcome({caseId:'case'},db);
+  const snapshot=JSON.parse(db.writes[0].params[2]);
+  assert.equal(snapshot.verificationMode,'legacy_dependency_check');
+  assert.equal(snapshot.constraints.length,1);
+  assert.equal(snapshot.handoffs.length,1);
 });
