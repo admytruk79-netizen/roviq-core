@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { pool } from '../../db/pool.js';
 import { validIdentityId } from '../../services/audit.js';
 import { loadActorQualifications } from '../../services/serviceability-gate.js';
+import { assertAdminCaseScope } from '../../services/admin-case-scope.js';
 import { requireRole } from '../middleware/principal.js';
 
 const kinds = z.enum(['legal_license','oem_certification','manufacturer_access','training','equipment','facility','parts','capacity','authorization']);
@@ -118,6 +119,7 @@ export async function qualificationAdminRoutes(app: FastifyInstance) {
         await client.query('rollback');
         return reply.code(404).send({ error: 'case_not_found' });
       }
+      await assertAdminCaseScope(req.principal,params.caseId,client);
       if (serviceCase.rows[0].selected_actor_id ||
           !['triage','diagnostic_pending','diagnostic_in_progress','provider_selection'].includes(serviceCase.rows[0].state)) {
         await client.query('rollback');
@@ -142,6 +144,21 @@ export async function qualificationAdminRoutes(app: FastifyInstance) {
           caseId:params.caseId, before:previous.rows[0]??null, after:result.rows[0], reason:body.reason
         })]
       );
+      // Invalidate the last eligibility snapshot without deleting historical decisions.
+      // Previously recommended actors must not be presented as current after policy changes.
+      const activeCase=await client.query('select demand_id from service_cases where id=$1',[params.caseId]);
+      await client.query('update service_cases set recommended_actor_id=null,updated_at=now() where id=$1',[params.caseId]);
+      const demandId=activeCase.rows[0]?.demand_id;
+      if(demandId){
+        await client.query(
+          `insert into routing_decisions(demand_id,eligible_actor_ids,rejected_candidates,ranking_trace,
+              selected_actor_id,recommended_actor_id,selection_mode,decision_basis)
+            select $1,'[]'::jsonb,'[]'::jsonb,'[]'::jsonb,null,null,coalesce(selection_mode,'customer_choice'),
+              'qualification_requirements_changed:reroute_required'
+            from service_cases where id=$2`,
+          [demandId,params.caseId]
+        );
+      }
       await client.query('commit');
       return { requirement:result.rows[0], rerouteRequired:true };
     } catch (error) {
@@ -152,6 +169,7 @@ export async function qualificationAdminRoutes(app: FastifyInstance) {
 
   app.get('/api/admin/qualifications/cases/:caseId/requirements', admin, async (req, reply) => {
     const { caseId } = z.object({ caseId:z.string().uuid() }).parse(req.params);
+    await assertAdminCaseScope(req.principal,caseId,pool);
     const serviceCase = await pool.query('select id from service_cases where id=$1', [caseId]);
     if (!serviceCase.rowCount) return reply.code(404).send({ error:'case_not_found' });
     const requirements = await pool.query(
