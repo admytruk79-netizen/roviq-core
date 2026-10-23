@@ -95,7 +95,6 @@ export async function markServiceProviderWorkCompleted(caseId:string,queryable?:
 export async function evaluateFulfillmentCompletion(caseId:string,queryable?:Queryable){
   const db=queryable??pool;
   const plan=await latestPlanForCase(caseId,db);
-  if(!plan) return {plan:null,ready:true,blockers:[],constraints:[],handoffs:[]};
 
   const [constraintsResult,handoffsResult]=await Promise.all([
     db.query(
@@ -108,14 +107,16 @@ export async function evaluateFulfillmentCompletion(caseId:string,queryable?:Que
     db.query(
       `select handoff_type,status,reference_type,reference_id,participant_actor_id,metadata
          from network_handoffs
-        where fulfillment_plan_id=$1
+        where service_case_id=$1
+          and ($2::uuid is null or fulfillment_plan_id=$2 or fulfillment_plan_id is null)
         order by created_at asc,id asc`,
-      [plan.id]
+      [caseId,plan?.id??null]
     )
   ]);
   const blockers=completionBlockers({constraints:constraintsResult.rows,handoffs:handoffsResult.rows});
-  const ready=plan.status==='accepted'&&blockers.length===0;
-  return {plan,ready,blockers,constraints:constraintsResult.rows,handoffs:handoffsResult.rows};
+  const ready=(!plan||plan.status==='accepted')&&blockers.length===0;
+  const verificationMode=plan?'coordinated_plan':'legacy_dependency_check';
+  return {plan,ready,verificationMode,blockers,constraints:constraintsResult.rows,handoffs:handoffsResult.rows};
 }
 
 export async function recordCompletionOutcome(input:{
@@ -125,12 +126,13 @@ export async function recordCompletionOutcome(input:{
 },queryable?:Queryable){
   const db=queryable??pool;
   const evaluation=await evaluateFulfillmentCompletion(input.caseId,db);
-  if(evaluation.plan&&!evaluation.ready){
+  if(!evaluation.ready){
     const error=new Error('fulfillment_not_complete') as Error&{blockers?:unknown[]};
     error.blockers=evaluation.blockers;
     throw error;
   }
   const snapshot={
+    verificationMode:evaluation.verificationMode,
     constraints:evaluation.constraints,
     handoffs:evaluation.handoffs
   };
