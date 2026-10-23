@@ -59,7 +59,7 @@ export async function reassessCredentialImpact(
          $2::jsonb
        where not exists(
          select 1 from case_exceptions where case_id=$1
-           and exception_code='PROVIDER_QUALIFICATION_REVIEW' and status='open'
+           and exception_code='PROVIDER_QUALIFICATION_REVIEW'
        )`,
       [row.id,JSON.stringify({actorId,requirementKey,reason})]
     );
