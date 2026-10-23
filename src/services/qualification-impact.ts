@@ -49,6 +49,15 @@ export async function reassessCredentialImpact(
         [row.demand_id,row.id]
       );
     }
+    // Reopen recovery when a later review independently makes work infeasible.
+    await client.query(
+      `insert into qualification_recovery_cases(case_id,actor_id,requirement_key,state)
+       values($1,$2,$3,'open')
+       on conflict(case_id,actor_id,requirement_key)
+       do update set state='open',resolution_type=null,resolution_note=null,
+         evidence_reference=null,resolved_by_identity_id=null,resolved_at=null,updated_at=now()`,
+      [row.id,actorId,requirementKey]
+    );
     const selected = row.selected_actor_id === actorId;
     const reason = selected ? 'assigned_provider_qualification_review' : 'provider_qualification_reroute_required';
     // Prevent duplicate unresolved exceptions for repeated credential reviews.
