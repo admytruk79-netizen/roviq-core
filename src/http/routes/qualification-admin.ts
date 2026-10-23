@@ -4,6 +4,7 @@ import { pool } from '../../db/pool.js';
 import { validIdentityId } from '../../services/audit.js';
 import { loadActorQualifications } from '../../services/serviceability-gate.js';
 import { assertAdminCaseScope } from '../../services/admin-case-scope.js';
+import { reassessCredentialImpact } from '../../services/qualification-impact.js';
 import { requireRole } from '../middleware/principal.js';
 
 const kinds = z.enum(['legal_license','oem_certification','manufacturer_access','training','equipment','facility','parts','capacity','authorization']);
@@ -88,8 +89,11 @@ export async function qualificationAdminRoutes(app: FastifyInstance) {
       await client.query(`insert into audit_log(principal_role,principal_identity_id,action,object_type,object_id,metadata)
         values('admin',$1,'review_actor_qualification','actor_qualification_evidence',$2,$3)`,
       [identity,p.evidenceId,JSON.stringify({ actorId:p.actorId,before:before ?? null,after:result.rows[0] })]);
+      const impactedCases = input.status !== 'verified'
+        ? await reassessCredentialImpact(client,req.principal,p.actorId,input.requirementKey,input.kind)
+        : [];
       await client.query('commit');
-      return { evidence:result.rows[0] };
+      return { evidence:result.rows[0], impactedCases };
     } catch (error) { await client.query('rollback'); throw error; }
     finally { client.release(); }
   });
