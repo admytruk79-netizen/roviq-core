@@ -1,0 +1,74 @@
+name: Android test APKs
+
+# Installable test builds of both apps for a phone, without Google Play. Debug builds are signed
+# with Gradle's debug key, so Android installs them after "Install unknown apps" is allowed for
+# the browser. They open the same production web origins as the Play builds. Each run replaces
+# the APKs on the "test-apk" prerelease, so the download link stays the same.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'android-app/**'
+      - '.github/workflows/android-test-apk.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-test-apk
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      ROVIQ_VERSION_CODE: ${{ github.run_number }}
+      ROVIQ_VERSION_NAME: 1.0.${{ github.run_number }}-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Build both debug APKs
+        working-directory: android-app
+        run: gradle --no-daemon :app:assembleCustomerDebug :app:assembleActorDebug
+
+      - name: Collect APKs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist-apk
+          cp android-app/app/build/outputs/apk/customer/debug/app-customer-debug.apk dist-apk/roviq-customer-test.apk
+          cp android-app/app/build/outputs/apk/actor/debug/app-actor-debug.apk dist-apk/roviq-actor-test.apk
+          ls -l dist-apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: roviq-test-apks-${{ github.run_number }}
+          path: dist-apk/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish to the test-apk prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          notes="Test builds from ${GITHUB_SHA::7} (run ${GITHUB_RUN_NUMBER}). On the phone: download, open, allow installing from this source. Customer = ROVIQ Customer, Actor = ROVIQ Actor (technicians, tow, shops, Ops). Not for Google Play."
+          if gh release view test-apk >/dev/null 2>&1; then
+            gh release edit test-apk --prerelease --title "ROVIQ test APKs" --notes "$notes" --target "$GITHUB_SHA"
+          else
+            gh release create test-apk --prerelease --title "ROVIQ test APKs" --notes "$notes" --target "$GITHUB_SHA"
+          fi
+          gh release upload test-apk dist-apk/roviq-customer-test.apk dist-apk/roviq-actor-test.apk --clobber
