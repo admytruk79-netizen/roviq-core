@@ -63,6 +63,26 @@ export async function reassessCredentialImpact(
        )`,
       [row.id,JSON.stringify({actorId,requirementKey,reason})]
     );
+    // Internal push outbox records only. External push delivery depends on configured
+    // channels and a subscribed recipient; no contact details are copied to payload.
+    // Unique index prevents repeated credential reviews from spamming a case.
+    const recipients = await client.query(
+      `select distinct recipient_id from (
+         select sc.customer_actor_id as recipient_id from service_cases sc where sc.id=$1
+         union all select $2::uuid as recipient_id
+       ) recipients where recipient_id is not null`,
+      [row.id,actorId]
+    );
+    for(const recipient of recipients.rows){
+      await client.query(
+        `insert into notification_outbox(case_id,channel,recipient_type,recipient_id,template_key,payload)
+         values($1,'push','actor',$2,'provider_qualification_disruption',$3::jsonb)
+         on conflict(case_id,recipient_id,template_key)
+           where template_key='provider_qualification_disruption' and case_id is not null
+         do nothing`,
+        [row.id,recipient.recipient_id,JSON.stringify({caseId:row.id,kind:'service_review_required'})]
+      );
+    }
     await appendCaseEvent(row.id,'PROVIDER_QUALIFICATION_CHANGED',principal,{
       actorId,requirementKey,reason,selected,withdrawnOfferIds:offers.rows.map((o:any)=>o.id)
     },client);
