@@ -22,7 +22,7 @@ describe('completion dependency checks without a fulfillment plan',()=>{
   it('shows pending legacy dependencies and writes no completion outcome while blocked',async()=>{
     const id=await fixture(); await handoff(id,'in_progress');
     await pool.query(`insert into case_constraints(service_case_id,constraint_type,status,details)
-      values($1,'warranty','required','{}')`,[id]);
+      values($1,'approval','required','{}')`,[id]);
     const response=await app.inject({method:'GET',url:`/api/admin/maintenance/cases/${id}/fulfillment-readiness`,headers:admin});
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({plan:null,ready:false,verificationMode:'legacy_dependency_check'});
