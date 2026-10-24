@@ -18,6 +18,11 @@ export const businessOnboardingSchema = z.object({
     countryCode: z.string().trim().regex(/^[a-z]{2}$/i).transform(v => v.toUpperCase())
   })
 });
+// Public setup cannot select another role or supply privileged readiness fields.
+export const shopRegistrationSchema = businessOnboardingSchema.omit({ role: true }).strict().extend({
+  location: businessOnboardingSchema.shape.location.strict()
+});
+
 export class BusinessOnboardingError extends Error {
   constructor(public code: string, public status: number) { super(code); }
 }
@@ -25,6 +30,14 @@ const organizationType = { partner: 'repair_partner', diagnostic: 'diagnostic_pr
 
 export async function onboardBusiness(principal: Principal, input: z.infer<typeof businessOnboardingSchema>) {
   if (principal.role !== 'admin') throw new BusinessOnboardingError('forbidden', 403);
+  return provisionBusiness(principal, input, 'ops_business_onboarding');
+}
+
+export async function registerShop(input: z.infer<typeof shopRegistrationSchema>) {
+  return provisionBusiness(null, { ...input, role: 'partner' }, 'shop_self_registration');
+}
+
+async function provisionBusiness(principal: Principal | null, input: z.infer<typeof businessOnboardingSchema>, source: 'ops_business_onboarding' | 'shop_self_registration') {
   const { password, requestId, ...details } = input;
   // No password or password-derived digest is stored in actor attributes or audit metadata.
   const fingerprint = createHash('sha256').update(JSON.stringify(details)).digest('hex');
@@ -39,7 +52,7 @@ export async function onboardBusiness(principal: Principal, input: z.infer<typeo
       where a.id=$1`, [requestId, input.email]);
     if (previous.rowCount) {
       const row = previous.rows[0];
-      if (row.attributes.onboardingFingerprint !== fingerprint || !row.active ||
+      if (row.attributes.onboardingSource !== source || row.attributes.onboardingFingerprint !== fingerprint || !row.active ||
           !verifyPasswordConstantTime(password, row.password_salt, row.password_hash)) {
         throw new BusinessOnboardingError('onboarding_retry_conflict', 409);
       }
@@ -59,7 +72,7 @@ export async function onboardBusiness(principal: Principal, input: z.infer<typeo
     const locationId = location.rows[0].id;
     await client.query(`insert into actors(id,domain_id,actor_type,status,organization_id,location_id,attributes)
       values($1,$2,$3,'active',$4,$5,$6)`, [requestId, domain.rows[0].id, input.role, organizationId, locationId,
-      JSON.stringify({ displayName: input.operatorName, onboardingFingerprint: fingerprint, onboardingSource: 'ops_business_onboarding' })]);
+      JSON.stringify({ displayName: input.operatorName, onboardingFingerprint: fingerprint, onboardingSource: source })]);
     const { salt, hash } = hashPassword(password);
     const identity = await client.query(`insert into principal_identities(actor_id,email,role,password_salt,password_hash)
       values($1,$2,$3,$4,$5) returning id`, [requestId, input.email, input.role, salt, hash]);
@@ -68,9 +81,10 @@ export async function onboardBusiness(principal: Principal, input: z.infer<typeo
         values($1,false,false)`, [requestId]);
     }
     await client.query(`insert into audit_log(principal_role,principal_actor_id,principal_identity_id,action,object_type,object_id,rule_basis,metadata)
-      values('admin',$1,$2,'onboard_business','actor',$3,'ops_business_onboarding',$4)`,
-    [principal.actorId ?? null, validIdentityId(principal.identityId), requestId,
-      JSON.stringify({ organizationId, locationId, identityId: identity.rows[0].id, role: input.role, readiness: 'configuration_required' })]);
+      values($5,$1,$2,'onboard_business','actor',$3,$6,$4)`,
+    [principal?.actorId ?? (source === 'shop_self_registration' ? requestId : null),
+      validIdentityId(principal?.identityId) ?? (source === 'shop_self_registration' ? identity.rows[0].id : null), requestId,
+      JSON.stringify({ organizationId, locationId, identityId: identity.rows[0].id, role: input.role, readiness: 'configuration_required' }), principal?.role ?? 'partner', source]);
     await client.query('commit');
     return { actorId: requestId, organizationId, locationId, identityId: identity.rows[0].id,
       role: input.role, email: input.email, readiness: 'configuration_required', replayed: false };
@@ -88,7 +102,7 @@ export async function listOnboardedBusinesses() {
     from actors a join organizations o on o.id=a.organization_id
     join locations l on l.id=a.location_id
     join principal_identities p on p.actor_id=a.id and p.role=a.actor_type
-    where a.attributes->>'onboardingSource'='ops_business_onboarding'
+    where a.attributes->>'onboardingSource' in ('ops_business_onboarding','shop_self_registration')
     order by a.created_at desc,a.id limit 100`);
   return result.rows;
 }
