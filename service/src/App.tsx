@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { deepLink, isTabSignOut, lastTab, rememberTab, restoreSession, signIn, signInMessage, signOut, workspaceFor, type Role, type ServiceSession } from './session';
 import { legacyCustomerReturn } from './product-links';
+import { RegisterShop } from './RegisterShop';
 import roviqLogo from './brand/roviq-lockup-dark.svg';
 import roviqMark from './brand/roviq-mark-dark.svg';
 
@@ -9,7 +10,8 @@ function SignIn({ onSignedIn, notice }: { onSignedIn: (session: ServiceSession) 
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [view, setView] = useState<'home' | 'sign-in'>('home');
+  const [view, setView] = useState<'home' | 'sign-in' | 'register'>(() => new URLSearchParams(window.location.search).get('setup') === 'shop' ? 'register' : 'home');
+  const [createdNotice, setCreatedNotice] = useState('');
   const [showPassword, setShowPassword] = useState(false);
 
   async function submit(event: FormEvent) {
@@ -33,6 +35,7 @@ function SignIn({ onSignedIn, notice }: { onSignedIn: (session: ServiceSession) 
         <div className="topbar-row">
           <p className="brand"><img className="roviq-logo" src={roviqLogo} alt="ROVIQ" /><img className="roviq-logo-mark" src={roviqMark} alt="ROVIQ" /></p>
           <nav className="guest-nav" aria-label="Public navigation">
+            <button type="button" aria-current={view === 'register' ? 'page' : undefined} onClick={() => setView('register')}>Create your shop</button>
             <button type="button" aria-current={view === 'home' ? 'page' : undefined} onClick={() => setView('home')}>Home</button>
             <button type="button" className={view === 'sign-in' ? 'guest-nav-action active' : 'guest-nav-action'} aria-current={view === 'sign-in' ? 'page' : undefined} onClick={() => setView('sign-in')}>Sign in</button>
           </nav>
@@ -59,11 +62,14 @@ function SignIn({ onSignedIn, notice }: { onSignedIn: (session: ServiceSession) 
             </div>
           </div>
         </main>
+      ) : view === 'register' ? (
+        <main id="main-content" className="signin"><RegisterShop onBack={() => setView('sign-in')} onCreated={(registeredEmail) => { setEmail(registeredEmail); setPassword(''); setCreatedNotice('Your shop workspace is ready. Sign in to begin setup.'); setView('sign-in'); }} /></main>
       ) : (
         <main id="main-content" className="signin">
           <form className="signin-card" onSubmit={submit} aria-busy={busy}>
             <h1>Sign in to ROVIQ Actor</h1>
             <p className="hint">Your account opens only the tabs you are allowed to use.</p>
+            {createdNotice && <p className="notice" role="status">{createdNotice}</p>}
             {notice && <p className="notice" role="status">{notice}</p>}
             <label>Email<input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} /></label>
             <label>Password<span className="password-row"><input type={showPassword ? 'text' : 'password'} autoComplete="current-password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} /><button type="button" className="password-toggle" aria-label={showPassword ? 'Hide password' : 'Show password'} aria-pressed={showPassword} onClick={() => setShowPassword(!showPassword)}>{showPassword ? 'Hide' : 'Show'}</button></span></label>
