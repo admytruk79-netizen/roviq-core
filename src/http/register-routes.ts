@@ -30,6 +30,7 @@ import { mobilityRoutes } from './routes/mobility.js';
 import { partsRoutes } from './routes/parts.js';
 import { paymentRoutes } from './routes/payments.js';
 import { paymentWebhookRoutes } from './routes/payment-webhooks.js';
+import { shopEstimatePublicRoutes } from './routes/shop-estimates-public.js';
 import { notificationRoutes } from './routes/notifications.js';
 import { triageRoutes } from './routes/triage.js';
 import { integrationRoutes } from './routes/integrations.js';
@@ -66,7 +67,7 @@ const routeModules: RouteModule[] = [
   { name: 'coordination', plugins: [routingRoutes, triageRoutes, triageEvaluationRoutes, coherenceRoutes, connectedVehicleRoutes, networkOrchestrationRoutes, networkInventoryRoutes] },
   { name: 'service-operations', plugins: [diagnosticRoutes, openJobRoutes, qualificationRoutes, fieldServiceRoutes, transportRoutes, mobilityRoutes, partsRoutes] },
   { name: 'shop-os', plugins: [shopOsRoutes, shopOsDeferredAppointmentChoiceRoutes, shopOsFloorRoutes] },
-  { name: 'financial-and-communications', plugins: [paymentWebhookRoutes, paymentRoutes, commerceRoutes, notificationRoutes] },
+  { name: 'financial-and-communications', plugins: [paymentWebhookRoutes, shopEstimatePublicRoutes, paymentRoutes, commerceRoutes, notificationRoutes] },
   { name: 'integration-and-observability', plugins: [integrationRoutes, analyticsRoutes, localRoutes, pilotRoutes, inventoryRoutes] },
   { name: 'actor-surfaces', plugins: [partnerRoutes, adminRoutes, integrationsStatusRoutes, manufacturingRoutes] }
 ];

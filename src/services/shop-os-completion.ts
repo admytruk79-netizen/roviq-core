@@ -47,9 +47,9 @@ export async function createRepairOrderPartRequirement(principal:Principal,input
     await client.query('begin');
     const discovered=await client.query('select service_case_id from shop_repair_orders where id=$1',[input.repairOrderId]);
     if(!discovered.rowCount) throw httpError('repair_order_not_found',404);
+    // A walk-in repair order has no ROVIQ case: its parts are tracked on the repair order alone.
     const caseId=discovered.rows[0].service_case_id as string|null;
-    if(!caseId) throw httpError('repair_order_case_required',409);
-    await lockServiceCase(caseId,client);
+    if(caseId) await lockServiceCase(caseId,client);
     const order=await loadOrder(principal,input.repairOrderId,client,true);
     if(order.service_case_id!==caseId) throw httpError('repair_order_case_changed',409);
     if(['closed','cancelled'].includes(order.status)) throw httpError('repair_order_inactive',409);
@@ -60,7 +60,7 @@ export async function createRepairOrderPartRequirement(principal:Principal,input
     if(input.partsOrderId){
       const po=await client.query(`select id,case_id from parts_orders where id=$1`,[input.partsOrderId]);
       if(!po.rowCount) throw httpError('parts_order_not_found',404);
-      if(po.rows[0].case_id!==caseId) throw httpError('parts_order_case_mismatch',409);
+      if(!caseId||po.rows[0].case_id!==caseId) throw httpError('parts_order_case_mismatch',409);
     }
     const created=await client.query(`insert into case_parts_requirements(
       service_case_id,repair_order_id,repair_order_line_id,parts_order_id,part_reference,description,quantity,
@@ -69,7 +69,7 @@ export async function createRepairOrderPartRequirement(principal:Principal,input
       caseId,input.repairOrderId,input.repairOrderLineId,input.partsOrderId??null,input.partReference??null,
       input.description??line.rows[0].description,input.quantity??Number(line.rows[0].quantity),input.eta??null,input.supplierReference??null
     ]);
-    await syncPartsOperationalConstraint(caseId,client);
+    if(caseId) await syncPartsOperationalConstraint(caseId,client);
     await appendEvent(client,input.repairOrderId,'SHOP_OS_PART_REQUIREMENT_CREATED',principal,{requirementId:created.rows[0].id,lineId:input.repairOrderLineId});
     await client.query('commit');
     return created.rows[0];
@@ -84,8 +84,8 @@ export async function updateRepairOrderPartRequirement(principal:Principal,requi
     await client.query('begin');
     const discovered=await client.query('select service_case_id from case_parts_requirements where id=$1',[requirementId]);
     if(!discovered.rowCount) throw httpError('part_requirement_not_found',404);
-    const caseId=discovered.rows[0].service_case_id as string;
-    await lockServiceCase(caseId,client);
+    const caseId=discovered.rows[0].service_case_id as string|null;
+    if(caseId) await lockServiceCase(caseId,client);
     const current=await client.query(`select cpr.*,ro.organization_id,ro.location_id
       from case_parts_requirements cpr join shop_repair_orders ro on ro.id=cpr.repair_order_id
       where cpr.id=$1 for update`,[requirementId]);
@@ -96,7 +96,7 @@ export async function updateRepairOrderPartRequirement(principal:Principal,requi
     if(input.partsOrderId){
       const po=await client.query(`select id,case_id from parts_orders where id=$1`,[input.partsOrderId]);
       if(!po.rowCount) throw httpError('parts_order_not_found',404);
-      if(po.rows[0].case_id!==caseId) throw httpError('parts_order_case_mismatch',409);
+      if(!caseId||po.rows[0].case_id!==caseId) throw httpError('parts_order_case_mismatch',409);
     }
     const updated=await client.query(`update case_parts_requirements set
       readiness_status=$2,eta=case when $3::boolean then $4::timestamptz else eta end,
@@ -107,7 +107,7 @@ export async function updateRepairOrderPartRequirement(principal:Principal,requi
       Object.prototype.hasOwnProperty.call(input,'supplierReference'),input.supplierReference??null,
       Object.prototype.hasOwnProperty.call(input,'partsOrderId'),input.partsOrderId??null
     ]);
-    await syncPartsOperationalConstraint(caseId,client);
+    if(caseId) await syncPartsOperationalConstraint(caseId,client);
     await appendEvent(client,row.repair_order_id,'SHOP_OS_PART_READINESS_UPDATED',principal,{requirementId,readinessStatus:input.readinessStatus});
     await client.query('commit');
     return updated.rows[0];
@@ -249,7 +249,7 @@ export async function reconcileRepairOrder(principal:Principal,repairOrderId:str
     await client.query('begin');
     const order=await loadOrder(principal,repairOrderId,client,true);
     if(!['completed','closed'].includes(order.status)) throw httpError('repair_order_not_reconcilable',409);
-    if(!order.service_case_id) throw httpError('repair_order_case_required',409);
+    // Walk-in jobs (no ROVIQ case) settle too: their entries carry the repair order only.
     const openWork=await client.query(`select count(*)::int as n from shop_work_items where repair_order_id=$1 and status not in ('completed','cancelled')`,[repairOrderId]);
     if(Number(openWork.rows[0].n)>0) throw httpError('repair_order_work_incomplete',409);
     const openClocks=await client.query(`select count(*)::int as n from shop_technician_time_entries where repair_order_id=$1 and ended_at is null`,[repairOrderId]);

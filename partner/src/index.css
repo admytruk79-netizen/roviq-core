@@ -31,3 +31,11 @@
 /* Inside the ROVIQ Service app the shell shows the logo and one Sign out for every tab. */
 .in-service .brand,.in-service .embed-signout{display:none!important}
 .in-service .header{display:none!important}
+.shop-tabs{position:sticky;top:64px;z-index:20;display:flex;gap:.4rem;overflow-x:auto;padding:.4rem;border:1px solid var(--roviq-line);border-radius:1rem;background:rgba(11,22,36,.92);backdrop-filter:blur(14px);scrollbar-width:none}
+.shop-tabs::-webkit-scrollbar{display:none}
+.shop-tab{flex:0 0 auto;min-height:44px;border:0;border-radius:.7rem;background:transparent;color:var(--roviq-muted);padding:0 1rem;font-weight:700;cursor:pointer;white-space:nowrap}
+.shop-tab:hover{color:var(--roviq-porcelain)}
+.shop-tab.active{background:rgba(228,111,53,.16);color:var(--roviq-copper-soft)}
+.shop-tab:focus-visible{outline:2px solid var(--roviq-copper);outline-offset:2px}
+@media(max-width:640px){.shop-tabs{top:56px}}
+.shop-tab-badge{display:inline-grid;place-items:center;min-width:1.35rem;height:1.35rem;margin-left:.45rem;border-radius:999px;background:var(--roviq-copper);color:#fff;font-size:.72rem;font-weight:800;padding:0 .35rem}

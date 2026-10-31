@@ -170,7 +170,14 @@ export async function getRepairOrder(principal:Principal,repairOrderId:string){
     const lines=await client.query(`select * from shop_repair_order_lines where repair_order_id=$1 order by sort_order,id`,[repairOrderId]);
     const customer=order.shop_customer_id?(await client.query('select id,display_name,email,phone from shop_customers where id=$1 and organization_id=$2',[order.shop_customer_id,order.organization_id])).rows[0]:null;
     const vehicle=order.shop_vehicle_id?(await client.query('select * from shop_vehicles where id=$1 and organization_id=$2',[order.shop_vehicle_id,order.organization_id])).rows[0]:null;
-    return {repairOrder:order,lines:lines.rows,customer,vehicle};
+    // Readable context instead of raw IDs: the booked slot, the technician, and for a ROVIQ network
+    // job the driver's vehicle (never the driver's contact details).
+    const appointment=order.appointment_id?(await client.query(`select a.starts_at,a.ends_at,r.display_name as resource_name
+      from roviq_appointments a left join service_resources r on r.id=a.resource_id where a.id=$1`,[order.appointment_id])).rows[0]??null:null;
+    const technician=order.primary_technician_actor_id?(await client.query(`select coalesce(attributes->>'displayName',attributes->>'name') as name from actors where id=$1`,[order.primary_technician_actor_id])).rows[0]?.name??null:null;
+    const networkVehicle=order.service_case_id?(await client.query(`select cv.year,cv.make,cv.model,cv.license_plate from service_cases sc
+      join customer_vehicles cv on cv.id=coalesce($2::uuid,sc.vehicle_id) where sc.id=$1`,[order.service_case_id,order.customer_vehicle_id])).rows[0]??null:null;
+    return {repairOrder:order,lines:lines.rows,customer,vehicle,appointment,technician,networkVehicle};
   }finally{client.release();}
 }
 

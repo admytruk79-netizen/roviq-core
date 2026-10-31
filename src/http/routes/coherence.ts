@@ -97,7 +97,8 @@ export async function coherenceRoutes(app: FastifyInstance) {
   });
 
   app.get('/api/partners/me/profile', { preHandler: requireRole('partner') }, async (req) => {
-    const r = await pool.query('select id,actor_type,partner_subtype,status,attributes from actors where id=$1',[req.principal.actorId]);
+    const r = await pool.query(`select a.id,a.actor_type,a.partner_subtype,a.status,a.attributes,o.display_name as business_name
+      from actors a left join organizations o on o.id=a.organization_id where a.id=$1`,[req.principal.actorId]);
     return { partner:r.rows[0] ?? null };
   });
 

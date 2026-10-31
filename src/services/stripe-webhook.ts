@@ -3,6 +3,7 @@ import { pool } from '../db/pool.js';
 import { refundPayment, updatePaymentState } from './payments.js';
 import type { Principal } from '../types/principal.js';
 import { applyCheckoutSession } from './stripe-checkout.js';
+import { applyShopCheckoutSession } from './shop-customer-links.js';
 
 type StripeObject={
   id?:string;
@@ -241,6 +242,12 @@ export async function applyStripeWebhook(event:StripeEvent){
   try{
   if(CHECKOUT_PAID_EVENTS.has(event.type)){
     if(!object.id) throw new Error('stripe_webhook_payload_invalid');
+    // A Shop OS walk-in payment, not a ROVIQ case payment.
+    if((object as {metadata?:Record<string,string>}).metadata?.roviq_shop_payment_id){
+      await applyShopCheckoutSession(object as Parameters<typeof applyShopCheckoutSession>[0] & {id:string},'webhook');
+      await finishProviderEvent(event.id,'processed',null);
+      return {shopPayment:true};
+    }
     const result=await applyCheckoutSession(object as Parameters<typeof applyCheckoutSession>[0] & {id:string},'webhook');
     relatedPaymentId=result.paymentId;
     await finishProviderEvent(event.id,'processed',result.paymentId);
