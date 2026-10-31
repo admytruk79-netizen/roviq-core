@@ -164,14 +164,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Dump and restore with the same PostgreSQL 16 tools as the database service. The runner's
+          # default client is newer and writes settings (transaction_timeout) a 16 server rejects.
+          pg16() { docker run --rm --network host -e PGPASSWORD=postgres -v /tmp:/tmp postgres:16 "$@"; }
           SOURCE_MIGRATION_COUNT="$(psql "$DATABASE_URL" -Atqc "select count(*) from schema_migrations")"
           test "$SOURCE_MIGRATION_COUNT" -gt 0
-          pg_dump "$DATABASE_URL" --format=custom --no-owner --no-acl --file=/tmp/roviq-acceptance.dump
+          pg16 pg_dump "$DATABASE_URL" --format=custom --no-owner --no-acl --file=/tmp/roviq-acceptance.dump
           test -s /tmp/roviq-acceptance.dump
 
-          dropdb --if-exists --host=localhost --username=postgres roviq_restore_test
-          createdb --host=localhost --username=postgres roviq_restore_test
-          pg_restore --host=localhost --username=postgres --dbname=roviq_restore_test --no-owner --no-acl /tmp/roviq-acceptance.dump
+          pg16 dropdb --if-exists --host=localhost --username=postgres roviq_restore_test
+          pg16 createdb --host=localhost --username=postgres roviq_restore_test
+          pg16 pg_restore --host=localhost --username=postgres --dbname=roviq_restore_test --no-owner --no-acl /tmp/roviq-acceptance.dump
 
           RESTORE_URL="postgresql://postgres:postgres@localhost:5432/roviq_restore_test"
           RESTORED_MIGRATION_COUNT="$(psql "$RESTORE_URL" -Atqc "select count(*) from schema_migrations")"
