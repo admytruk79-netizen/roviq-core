@@ -168,6 +168,9 @@ export async function createCustomerCheckout(principal: Principal, paymentId: st
 
 // Records a paid Checkout Session against its ROVIQ payment. Used by the customer's return and by
 // the webhook; safe to run more than once for the same session.
+/** Stripe API call with the configured secret key; shared with Shop OS walk-in checkout. */
+export const stripeRequest = stripe;
+
 export async function applyCheckoutSession(session: CheckoutSession, source: 'return' | 'webhook') {
   const paymentId = session.metadata?.roviq_payment_intent_id;
   if (!paymentId) throw new Error('checkout_session_unlinked');

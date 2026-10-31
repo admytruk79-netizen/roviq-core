@@ -402,6 +402,8 @@ async function productionLifecycle(browser) {
   const partnerContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const partner = await partnerContext.newPage();
   await setPortalSession(partner, PORTALS.partner, 'roviq_partner_token', 'roviq_partner_principal', partnerSession);
+  // Shop OS groups ROVIQ offers under its "ROVIQ network" tab.
+  await partner.getByRole('tab', { name: /ROVIQ network/ }).click();
   const offerCard = partner.locator(`[data-case-id="${caseId}"]`).first();
   await offerCard.waitFor({ state: 'visible', timeout: 30_000 });
   await offerCard.getByRole('button', { name: /Accept/i }).click();

@@ -11,6 +11,7 @@ import { UkraineInventory } from './pages/UkraineInventory';
 import { NotFound } from './pages/NotFound';
 import { CoreCases } from './pages/CoreCases';
 import { CoreCaseDetail } from './pages/CoreCaseDetail';
+import { ShopEstimate } from './pages/ShopEstimate';
 
 function App() {
   const Router = import.meta.env.BASE_URL === '/' ? BrowserRouter : HashRouter;
@@ -20,6 +21,7 @@ function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/ukraine" element={<UkraineInventory />} />
+          <Route path="/estimate/:token" element={<ShopEstimate />} />
           {/* The truck inventory lives on its own page; old links go there. */}
           <Route path="/inventory" element={<Navigate to="/ukraine" replace />} />
           <Route element={<ProtectedRoute />}>

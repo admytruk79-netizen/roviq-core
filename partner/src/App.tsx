@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { AuthProvider, useAuth } from './auth';
 import { Dashboard } from './Dashboard';
 import { LocalMap } from './LocalMap';
@@ -13,9 +13,26 @@ import { ShopOsDeferredServiceControl } from './ShopOsDeferredServiceControl';
 import { ShopOsRepairOrderDetailControl } from './ShopOsRepairOrderDetailControl';
 import { CoreCaseQueue } from './CoreCaseQueue';
 import { NetworkSharingControl } from './NetworkSharingControl';
+import { ShopOsTakingsControl } from './ShopOsTakingsControl';
+
+const TABS = [['today', 'Today'], ['schedule', 'Schedule'], ['orders', 'Repair orders'], ['floor', 'Repair floor'], ['takings', 'Takings'], ['network', 'ROVIQ network']] as const;
+type Tab = (typeof TABS)[number][0];
+const TAB_KEY = 'roviq_shop_os_tab';
+
+function savedTab(): Tab {
+  try { const t = localStorage.getItem(TAB_KEY); if (TABS.some(([id]) => id === t)) return t as Tab; } catch { /* storage unavailable */ }
+  return 'today';
+}
 
 function Portal() {
   const { principal } = useAuth();
+  const [tab, setTab] = useState<Tab>(savedTab);
+  const [openOffers, setOpenOffers] = useState(0);
+  function chooseTab(next: Tab) {
+    setTab(next);
+    try { localStorage.setItem(TAB_KEY, next); } catch { /* storage unavailable */ }
+    window.scrollTo({ top: 0 });
+  }
 
   useEffect(() => {
     if (!principal) return;
@@ -38,25 +55,21 @@ function Portal() {
   }, [principal]);
 
   return principal ? (
-    <Dashboard>
-      <section className="mt-8" aria-labelledby="shop-os-heading">
-        <div className="mb-4">
-          <p className="kicker">Operations workspace</p>
-          <h2 id="shop-os-heading" className="mt-1 text-2xl font-bold">Run today’s service work</h2>
-          <p className="muted mt-1 max-w-2xl text-sm">Run direct shop work here, with ROVIQ case handoffs available when your shop joins the network.</p>
-        </div>
-        <ShopOsScheduleControl />
-        <ShopOsWorkspace />
-        <ShopOsRecoveryControl />
-        <ShopOsWaitlistControl />
-        <ShopOsRepairOrderDetailControl />
-        <ShopOsDviControl />
-        <ShopOsFloorControl />
-        <ShopOsDeferredServiceControl />
-      </section>
-      <CoreCaseQueue />
-      <NetworkSharingControl />
-      <LocalMap />
+    <Dashboard showNetwork={tab === 'network'} onOpenOffers={setOpenOffers}>
+      <nav className="shop-tabs mt-6" role="tablist" aria-label="Shop OS sections">
+        {TABS.map(([id, label]) => (
+          <button key={id} id={`tab-${id}`} type="button" role="tab" aria-selected={tab === id} aria-controls="shop-tab-panel"
+            className={tab === id ? 'shop-tab active' : 'shop-tab'} onClick={() => chooseTab(id)}>{label}{id === 'network' && openOffers > 0 && <span className="shop-tab-badge" aria-label={`${openOffers} new offer${openOffers === 1 ? '' : 's'}`}>{openOffers}</span>}</button>
+        ))}
+      </nav>
+      <div id="shop-tab-panel" role="tabpanel" aria-labelledby={`tab-${tab}`}>
+        {tab === 'today' && <><ShopOsWorkspace /><ShopOsRecoveryControl /><ShopOsWaitlistControl /></>}
+        {tab === 'schedule' && <ShopOsScheduleControl />}
+        {tab === 'orders' && <><ShopOsRepairOrderDetailControl /><ShopOsDeferredServiceControl /></>}
+        {tab === 'floor' && <><ShopOsFloorControl /><ShopOsDviControl /></>}
+        {tab === 'takings' && <ShopOsTakingsControl />}
+        {tab === 'network' && <><CoreCaseQueue /><NetworkSharingControl /><LocalMap /></>}
+      </div>
     </Dashboard>
   ) : <Login />;
 }

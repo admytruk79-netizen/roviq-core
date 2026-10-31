@@ -1,5 +1,9 @@
 import { addLocalShopVehicle, createLocalShopIntake, listLocalShopIntake } from '../../services/shop-os-local-intake.js';
 import type { FastifyInstance } from 'fastify';
+import { createCustomerLink, recordCounterPayment, repairOrderPayments } from '../../services/shop-customer-links.js';
+import { getShopTakings } from '../../services/shop-os-takings.js';
+import { pool } from '../../db/pool.js';
+import { resolveShopPrincipalScope } from '../../services/shop-os-scope.js';
 import { z } from 'zod';
 import { requireRole } from '../middleware/principal.js';
 import { createShopOsAppointment } from '../../services/shop-os-appointment-create.js';
@@ -232,7 +236,15 @@ export async function shopOsRoutes(app:FastifyInstance){
       advisorActorId:z.string().uuid().nullable().optional(),primaryTechnicianActorId:z.string().uuid().nullable().optional(),
       internalNotes:z.string().max(10000).nullable().optional()
     }).parse(req.body);
-    return {repairOrder:await updateRepairOrder(req.principal,params.repairOrderId,body)};
+    const repairOrder=await updateRepairOrder(req.principal,params.repairOrderId,body);
+    // Finishing a job settles its revenue and cost straight away, so the shop's takings are current.
+    // Best-effort: the job is already complete; the shop can settle again from the takings view.
+    if(body.action==='complete'||body.action==='close'){
+      await reconcileRepairOrder(req.principal,params.repairOrderId).catch((error)=>{
+        req.log.warn({repairOrderId:params.repairOrderId,reason:error instanceof Error?error.message:String(error)},'shop_os_auto_reconcile_skipped');
+      });
+    }
+    return {repairOrder};
   });
 
   app.post('/api/shop-os/repair-orders/:repairOrderId/parts-requirements',allowed,async(req,reply)=>{
@@ -289,5 +301,46 @@ export async function shopOsRoutes(app:FastifyInstance){
   app.post('/api/shop-os/repair-orders/:repairOrderId/reconcile',allowed,async(req)=>{
     const params=z.object({repairOrderId:z.string().uuid()}).parse(req.params);
     return await reconcileRepairOrder(req.principal,params.repairOrderId);
+  });
+
+  // A private link for a walk-in customer to approve the estimate and pay online.
+  app.post('/api/shop-os/repair-orders/:repairOrderId/customer-link',allowed,async(req,reply)=>{
+    const params=z.object({repairOrderId:z.string().uuid()}).parse(req.params);
+    return reply.code(201).send(await createCustomerLink(req.principal,params.repairOrderId));
+  });
+
+  app.get('/api/shop-os/repair-orders/:repairOrderId/payments',allowed,async(req)=>{
+    const params=z.object({repairOrderId:z.string().uuid()}).parse(req.params);
+    return await repairOrderPayments(req.principal,params.repairOrderId);
+  });
+
+  // A payment taken at the counter: cash, the shop's own card terminal, or other.
+  app.post('/api/shop-os/repair-orders/:repairOrderId/payments',allowed,async(req,reply)=>{
+    const params=z.object({repairOrderId:z.string().uuid()}).parse(req.params);
+    const body=z.object({amount:z.number().positive().max(1_000_000),method:z.enum(['card_terminal','cash','other']),note:z.string().max(500).optional()}).parse(req.body);
+    return reply.code(201).send({payment:await recordCounterPayment(req.principal,params.repairOrderId,body)});
+  });
+
+  app.get('/api/shop-os/takings',allowed,async(req)=>{
+    const q=z.object({from:z.string().datetime({offset:true}),to:z.string().datetime({offset:true}),timeZone:z.string().max(64).optional(),
+      organizationId:z.string().uuid().optional(),locationId:z.string().uuid().optional()}).parse(req.query);
+    if(new Date(q.to).getTime()<=new Date(q.from).getTime()||new Date(q.to).getTime()-new Date(q.from).getTime()>400*86400_000) throw Object.assign(new Error('takings_range_invalid'),{statusCode:400});
+    return await getShopTakings(req.principal,q);
+  });
+
+  // Settle finished jobs that have no ledger entries yet (finished before settlement was automatic,
+  // or whose automatic settlement failed). Each job is settled on its own; one failure skips only it.
+  app.post('/api/shop-os/takings/settle',allowed,async(req)=>{
+    const scope=await resolveShopPrincipalScope(req.principal,{},pool);
+    const pending=await pool.query(`select ro.id from shop_repair_orders ro
+      where ro.organization_id=$1 and ($2::uuid is null or ro.location_id=$2) and ro.status in ('completed','closed')
+        and not exists(select 1 from ledger_entries le where le.repair_order_id=ro.id and le.reconciliation_key='shop_os_revenue')
+      order by ro.completed_at limit 200`,[scope.organizationId,scope.locationId]);
+    let settled=0; const skipped:{repairOrderId:string;reason:string}[]=[];
+    for(const row of pending.rows){
+      try{ await reconcileRepairOrder(req.principal,row.id); settled++; }
+      catch(error){ skipped.push({repairOrderId:row.id,reason:error instanceof Error?error.message:String(error)}); }
+    }
+    return {settled,skipped};
   });
 }
