@@ -6,6 +6,7 @@ import { api } from './api';
 // approved and paid in the ROVIQ customer app, so this panel only explains that for them.
 
 type Payment = { id: string; amount: string | number; method: string; status: string; note: string | null; paid_at: string | null; created_at: string };
+type Updates = { updates: { id: string; message: string; created_at: string }[]; portal: { expires_at: string; last_viewed_at: string | null } | null; shopCustomerId: string | null };
 type Payments = { payments: Payment[]; approvedAmount: number; paid: number; balance: number; walkIn: boolean; activeLink: { expires_at: string; last_viewed_at: string | null; decided_at: string | null } | null };
 
 const money = (v: number | string) => new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(Number(v));
@@ -27,17 +28,25 @@ export function ShopOsCustomerPaymentPanel({ repairOrderId, status, isNetworkJob
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
+  const [updates, setUpdates] = useState<Updates | null>(null);
+  const [draft, setDraft] = useState('');
 
   const load = useCallback(async () => {
-    try { const d = await api.get<Payments>(`/api/shop-os/repair-orders/${repairOrderId}/payments`); setData(d); setAmount(d.balance > 0 ? d.balance.toFixed(2) : ''); }
-    catch { /* keep last */ }
+    try {
+      const [d, u] = await Promise.all([
+        api.get<Payments>(`/api/shop-os/repair-orders/${repairOrderId}/payments`),
+        api.get<Updates>(`/api/shop-os/repair-orders/${repairOrderId}/customer-updates`)
+      ]);
+      setData(d); setUpdates(u); setAmount(d.balance > 0 ? d.balance.toFixed(2) : '');
+    } catch { /* keep last */ }
   }, [repairOrderId]);
   useEffect(() => { setLink(''); setMessage(null); void load(); }, [load, status]);
 
   async function createLink() {
     setBusy(true); setMessage(null); setCopied(false);
     try {
-      const r = await api.post<{ url: string }>(`/api/shop-os/repair-orders/${repairOrderId}/customer-link`, {});
+      if (!updates?.shopCustomerId) throw new Error('repair_order_customer_required');
+      const r = await api.post<{ url: string }>(`/api/shop-os/customers/${updates.shopCustomerId}/portal-link`, {});
       setLink(r.url); await load();
     } catch (err) { setMessage({ text: ERRORS[(err as Error).message] ?? 'Could not create the link.', error: true }); }
     finally { setBusy(false); }
@@ -49,8 +58,16 @@ export function ShopOsCustomerPaymentPanel({ repairOrderId, status, isNetworkJob
   }
 
   async function share() {
-    try { await navigator.share({ title: 'Your repair estimate', text: 'Here is your repair estimate. You can approve it and pay here:', url: link }); }
+    try { await navigator.share({ title: 'Your vehicle at our shop', text: 'Follow your repair, see the inspection, approve work and pay here:', url: link }); }
     catch { /* cancelled */ }
+  }
+
+  async function postUpdate(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true); setMessage(null);
+    try { await api.post(`/api/shop-os/repair-orders/${repairOrderId}/customer-updates`, { message: draft.trim() }); setDraft(''); await load(); }
+    catch { setMessage({ text: 'Could not post the update.', error: true }); }
+    finally { setBusy(false); }
   }
 
   async function record(e: FormEvent) {
@@ -75,23 +92,33 @@ export function ShopOsCustomerPaymentPanel({ repairOrderId, status, isNetworkJob
       </div>
 
       <div className="mt-4 rounded-xl border border-white/10 p-4">
-        <p className="font-semibold">Customer link</p>
-        <p className="muted mt-1 text-sm">The customer opens it on their phone to approve or decline each item, and to pay by card once the work is done. Sending a new link stops the old one.</p>
-        {data?.activeLink && !link && <p className="muted mt-2 text-xs">Link active until {when(data.activeLink.expires_at)} · {data.activeLink.decided_at ? `answered ${when(data.activeLink.decided_at)}` : data.activeLink.last_viewed_at ? `opened ${when(data.activeLink.last_viewed_at)}` : 'not opened yet'}</p>}
+        <p className="font-semibold">Customer page</p>
+        <p className="muted mt-1 text-sm">Your customer's own page with your shop's name: live progress, your updates, the inspection report, approving the estimate, paying, and their service history. One link per customer; sending a new one stops the old one.</p>
+        {updates?.portal && !link && <p className="muted mt-2 text-xs">Link active until {when(updates.portal.expires_at)} · {updates.portal.last_viewed_at ? `last opened ${when(updates.portal.last_viewed_at)}` : 'not opened yet'}</p>}
         {link ? (
           <div className="mt-3 grid gap-2">
-            <input className="input text-xs" readOnly value={link} onFocus={(e) => e.currentTarget.select()} aria-label="Customer link" />
+            <input className="input text-xs" readOnly value={link} onFocus={(e) => e.currentTarget.select()} aria-label="Customer page link" />
             <div className="flex flex-wrap gap-2">
               <button type="button" className="primary" onClick={() => void copy()}>{copied ? 'Copied' : 'Copy link'}</button>
               {typeof navigator.share === 'function' && <button type="button" className="secondary" onClick={() => void share()}>Share…</button>}
             </div>
-            <p className="muted text-xs">Text or email it to the customer. ROVIQ doesn’t send it for you yet.</p>
+            <p className="muted text-xs">Text or email it to the customer. ROVIQ doesn't send it for you yet.</p>
           </div>
         ) : (
-          <button type="button" className="secondary mt-3" disabled={busy || !hasCustomer} onClick={() => void createLink()}>{data?.activeLink ? 'Send a new link' : 'Create customer link'}</button>
+          <button type="button" className="secondary mt-3" disabled={busy || !hasCustomer} onClick={() => void createLink()}>{updates?.portal ? 'Send a new link' : 'Create customer page link'}</button>
         )}
-        {!hasCustomer && <p className="muted mt-2 text-xs">Add a customer to this repair order to send them a link.</p>}
+        {!hasCustomer && <p className="muted mt-2 text-xs">Add a customer to this repair order to give them a page.</p>}
       </div>
+
+      <form className="mt-4 rounded-xl border border-white/10 p-4" onSubmit={(e) => void postUpdate(e)}>
+        <label htmlFor={`update-${repairOrderId}`} className="font-semibold">Update for the customer</label>
+        <p className="muted mt-1 text-sm">Shows on their page straight away.</p>
+        <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+          <input id={`update-${repairOrderId}`} className="input" maxLength={1000} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="e.g. Your car is on the lift. Parts arrive tomorrow morning." />
+          <button className="secondary" type="submit" disabled={busy || !draft.trim()}>Post update</button>
+        </div>
+        {updates && updates.updates.length > 0 && <ul className="mt-3 space-y-1 text-sm">{updates.updates.slice(0, 5).map((u) => <li key={u.id} className="flex justify-between gap-3"><span>{u.message}</span><span className="muted shrink-0 text-xs">{when(u.created_at)}</span></li>)}</ul>}
+      </form>
 
       {canTakePayment && (
         <form className="mt-4 grid gap-2 rounded-xl border border-white/10 p-4 sm:grid-cols-[.7fr_.9fr_1.4fr_auto]" onSubmit={(e) => void record(e)}>

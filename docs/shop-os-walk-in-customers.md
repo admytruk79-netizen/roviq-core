@@ -32,3 +32,25 @@ name instead of internal IDs. Shops whose capacity comes from Shop OS bays no lo
 Endpoints: `POST /api/shop-os/repair-orders/:id/customer-link`, `GET|POST /api/shop-os/repair-orders/:id/payments`,
 `GET /api/shop-os/takings`, `POST /api/shop-os/takings/settle`, and the public
 `GET /api/public/shop-estimates/:token`, `POST …/decision`, `POST …/checkout`, `POST …/confirm` (rate limited).
+
+## Customer page (the shop's own customer portal)
+
+Shop OS is a standalone shop system, so its customers get the shop's page, not a ROVIQ account. From
+any walk-in repair order the shop creates one private link per customer (`POST
+/api/shop-os/customers/:customerId/portal-link`, 90-day expiry, a new link revokes the old). The page
+at `/shop/:token` carries the shop's name ("Powered by ROVIQ" only in the footer) and shows:
+
+- each job in the shop with live progress (checked in → inspection → your approval → repair → final
+  check → ready), refreshed every minute;
+- updates the shop posts for the customer (`POST /api/shop-os/repair-orders/:id/customer-updates`);
+- the submitted inspection report: condition (urgent / keep an eye on it / good), measurement and the
+  customer note, urgent first, with customer-visible photos whose storage reference is an https URL;
+- estimate approval per line and card payment once the job is done (same rules as the estimate link);
+- upcoming visits, work recommended for later, service history and vehicles.
+
+Items the customer answers "Not now" become recommended work (deferred items) with a 30-day follow-up.
+Technician notes, internal notes, costs, hidden photos, phone numbers and ROVIQ network jobs are never
+shown. Public endpoints: `GET /api/public/shop-portal/:token` and `POST …/jobs/:jobId/decision|checkout|confirm`.
+
+Not yet: photo upload and storage for inspections (findings store a reference only), and sending the
+link by SMS or email (needs the Twilio / Resend keys).
