@@ -2,6 +2,7 @@ import { performance } from 'node:perf_hooks';
 import { pool } from '../db/pool.js';
 import type { Principal } from '../types/principal.js';
 import { createTriageAssessment } from './triage.js';
+import { synthesizeObdEvidence, type ObdSynthesis } from '../domain/dtc-knowledge.js';
 
 export type TriageMode = 'shadow'|'advisory'|'assisted';
 
@@ -16,7 +17,21 @@ type TriageResult = {
   suggestedActions:Array<{ actionType:string; actionPayload?:Record<string,unknown> }>;
 };
 
-const ENGINE_VERSION = 'triage-0.1.0';
+const ENGINE_VERSION = 'triage-0.2.0';
+
+// Scanner evidence already recorded on this case (consented OBD scans, newest first). Triage
+// reasons over these stored readings rather than codes typed into the request.
+async function caseScanEvidence(caseId:string):Promise<{ codes:string[]; signals:Record<string,unknown>; eventIds:string[]; synthesis:ObdSynthesis }|null> {
+  const r = await pool.query(
+    `select id,dtc_codes,normalized_signals from vehicle_health_events
+      where service_case_id=$1 and event_type='obd_scan' order by occurred_at desc limit 5`,[caseId]);
+  if (!r.rowCount) return null;
+  const codes = [...new Set(r.rows.flatMap((x:any)=>Array.isArray(x.dtc_codes)?x.dtc_codes:[]))] as string[];
+  // The newest reading of each signal wins.
+  const signals:Record<string,unknown> = {};
+  for (const row of [...r.rows].reverse()) Object.assign(signals,row.normalized_signals ?? {});
+  return { codes, signals, eventIds:r.rows.map((x:any)=>x.id), synthesis:synthesizeObdEvidence({ dtcCodes:codes, signals }) };
+}
 
 export async function runTriage(principal:Principal, input:{
   caseId:string;
@@ -26,10 +41,14 @@ export async function runTriage(principal:Principal, input:{
   mode?:TriageMode;
 }) {
   const mode = input.mode ?? (process.env.TRIAGE_DEPLOYMENT_MODE as TriageMode | undefined) ?? 'shadow';
-  const safety = deterministicSafety(input.symptoms,input.observations ?? {});
+  const scans = await caseScanEvidence(input.caseId);
+  const safety = deterministicSafety(input.symptoms,input.observations ?? {},scans?.synthesis);
+  const observations = scans ? { ...(input.observations ?? {}), recordedScan:{ dtcCodes:scans.codes, measuredSignals:scans.signals,
+    referenceDefinitions:scans.synthesis.findings.map(f=>({ code:f.code, system:f.system, definition:f.description, manufacturerSpecific:f.manufacturerSpecific })) } } : input.observations ?? {};
   const started = performance.now();
-  const model = await inferStructured({ symptoms:input.symptoms, vehicle:input.vehicle ?? {}, observations:input.observations ?? {} });
+  const inferred = await inferStructured({ symptoms:input.symptoms, vehicle:input.vehicle ?? {}, observations });
   const latencyMs = Math.round(performance.now()-started);
+  const model = scans ? withScanEvidence(inferred,scans) : inferred;
 
   let result:TriageResult = model;
   let safetyOverride = false;
@@ -55,7 +74,7 @@ export async function runTriage(principal:Principal, input:{
     source:'ai_engine',
     modelProvider:process.env.TRIAGE_MODEL_PROVIDER ?? 'openai-compatible',
     modelName:process.env.TRIAGE_MODEL ?? 'configured-model',
-    inputSnapshot:{ symptoms:input.symptoms, vehicle:input.vehicle ?? {}, observations:input.observations ?? {} },
+    inputSnapshot:{ symptoms:input.symptoms, vehicle:input.vehicle ?? {}, observations:input.observations ?? {}, ...(scans ? { vehicleHealthEventIds:scans.eventIds } : {}) },
     symptomSummary:result.symptomSummary,
     suggestedCapabilities:result.suggestedCapabilities,
     suggestedDrivability:result.suggestedDrivability,
@@ -68,7 +87,7 @@ export async function runTriage(principal:Principal, input:{
 
   await pool.query(
     `update ai_triage_assessments set engine_version=$1,deployment_mode=$2,safety_override=$3,safety_override_reason=$4,raw_model_output=$5,latency_ms=$6 where id=$7`,
-    [ENGINE_VERSION,mode,safetyOverride,safetyOverrideReason ?? null,JSON.stringify(model),latencyMs,assessment.id]
+    [ENGINE_VERSION,mode,safetyOverride,safetyOverrideReason ?? null,JSON.stringify(inferred),latencyMs,assessment.id]
   );
 
   return { assessmentId:assessment.id, engineVersion:ENGINE_VERSION, mode, safetyOverride, requiresHumanReview, result };
@@ -154,7 +173,21 @@ function conservativeFallback(input:any):TriageResult {
   };
 }
 
-function deterministicSafety(symptoms:string, observations:Record<string,unknown>) {
+// Recorded codes add what they mean (as cited evidence), the services they imply and the checks
+// a technician should run. They never add a confirmed cause.
+function withScanEvidence(model:TriageResult, scans:NonNullable<Awaited<ReturnType<typeof caseScanEvidence>>>):TriageResult {
+  const s = scans.synthesis;
+  return {
+    ...model,
+    suggestedCapabilities:Array.from(new Set([...model.suggestedCapabilities,...s.capabilities])),
+    safetyFlags:mergeSafetyFlags(model.safetyFlags,s.safetyFlags.map(({ code,severity,rationale })=>({ code,severity,rationale }))),
+    evidence:[...s.findings.map(f=>({ source:'obd_scan', statement:f.description ? `${f.code}: ${f.description}` : `${f.code}: ${f.system}${f.manufacturerSpecific ? ' (manufacturer-specific; needs OEM information)' : ''}` })),...model.evidence].slice(0,20),
+    missingInformation:Array.from(new Set([...model.missingInformation,...s.missingInformation])).slice(0,12),
+    suggestedActions:[...model.suggestedActions,...s.recommendedChecks.slice(0,4).map(check=>({ actionType:'diagnostic_check', actionPayload:{ check } }))].slice(0,10)
+  };
+}
+
+function deterministicSafety(symptoms:string, observations:Record<string,unknown>, scan?:ObdSynthesis) {
   const text = `${symptoms} ${JSON.stringify(observations)}`.toLowerCase();
   const patterns = [
     ['fire_or_smoke',/\b(fire|flames|smoke from engine|burning smell)\b/],
@@ -166,7 +199,12 @@ function deterministicSafety(symptoms:string, observations:Record<string,unknown
     ['ev_high_voltage',/\b(high voltage warning|battery fire|thermal runaway)\b/],
     ['severe_misfire',/\b(flashing check engine|engine.*shaking violently|severe misfire)\b/]
   ] as const;
-  const matches = patterns.filter(([,re])=>re.test(text)).map(([code])=>({code,severity:'critical' as const,rationale:'Deterministic safety rule matched reported symptoms.'}));
+  const matches:Array<{ code:string; severity:'critical'; rationale:string }> = patterns.filter(([,re])=>re.test(text)).map(([code])=>({code,severity:'critical' as const,rationale:'Deterministic safety rule matched reported symptoms.'}));
+  // A critical reading recorded by the scanner (over-temperature, no oil pressure, HV isolation)
+  // is as binding as the customer describing it.
+  for (const f of scan?.safetyFlags ?? []) {
+    if (f.severity==='critical' && !matches.some(m=>m.code===f.code)) matches.push({ code:f.code, severity:'critical', rationale:`${f.rationale} Recorded: ${f.evidence.join(', ')}.` });
+  }
   return { forceNonDrivable:matches.length>0, reason:matches.map(x=>x.code).join(','), flags:matches };
 }
 
