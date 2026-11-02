@@ -2,6 +2,7 @@ import { addLocalShopVehicle, createLocalShopIntake, listLocalShopIntake } from 
 import type { FastifyInstance } from 'fastify';
 import { createCustomerLink, recordCounterPayment, repairOrderPayments } from '../../services/shop-customer-links.js';
 import { getShopTakings } from '../../services/shop-os-takings.js';
+import { createPortalLink, listCustomerUpdates, postCustomerUpdate } from '../../services/shop-customer-portal.js';
 import { pool } from '../../db/pool.js';
 import { resolveShopPrincipalScope } from '../../services/shop-os-scope.js';
 import { z } from 'zod';
@@ -319,6 +320,23 @@ export async function shopOsRoutes(app:FastifyInstance){
     const params=z.object({repairOrderId:z.string().uuid()}).parse(req.params);
     const body=z.object({amount:z.number().positive().max(1_000_000),method:z.enum(['card_terminal','cash','other']),note:z.string().max(500).optional()}).parse(req.body);
     return reply.code(201).send({payment:await recordCounterPayment(req.principal,params.repairOrderId,body)});
+  });
+
+  // The shop's own customer portal: one private link per customer for all their jobs and updates.
+  app.post('/api/shop-os/customers/:customerId/portal-link',allowed,async(req,reply)=>{
+    const params=z.object({customerId:z.string().uuid()}).parse(req.params);
+    return reply.code(201).send(await createPortalLink(req.principal,params.customerId));
+  });
+
+  app.get('/api/shop-os/repair-orders/:repairOrderId/customer-updates',allowed,async(req)=>{
+    const params=z.object({repairOrderId:z.string().uuid()}).parse(req.params);
+    return await listCustomerUpdates(req.principal,params.repairOrderId);
+  });
+
+  app.post('/api/shop-os/repair-orders/:repairOrderId/customer-updates',allowed,async(req,reply)=>{
+    const params=z.object({repairOrderId:z.string().uuid()}).parse(req.params);
+    const body=z.object({message:z.string().trim().min(1).max(1000)}).parse(req.body);
+    return reply.code(201).send({update:await postCustomerUpdate(req.principal,params.repairOrderId,body.message)});
   });
 
   app.get('/api/shop-os/takings',allowed,async(req)=>{

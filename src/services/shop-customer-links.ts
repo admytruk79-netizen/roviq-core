@@ -13,16 +13,16 @@ import { stripeSecretKey } from './stripe-config.js';
 
 type Queryable = Pick<PoolClient, 'query'>;
 const LINK_DAYS = 14;
-const PAYABLE_STATUSES = ['completed', 'closed'];
-const DECIDABLE_STATUS = 'awaiting_approval';
+export const PAYABLE_STATUSES = ['completed', 'closed'];
+export const DECIDABLE_STATUS = 'awaiting_approval';
 
-function httpError(message: string, statusCode: number) {
+export function httpError(message: string, statusCode: number) {
   const error = new Error(message) as Error & { statusCode: number };
   error.statusCode = statusCode;
   return error;
 }
-const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
-const money = (value: unknown) => Math.round(Number(value ?? 0) * 100) / 100;
+export const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
+export const money = (value: unknown) => Math.round(Number(value ?? 0) * 100) / 100;
 
 async function loadShopOrder(principal: Principal, repairOrderId: string, db: Queryable, forUpdate = false) {
   const r = await db.query(`select * from shop_repair_orders where id=$1${forUpdate ? ' for update' : ''}`, [repairOrderId]);
@@ -31,7 +31,7 @@ async function loadShopOrder(principal: Principal, repairOrderId: string, db: Qu
   return r.rows[0];
 }
 
-async function paidTotal(repairOrderId: string, db: Queryable) {
+export async function paidTotal(repairOrderId: string, db: Queryable) {
   const r = await db.query(`select coalesce(sum(amount),0)::numeric as paid from shop_payments where repair_order_id=$1 and status='paid'`, [repairOrderId]);
   return money(r.rows[0].paid);
 }
@@ -64,7 +64,7 @@ export async function createCustomerLink(principal: Principal, repairOrderId: st
   } catch (error) { await client.query('rollback'); throw error; } finally { client.release(); }
 }
 
-async function loadLink(token: string, db: Queryable, forUpdate = false) {
+export async function loadLink(token: string, db: Queryable, forUpdate = false) {
   if (!/^[A-Za-z0-9_-]{20,64}$/.test(token)) throw httpError('link_not_found', 404);
   const r = await db.query(
     `select l.id as link_id, l.expires_at, o.* from shop_customer_links l join shop_repair_orders o on o.id=l.repair_order_id
@@ -105,12 +105,20 @@ export async function viewCustomerEstimate(token: string) {
   };
 }
 
+/** Finds the repair order a customer-facing link opens (and locks it when asked). */
+export type OrderResolver = (db: Queryable, forUpdate: boolean) => Promise<Record<string, any>>;
+export type Decision = { lineId: string; decision: 'approved' | 'declined' };
+
 /** The customer approves or declines every line; any approved line approves the estimate. */
-export async function decideCustomerEstimate(token: string, decisions: { lineId: string; decision: 'approved' | 'declined' }[]) {
+export async function decideCustomerEstimate(token: string, decisions: Decision[]) {
+  return decideOrder((db, forUpdate) => loadLink(token, db, forUpdate), decisions);
+}
+
+export async function decideOrder(resolve: OrderResolver, decisions: Decision[]) {
   const client = await pool.connect();
   try {
     await client.query('begin');
-    const order = await loadLink(token, client, true);
+    const order = await resolve(client, true);
     if (order.status !== DECIDABLE_STATUS) throw httpError('estimate_not_awaiting_approval', 409);
     const lines = (await client.query('select id from shop_repair_order_lines where repair_order_id=$1 for update', [order.id])).rows.map((l) => l.id as string);
     const byLine = new Map(decisions.map((d) => [d.lineId, d.decision]));
@@ -121,14 +129,22 @@ export async function decideCustomerEstimate(token: string, decisions: { lineId:
           approved_at=case when $2='approved' then now() else null end, declined_at=case when $2='declined' then now() else null end,
           deferred_at=null, updated_at=now() where id=$1`, [id, d]);
     }
+    // "Not now" items become recommended work the shop follows up on in 30 days, as if the shop
+    // had deferred them itself.
+    await client.query(`insert into shop_deferred_service_items(organization_id,location_id,service_case_id,repair_order_id,repair_order_line_id,customer_vehicle_id,
+        status,severity,reason,estimated_amount,next_follow_up_at)
+      select $1,$2,null,$3,l.id,null,'open','recommended','Customer chose not now',(l.quantity*l.unit_price)::numeric(12,2),now()+interval '30 days'
+        from shop_repair_order_lines l where l.repair_order_id=$3 and l.approval_status='declined'
+      on conflict (repair_order_line_id) do update set status='open',dismissed_at=null,completed_at=null,updated_at=now()`,
+      [order.organization_id, order.location_id, order.id]);
     const totals = (await client.query(`select coalesce(sum(case when approval_status='approved' then quantity*unit_price else 0 end),0)::numeric(12,2) as approved,
         count(*) filter (where approval_status='approved')::int as n from shop_repair_order_lines where repair_order_id=$1`, [order.id])).rows[0];
     const anyApproved = Number(totals.n) > 0;
     await client.query(`update shop_repair_orders set approved_amount=$2, status=case when $3 then 'approved' else status end,
         approved_at=case when $3 then now() else approved_at end, updated_at=now() where id=$1`, [order.id, totals.approved, anyApproved]);
-    await client.query('update shop_customer_links set decided_at=now() where id=$1', [order.link_id]);
+    if (order.link_id) await client.query('update shop_customer_links set decided_at=now() where id=$1', [order.link_id]);
     await event(client, order.id, 'SHOP_OS_ESTIMATE_DECIDED_BY_CUSTOMER', 'shop_customer', null, {
-      linkId: order.link_id, approved: decisions.filter((d) => d.decision === 'approved').map((d) => d.lineId), declined: decisions.filter((d) => d.decision === 'declined').map((d) => d.lineId)
+      linkId: order.link_id ?? null, portalLinkId: order.portal_link_id ?? null, approved: decisions.filter((d) => d.decision === 'approved').map((d) => d.lineId), declined: decisions.filter((d) => d.decision === 'declined').map((d) => d.lineId)
     });
     await client.query('commit');
     return { status: anyApproved ? 'approved' : order.status, approvedAmount: money(totals.approved) };
@@ -137,13 +153,18 @@ export async function decideCustomerEstimate(token: string, decisions: { lineId:
 
 /** Card payment of the outstanding balance on Stripe's hosted page. */
 export async function startCustomerCheckout(token: string, requestOrigin?: string) {
+  return checkoutOrder((db, forUpdate) => loadLink(token, db, forUpdate), `/estimate/${token}`, requestOrigin);
+}
+
+/** Starts Stripe Checkout for the order a link opens; Stripe returns the customer to `returnPath`. */
+export async function checkoutOrder(resolve: OrderResolver, returnPath: string, requestOrigin?: string) {
   if (!stripeSecretKey()) throw httpError('online_payment_unavailable', 409);
   const client = await pool.connect();
   let payment: { id: string; amount: number } | null = null;
   let order: Record<string, any>;
   try {
     await client.query('begin');
-    order = await loadLink(token, client, true);
+    order = await resolve(client, true);
     if (!PAYABLE_STATUSES.includes(order.status)) throw httpError('repair_order_not_payable', 409);
     const balance = money(Number(order.approved_amount) - await paidTotal(order.id, client));
     if (balance <= 0) throw httpError('nothing_to_pay', 409);
@@ -158,8 +179,8 @@ export async function startCustomerCheckout(token: string, requestOrigin?: strin
   const shop = await pool.query('select display_name from organizations where id=$1', [order.organization_id]);
   const body = new URLSearchParams({
     mode: 'payment',
-    success_url: `${origin}/estimate/${token}?paid=1&session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${origin}/estimate/${token}`,
+    success_url: `${origin}${returnPath}${returnPath.includes('?') ? '&' : '?'}paid=1&session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${origin}${returnPath}`,
     'line_items[0][quantity]': '1',
     'line_items[0][price_data][currency]': 'usd',
     'line_items[0][price_data][unit_amount]': String(Math.round(Number(payment!.amount) * 100)),
@@ -199,7 +220,11 @@ export async function applyShopCheckoutSession(session: ShopCheckoutSession, sou
 
 /** Back from Stripe: ask Stripe, never the browser, whether it was paid. */
 export async function confirmCustomerCheckoutByLink(token: string, sessionId: string) {
-  const order = await loadLink(token, pool);
+  return confirmOrderCheckout(await loadLink(token, pool, false), sessionId);
+}
+
+/** Back from Stripe for an order the caller already resolved from a customer link. */
+export async function confirmOrderCheckout(order: Record<string, any>, sessionId: string) {
   if (!/^cs_[A-Za-z0-9_]+$/.test(sessionId)) throw httpError('checkout_session_invalid', 400);
   const session = await stripeRequest(`checkout/sessions/${encodeURIComponent(sessionId)}`) as ShopCheckoutSession;
   if (session.metadata?.roviq_repair_order_id !== order.id) throw httpError('checkout_session_invalid', 400);
