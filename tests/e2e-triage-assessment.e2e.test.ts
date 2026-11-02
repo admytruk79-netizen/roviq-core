@@ -92,7 +92,7 @@ describe('AI triage assessment end-to-end lifecycle', () => {
     const persisted2 = triage.assessments.find((a: { id: string }) => a.id === assessment2Id);
     expect(persisted1.safety_override).toBe(false);
     expect(persisted2.safety_override).toBe(true);
-    expect(persisted1.engine_version).toBe('triage-0.1.0');
+    expect(persisted1.engine_version).toBe('triage-0.2.0');
     // Each run's conservative fallback proposes its own 'request_diagnostic_review' action.
     expect(triage.actions.length).toBe(2);
     expect(triage.actions.every((a: { state: string }) => a.state === 'suggested')).toBe(true);
