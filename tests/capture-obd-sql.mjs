@@ -1,6 +1,5 @@
 import {readFile,mkdir,writeFile} from 'node:fs/promises';
-const source=await readFile(new URL('../cloudflare/obd-analysis.js',import.meta.url),'utf8');
-const {claimObdJob,processObdJob}=await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+const {claimObdJob,processObdJob}=await import('../cloudflare/obd-analysis.js');
 const id=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 const fallback = process.argv[2] === 'fallback';
 const eventId=id(fallback ? 8708 : 8707),caseId=id(8703);

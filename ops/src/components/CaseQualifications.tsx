@@ -8,6 +8,8 @@ import { QUALIFICATION_KINDS, QUALIFICATION_PRESETS, kindLabel, type Qualificati
 // closed once a provider is selected); credentials are reviewed on the Qualifications page.
 
 type Requirement = { requirement_key: string; kind: string; scope: string | null; mandatory: boolean };
+type Suggestion = { requirementKey: string; kind: QualificationKind; label: string; mandatory: boolean; rationale: string; evidence: string[]; registered: boolean };
+type Suggested = { suggestions: Suggestion[]; basedOn: { vehicle: string | null; powertrain: string | null; descriptions: number; dtcCodes: string[] } };
 type Candidate = { actorId: string; name: string | null; decision: 'eligible' | 'blocked' | 'review_required'; blockingReasons: string[]; reviewReasons: string[] };
 
 const field = 'mt-1 w-full rounded border border-slate-300 bg-white p-2 text-sm text-slate-900';
@@ -21,6 +23,7 @@ function gapLabel(reason: string) {
 export function CaseQualifications({ caseId }: { caseId: string }) {
   const [requirements, setRequirements] = useState<Requirement[]>([]);
   const [candidates, setCandidates] = useState<Candidate[] | null>(null);
+  const [suggested, setSuggested] = useState<Suggested | null>(null);
   const [actorType, setActorType] = useState('diagnostic');
   const [preset, setPreset] = useState('');
   const [key, setKey] = useState('');
@@ -40,6 +43,8 @@ export function CaseQualifications({ caseId }: { caseId: string }) {
       setRequirements(r.requirements);
       setCandidates(c.candidates);
     } catch { setError('Could not load job requirements.'); }
+    // Suggestions are a convenience; the panel works without them.
+    api.get<Suggested>(`/api/admin/qualifications/cases/${caseId}/suggested-requirements`).then(setSuggested, () => setSuggested(null));
   }, [caseId, actorType]);
   useEffect(() => { void load(); }, [load]);
 
@@ -49,20 +54,34 @@ export function CaseQualifications({ caseId }: { caseId: string }) {
     if (p) { setKey(p.key); setKind(p.kind); }
   }
 
-  async function add(e: FormEvent) {
-    e.preventDefault();
+  async function save(body: { key: string; kind: QualificationKind; scope: string | null; mandatory: boolean; reason: string }) {
     setBusy(true); setError('');
     try {
-      await api.put(`/api/admin/qualifications/cases/${caseId}/requirements/${encodeURIComponent(key.trim())}`, { kind, scope: scope.trim() || null, mandatory, reason: reason.trim() });
-      setPreset(''); setKey(''); setScope(''); setReason('');
-      await load();
+      await api.put(`/api/admin/qualifications/cases/${caseId}/requirements/${encodeURIComponent(body.key)}`, { kind: body.kind, scope: body.scope, mandatory: body.mandatory, reason: body.reason });
+      return true;
     } catch (err) {
       const code = err instanceof ApiError ? err.message : '';
       setError(code === 'case_not_open_for_requirements' ? 'A provider is already selected or the case has moved on. Change requirements through a case exception instead.'
         : code === 'identified_admin_required' ? 'Sign in with your own admin account to change requirements.'
         : 'Could not save the requirement. Check the key and give a reason of at least 5 characters.');
+      return false;
     } finally { setBusy(false); }
   }
+
+  async function add(e: FormEvent) {
+    e.preventDefault();
+    if (await save({ key: key.trim(), kind, scope: scope.trim() || null, mandatory, reason: reason.trim() })) {
+      setPreset(''); setKey(''); setScope(''); setReason('');
+      await load();
+    }
+  }
+
+  async function accept(s: Suggestion) {
+    const reason = `Suggested: ${s.rationale} Evidence: ${s.evidence.join(', ') || 'case details'}.`.slice(0, 500);
+    if (await save({ key: s.requirementKey, kind: s.kind, scope: null, mandatory: s.mandatory, reason })) await load();
+  }
+
+  const open = suggested?.suggestions.filter((s) => !s.registered) ?? [];
 
   const qualified = candidates?.filter((c) => c.decision !== 'blocked').length ?? 0;
   return (
@@ -81,6 +100,26 @@ export function CaseQualifications({ caseId }: { caseId: string }) {
             </li>
           ))}
         </ul>
+      )}
+      {open.length > 0 && (
+        <div className="mt-3 rounded border border-sky-200 bg-sky-50 p-3" aria-labelledby="req-suggested-heading">
+          <h3 id="req-suggested-heading" className="text-sm font-semibold text-slate-700">Suggested for this job</h3>
+          <p className="text-xs text-slate-500">
+            From {[suggested?.basedOn.vehicle ?? suggested?.basedOn.powertrain, suggested?.basedOn.descriptions ? 'the job description' : null, suggested?.basedOn.dtcCodes.length ? `codes ${suggested.basedOn.dtcCodes.join(', ')}` : null].filter(Boolean).join(', ') || 'the case details'}. Nothing is added until you add it.
+          </p>
+          <ul className="mt-2 space-y-2">
+            {open.map((s) => (
+              <li key={s.requirementKey} className="flex flex-wrap items-start justify-between gap-2 text-sm">
+                <span className="min-w-0 flex-1">
+                  <b>{s.label}</b> · {kindLabel(s.kind)} · {s.mandatory ? 'required' : 'optional (review)'}
+                  <span className="block text-slate-600">{s.rationale}</span>
+                  {s.evidence.length > 0 && <span className="block text-xs text-slate-500">Because: {s.evidence.join(', ')}</span>}
+                </span>
+                <button type="button" className="roviq-btn-primary" disabled={busy} onClick={() => void accept(s)} aria-label={`Add ${s.label}`}>Add</button>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
       <form onSubmit={add} className="mt-3 grid gap-3 sm:grid-cols-2">
         <label className="text-sm">Common requirement

@@ -23,6 +23,7 @@ export const QUALIFICATION_PRESETS: { key: string; kind: QualificationKind; labe
   { key: 'diesel_heavy_duty', kind: 'training', label: 'Heavy-duty diesel' },
   { key: 'oem_diagnostic_software', kind: 'manufacturer_access', label: 'OEM diagnostic software access' },
   { key: 'adas_calibration', kind: 'equipment', label: 'ADAS calibration equipment' },
+  { key: 'srs_restraint_systems', kind: 'training', label: 'Airbag/SRS service training' },
   { key: 'ac_refrigerant_609', kind: 'legal_license', label: 'A/C refrigerant handling (EPA 609)' },
   { key: 'heavy_tow_class_c', kind: 'legal_license', label: 'Heavy tow licence' }
 ];

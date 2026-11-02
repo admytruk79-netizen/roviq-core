@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
 import {test} from 'node:test';
-const source=await readFile(new URL('../cloudflare/obd-analysis.js',import.meta.url),'utf8');
-const module=await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+const module=await import('../cloudflare/obd-analysis.js');
 const event={id:'event',dtc_codes:['P0302'],normalized_signals:{engineRpm:700},occurred_at:'2026-10-12T00:00:00Z'};
 const ai={AI:{run:async()=>({response:JSON.stringify({summary:'Misfire code observed; cause unconfirmed.',possibleCauses:[{cause:'Ignition fault',dtcEvidence:['P0302'],signalEvidence:[]}],recommendedChecks:['Inspect ignition components'],missingInformation:['Vehicle model and test results']})})}};
 test('AI output is explicit and hypotheses remain grounded in scanner evidence',async()=>{
@@ -18,7 +16,21 @@ test('missing AI, malformed output and timeout produce explicit fallback status'
   for(const env of [{},{AI:{run:async()=>({response:'broken'})}},{AI:{run:()=>new Promise(()=>{})}}]){
     const result=await module.inferObdAnalysis(env,event,5);
     assert.equal(result.modelStatus,'fallback');assert.ok(result.failureReason);assert.deepEqual(result.possibleCauses,[]);
+    // Without the model the scan still reads: code meaning, safety rule and checks, never a cause.
+    assert.match(result.summary,/P0302 \(Cylinder 2 misfire detected\)/);
+    assert.deepEqual(result.safetyFlags.map(f=>[f.code,f.evidence]),[['misfire',['P0302']]]);
+    assert.ok(result.recommendedChecks.some(c=>/misfire counters/.test(c)));
   }
+});
+test('the model sees standard code meanings and its output keeps the deterministic safety reading',async()=>{
+  let sent;
+  const env={AI:{run:async(_m,input)=>{sent=JSON.parse(input.messages[1].content);return {response:JSON.stringify({summary:'ok',possibleCauses:[],recommendedChecks:['Model check'],missingInformation:[]})};}}};
+  const hot={...event,dtc_codes:['P0217','P1234'],normalized_signals:{coolantTemperatureC:121}};
+  const result=await module.inferObdAnalysis(env,hot);
+  assert.deepEqual(sent.referenceDefinitions.map(d=>[d.code,d.definition]),[['P0217','Engine coolant over-temperature condition'],['P1234',null]]);
+  assert.deepEqual(result.safetyFlags[0],{code:'overheating',severity:'critical',rationale:result.safetyFlags[0].rationale,evidence:['P0217','coolantTemperatureC=121']});
+  assert.deepEqual(result.suggestedCapabilities,['diagnostics','tow','repair']);
+  assert.ok(result.recommendedChecks.includes('Model check'));
 });
 function fixture(){
   const state={valid:true,lease:'lease-1',assessmentWrites:0,job:null};

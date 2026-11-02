@@ -48,7 +48,7 @@ P3: Broader network-wide multi-actor resolution, proactive gap detection and mea
 - No new public claims of automatic qualification verification before operational evidence and implementation testing.
 
 ## Latest build snapshot (reviewed 2026-10-22)
-The opt-in case qualification tables and deterministic evaluator now feed the serviceability gate. Ops qualification administration adds identified administrator reviews, evidence references, expiry, revocation, version conflicts and atomic audit history. See [qualification administration](qualification-administration.md) for its tested scope and limits. Requirements must still be explicitly registered; automatic VIN/task inference, issuer integrations and universal dispatch/acceptance enforcement remain outstanding.
+The opt-in case qualification tables and deterministic evaluator now feed the serviceability gate. Ops qualification administration adds identified administrator reviews, evidence references, expiry, revocation, version conflicts and atomic audit history. See [qualification administration](qualification-administration.md) for its tested scope and limits. Requirements must still be explicitly registered. Since 2026-11-02 the case page suggests them, with rationale and evidence, from the vehicle's fuel type, the job description and triage text, and recorded scanner codes (step 2 of the canonical example, as a proposal). VIN decoding, issuer integrations and universal dispatch/acceptance enforcement remain outstanding.
 
 ### Earlier source-history snapshot
 Repository: https://github.com/admytruk79-netizen/roviq-core
