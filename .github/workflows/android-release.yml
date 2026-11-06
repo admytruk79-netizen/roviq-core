@@ -1,4 +1,4 @@
-name: Build Customer and Actor Android Apps
+name: Build Customer, Actor and Ops Android Apps
 
 on:
   push:
@@ -31,6 +31,8 @@ jobs:
             variant: Customer
           - product: actor
             variant: Actor
+          - product: ops
+            variant: Ops
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:

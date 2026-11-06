@@ -1,7 +1,13 @@
-name: Legacy manual deploy ROVIQ Ops Console
+name: Deploy ROVIQ Ops App
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/**'
+      - 'shared/theme/**'
+      - '.github/workflows/deploy-ops.yml'
 permissions:
   contents: read
 

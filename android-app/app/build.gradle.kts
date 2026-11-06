@@ -42,6 +42,7 @@ android {
         applicationId = "com.roviq.app"
         minSdk = 26
         targetSdk = 35
+        manifestPlaceholders["appIcon"] = "@drawable/ic_roviq"
         versionCode = appVersionCode
         versionName = appVersionName
     }
@@ -60,6 +61,13 @@ android {
             applicationId = "com.roviq.actor"
             resValue("string", "app_name", "ROVIQ Actor")
             buildConfigField("String", "APP_URL", "\"https://roviq-service.pages.dev\"")
+        }
+        create("ops") {
+            dimension = "product"
+            applicationId = "com.roviq.ops"
+            resValue("string", "app_name", "ROVIQ Ops")
+            manifestPlaceholders["appIcon"] = "@drawable/ic_roviq_ops"
+            buildConfigField("String", "APP_URL", "\"https://roviq-ops.pages.dev\"")
         }
     }
 

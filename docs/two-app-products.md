@@ -1,22 +1,19 @@
-# Customer and Actor products
+# Customer, Actor and separate Ops products
 
-ROVIQ has two product entry points, sharing the Core API and database:
+ROVIQ has three separately distributed apps sharing the authenticated Core API and canonical database.
 
-| Product | Web origin | Android application ID | Build output |
+| Product | Web origin | Android application ID | Purpose |
 | --- | --- | --- | --- |
-| ROVIQ Customer | https://roviq-core-customer.pages.dev | com.roviq.app | web/dist; app-customer-release.aab |
-| ROVIQ Actor | https://roviq-service.pages.dev | com.roviq.actor | service/dist; app-actor-release.aab |
+| ROVIQ Customer | https://roviq-core-customer.pages.dev | com.roviq.app | Vehicle owners |
+| ROVIQ Actor | https://roviq-service.pages.dev | com.roviq.actor | Shops, diagnostics, towing, parts and mobility |
+| ROVIQ Ops | https://roviq-ops.pages.dev | com.roviq.ops | Authorized platform administrators |
 
-The existing Customer application ID is retained for upgrade continuity. Actor has a distinct ID, app label and app storage, so both can be installed together. The service directory and existing Pages project retain their internal names; the product presented to users is Actor.
+Ops is no longer a workspace packaged inside Actor. It has its own origin, browser storage, app label, Android package and launcher icon. Customer and Actor retain their existing package IDs. Actor contains five business workspaces and accepts only explicitly granted business roles; administrator login directs the user to Ops and stores no admin token. Old embedded Ops sessions are cleared. Legacy /ops/ web entry redirects to the separate Ops origin without transferring credentials.
 
-Customer contains customer cases, vehicles, approvals and payment. Actor packages six role modules: diagnostic, tow, partner/shop, parts, fleet/mobility and admin/Ops. These are workspaces within Actor, not six separately distributed apps. Actor does not build or host the Customer module. Server authorization remains authoritative; hiding a workspace is not an authorization boundary.
+Ops continues to require an existing admin identity. A shop/customer/provider identity cannot sign into Ops or call admin-only APIs. This separation does not create or grant administrator accounts, embed credentials, change backend authorization, or provide a new privileged API. Staff onboarding, service authorizations, credential reviews, cases and finance remain in the existing console. The user must use their existing administrator credentials; credential availability is not implied by installing the app.
 
-Normal sign-in does not create test identities. Customer accepts a customer identity or switches to an explicitly granted customer role. Actor opens only its six allowed roles held by the authenticated identity. An account with both kinds of role signs in separately to each app. An admin without business grants opens Ops only. Old combined-shell session storage is cleared on upgrade.
+Build all three products with node scripts/build-products.mjs. Ops deploys independently through deploy-ops.yml, Actor through deploy-service.yml and Customer through deploy-web.yml. Android workflows build Customer, Actor and Ops variants, with installable test APKs published under the test-apk prerelease. APK/AAB build success is distinct from Google Play publication or physical-device testing.
 
-Actor keeps the existing exact production origin. Customer and Actor therefore have separate web origins and browser storage. Previously issued combined-app checkout links are validated and redirected to the fixed Customer origin without transferring tokens. The retired /customer/ path redirects to Customer. Existing standalone role endpoints remain legacy/manual deployments, and are not deleted by this patch; automatic production deployments target Customer and Actor only. Ops is an admin workspace inside Actor.
+The Ops Android flavor opens only the Ops origin and uses its own private Android app storage. It does not install the OBD web bridge; diagnostics remain in Actor. Server-side role checks remain authoritative regardless of which application is installed. Test APKs use debug signing and are labelled as test builds.
 
-On Android, Actor diagnostics can open at /diagnostic/ as the main frame and return to Actor workspaces. This gives the diagnostic scanner panel native access without granting subframes access to the Bluetooth bridge. Native navigation, geolocation and scanner origins are restricted to the installed product origin. Web browsers and embedded diagnostic frames have no native Bluetooth access.
-
-Build both products with `node scripts/build-products.mjs`. The output check requires separate product titles/manifests, all six Actor modules, no Customer module in Actor and no Actor modules in Customer. CI also builds both Android flavors and uploads two separate unsigned PR AAB artifacts. Signed release runs use the existing configured upload-key secrets for each package; actual Play listings and distribution still require release setup.
-
-Acceptance includes a customer-only account rejected from Actor, an actor-only account rejected from Customer, an identity with multiple real grants, an admin opening Ops without impersonation, cross-account server access denial, payment return to Customer, both apps installed together, and physical scanner capture in Actor. Unit/CI evidence does not substitute for the last two device checks.
+Acceptance covers Actor rejecting admin sign-in, clearing retired Ops sessions, separate product outputs/manifests, all three Android flavors, Ops rejecting a business login, mobile/desktop login rendering and the multi-actor production journey using the separate Ops origin. No new real users or privileged identities are created by browser smoke checks.

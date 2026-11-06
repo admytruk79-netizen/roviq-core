@@ -27,9 +27,16 @@ test('Actor opens only granted business roles and never provisions test identiti
   assert.deepEqual((await actor.signIn('multi@test','password')).roles,['tow','parts']);
   assert.equal(values.has('roviq_access_token'),false);assert.ok(calls.every(url=>!url.includes('/testing/')));
 });
-test('Admin opens only Ops without customer or provider impersonation',async()=>{
+test('Admin sign-in belongs to separate Ops and leaves no Actor session',async()=>{
   let calls=0;globalThis.fetch=async()=>{calls++;return Response.json(session('admin'));};
-  assert.deepEqual((await actor.signIn('admin@test','password')).roles,['admin']);assert.equal(calls,1);
+  await assert.rejects(actor.signIn('admin@test','password'),/ops_app_required/);
+  assert.equal(calls,1);assert.equal(values.size,0);
+});
+test('Retired Ops tabs cannot be restored inside Actor',()=>{
+  values.set('roviq_actor_session',JSON.stringify({roles:['admin'],email:'admin@test',testMode:false}));
+  values.set('roviq_ops_token',token('admin'));
+  values.set('roviq_ops_principal',JSON.stringify({role:'admin'}));
+  assert.equal(actor.restoreSession(),null);assert.equal(values.size,0);
 });
 test('Old combined-shell sessions cannot restore Customer inside Actor',()=>{
   values.set('roviq_actor_session',JSON.stringify({roles:['customer'],email:'old@test',testMode:false}));

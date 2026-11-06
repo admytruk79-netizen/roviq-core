@@ -1,1 +1,2 @@
 /customer/* https://roviq-core-customer.pages.dev/:splat 302
+/ops/* https://roviq-ops.pages.dev/:splat 302

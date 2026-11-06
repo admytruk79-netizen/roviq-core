@@ -9,4 +9,6 @@ function run(command,args,cwd=root){
 run('npm',['ci','--no-audit','--no-fund'],fileURLToPath(new URL('../web',import.meta.url)));
 run('npm',['run','build'],fileURLToPath(new URL('../web',import.meta.url)));
 run(process.execPath,['scripts/build-service-app.mjs']);
+run('npm',['ci','--no-audit','--no-fund'],fileURLToPath(new URL('../ops',import.meta.url)));
+run('npm',['run','build'],fileURLToPath(new URL('../ops',import.meta.url)));
 run(process.execPath,['scripts/check-product-builds.mjs']);

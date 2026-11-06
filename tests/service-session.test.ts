@@ -64,21 +64,13 @@ describe('unified app role tabs', () => {
     expect(restoreSession()).toBeNull();
   });
 
-  it('opens only Ops for admin without creating test identities', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-      if (url.endsWith('/api/auth/login')) return response({
-        accessToken: jwt('admin'), principal: { role: 'admin', actorId: null }
-      });
-      const role = url.match(/\/api\/admin\/testing\/([a-z]+)-session$/)?.[1];
-      if (role) return response({ accessToken: jwt(role), principal: { role, actorId: `${role}-test` } });
-      throw new Error(`unexpected request: ${url}`);
-    }));
-    const session = await signIn('ops@example.com', 'password123');
-    expect(session.roles).toEqual(['admin']);
-    expect(session.testMode).toBe(false);
-    expect(localStorage.getItem('roviq_ops_token')).toBe(jwt('admin'));
-    expect(localStorage.getItem('roviq_principal')).toBeNull();
-    expect(restoreSession()?.roles).toEqual(session.roles);
+  it('sends administrators to the separate Ops app without preparing tokens', async () => {
+    const fetch = vi.fn(async () => response({accessToken:jwt('admin'),principal:{role:'admin',actorId:null}}));
+    vi.stubGlobal('fetch',fetch);
+    await expect(signIn('ops@example.com','password123')).rejects.toThrow('ops_app_required');
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem('roviq_ops_token')).toBeNull();
+    expect(restoreSession()).toBeNull();
   });
 });
 

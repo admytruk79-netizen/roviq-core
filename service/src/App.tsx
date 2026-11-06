@@ -49,7 +49,7 @@ function SignIn({ onSignedIn, notice }: { onSignedIn: (session: ServiceSession) 
               <h1>Your work, connected.</h1>
               <p>Coordinate diagnostics, towing, repairs, parts and mobility. Sign in to open the workspaces your team has granted you.</p>
               <button type="button" className="primary" onClick={() => setView('sign-in')}>Sign in to continue <span aria-hidden="true">→</span></button>
-              <p className="guest-note">Need service for your vehicle? <a href="https://roviq-core-customer.pages.dev">Open ROVIQ Customer</a>. For team access, contact your ROVIQ administrator.</p>
+              <p className="guest-note">Need service for your vehicle? <a href="https://roviq-core-customer.pages.dev">Open ROVIQ Customer</a>. For team access, contact your ROVIQ administrator. <a href="https://roviq-ops.pages.dev">Open ROVIQ Ops</a> for platform administration.</p>
             </div>
             <div className="guest-preview" aria-label="How ROVIQ works">
               <p className="preview-label">A connected service flow</p>
