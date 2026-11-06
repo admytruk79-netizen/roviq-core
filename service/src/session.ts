@@ -2,7 +2,7 @@
 // role the account holds, and hands each tab its token under the storage keys that role's app
 // already reads. Each tab's app then runs exactly as it does standalone, with one role's access.
 
-export type Role = 'diagnostic' | 'tow' | 'partner' | 'parts' | 'fleet' | 'admin';
+export type Role = 'diagnostic' | 'tow' | 'partner' | 'parts' | 'fleet';
 export type Workspace = { role: Role; label: string; path: string; tokenKey: string; principalKey: string };
 
 export const WORKSPACES: readonly Workspace[] = [
@@ -11,7 +11,6 @@ export const WORKSPACES: readonly Workspace[] = [
   { role: 'partner', label: 'Shop', path: 'partner/', tokenKey: 'roviq_partner_token', principalKey: 'roviq_partner_principal' },
   { role: 'parts', label: 'Parts', path: 'parts/', tokenKey: 'roviq_parts_token', principalKey: 'roviq_parts_principal' },
   { role: 'fleet', label: 'Mobility', path: 'fleet/', tokenKey: 'roviq_fleet_token', principalKey: 'roviq_fleet_principal' },
-  { role: 'admin', label: 'Ops', path: 'ops/', tokenKey: 'roviq_ops_token', principalKey: 'roviq_ops_principal' }
 ];
 
 const SESSION_KEY = 'roviq_actor_session';
@@ -38,7 +37,7 @@ async function call<T>(path: string, init: RequestInit & { token?: string } = {}
 
 function storeTab(workspace: Workspace, session: TokenResponse) {
   if (session.principal?.role !== workspace.role || !tokenUsable(session.accessToken)
-      || (workspace.role !== 'admin' && !session.principal.actorId)) {
+      || !session.principal.actorId) {
     throw new ApiError(403, 'invalid_workspace_session');
   }
   localStorage.setItem(workspace.tokenKey, session.accessToken);
@@ -59,12 +58,13 @@ export function workspaceFor(role: Role) {
 
 /**
  * Sign in to Actor using only roles explicitly granted to this identity.
- * Customer access lives in a separate app. Admin opens Ops without creating test identities.
+ * Customer access lives in a separate app. Ops administrators sign in through the separate Ops app.
  */
 export async function signIn(email: string, password: string): Promise<ServiceSession> {
   signOut();
   try {
     const login = await call<LoginResponse>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+    if (login.principal.role === 'admin') throw new ApiError(403, 'ops_app_required');
     const serviceRoles = new Set<string>(WORKSPACES.map((w) => w.role));
     const opened: Role[] = [];
 
@@ -103,7 +103,7 @@ export function restoreSession(): ServiceSession | null {
       if (!workspace || !tokenUsable(localStorage.getItem(workspace.tokenKey))) return false;
       try {
         const principal = JSON.parse(localStorage.getItem(workspace.principalKey) ?? 'null');
-        return principal?.role === role && (role === 'admin' || Boolean(principal?.actorId));
+        return principal?.role === role && Boolean(principal?.actorId);
       } catch { return false; }
     })) {
       signOut();
@@ -118,7 +118,7 @@ export function restoreSession(): ServiceSession | null {
 
 export function signOut() {
   // Remove sessions from the retired combined shell on this Actor origin.
-  for (const key of ['roviq_service_session', 'roviq_service_last_tab', 'roviq_access_token', 'roviq_principal']) localStorage.removeItem(key);
+  for (const key of ['roviq_service_session', 'roviq_service_last_tab', 'roviq_access_token', 'roviq_principal', 'roviq_ops_token', 'roviq_ops_principal']) localStorage.removeItem(key);
   localStorage.removeItem(SESSION_KEY);
   for (const workspace of WORKSPACES) {
     localStorage.removeItem(workspace.tokenKey);
@@ -145,6 +145,7 @@ export function rememberTab(role: Role) {
 export function signInMessage(error: unknown) {
   if (error instanceof ApiError) {
     if (error.code === 'invalid_credentials') return 'Email or password is incorrect.';
+    if (error.code === 'ops_app_required') return 'Use the separate ROVIQ Ops app for administrator access.';
     if (error.code === 'no_service_workspace') return 'Use the Customer app for vehicle service. This account has no Actor workspace.';
     if (error.status === 429) return 'Too many sign-in attempts. Wait a minute and try again.';
     return `Sign-in failed (${error.code}). Try again.`;

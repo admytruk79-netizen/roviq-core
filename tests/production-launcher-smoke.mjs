@@ -9,7 +9,7 @@ for(const [product,url] of Object.entries(APPS)){
   const response=await fetch(new URL('/manifest.json',url));
   assert.equal(response.status,200,`${product} manifest is unavailable`);
   const manifest=await response.json();
-  assert.equal(manifest.name,product==='customer'?'ROVIQ Customer':'ROVIQ Actor');
+  assert.equal(manifest.name,({customer:'ROVIQ Customer',actor:'ROVIQ Actor',ops:'ROVIQ Ops'})[product]);
   assert.equal(manifest.start_url,'/');
 }
 const browser=await chromium.launch({headless:true});
@@ -61,6 +61,24 @@ try{
     await page.goto(new URL('/login',APPS.customer).toString(),{waitUntil:'domcontentloaded'});
     await page.getByRole('heading',{name:'Welcome back'}).waitFor({timeout:20000});
     await page.screenshot({path:path.join(output,`${viewport.name}-customer-signin.png`),fullPage:true});
+    await page.goto(APPS.ops,{waitUntil:'domcontentloaded'});
+    await page.getByRole('heading',{name:'Sign in to ROVIQ Ops',exact:true}).waitFor({timeout:20000});
+    assert.notEqual(new URL(APPS.ops).origin,new URL(APPS.actor).origin,'Ops needs its own origin');
+    assert.equal(await page.getByRole('button',{name:'Create your shop',exact:true}).count(),0);
+    await page.screenshot({path:path.join(output,`${viewport.name}-ops-signin.png`),fullPage:true});
+    // Wrong-role login must never establish an Ops session. Simulated account only.
+    await page.route('**/api/auth/login',async route=>{
+      const headers={'access-control-allow-origin':new URL(APPS.ops).origin,'access-control-allow-methods':'POST, OPTIONS','access-control-allow-headers':'content-type'};
+      if(route.request().method()==='OPTIONS'){await route.fulfill({status:204,headers});return;}
+      await route.fulfill({status:200,contentType:'application/json',headers,body:JSON.stringify({accessToken:'not-an-admin-token',principal:{role:'partner',actorId:'browser-test-shop'}})});
+    });
+    await page.getByLabel('Email',{exact:true}).fill('shop@example.test');
+    await page.getByLabel('Password',{exact:true}).fill('Browser-only-password-123!');
+    await page.getByRole('button',{name:'Enter operations',exact:true}).click();
+    await page.getByRole('alert').filter({hasText:'not an ops staff account'}).waitFor();
+    assert.equal(await page.evaluate(()=>localStorage.getItem('roviq_ops_token')),null);
+    await page.unroute('**/api/auth/login');
+
     await context.close();
   }
   console.log('[roviq-browser] Customer and Actor manifests, product entry points, sign-in and simulated shop setup/retry pass on desktop and mobile.');
