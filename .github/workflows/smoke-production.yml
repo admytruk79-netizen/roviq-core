@@ -249,7 +249,7 @@ jobs:
             "https://roviq-service.pages.dev/partner/"
             "https://roviq-service.pages.dev/parts/"
             "https://roviq-service.pages.dev/tow/"
-            "https://roviq-service.pages.dev/ops/"
+            "https://roviq-ops.pages.dev"
             "https://roviq-service.pages.dev/fleet/"
           )
           markers=(

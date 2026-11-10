@@ -69,6 +69,13 @@ android {
             manifestPlaceholders["appIcon"] = "@drawable/ic_roviq_ops"
             buildConfigField("String", "APP_URL", "\"https://roviq-ops.pages.dev\"")
         }
+        create("shop") {
+            dimension = "product"
+            applicationId = "com.roviq.shop"
+            resValue("string", "app_name", "ROVIQ Shop OS")
+            manifestPlaceholders["appIcon"] = "@drawable/ic_roviq_shop"
+            buildConfigField("String", "APP_URL", "\"https://roviq-shop.pages.dev\"")
+        }
     }
 
     val keystorePath = System.getenv("ROVIQ_ANDROID_KEYSTORE_PATH")

@@ -23,7 +23,7 @@ class ObdWebBridge(private val activity: Activity, private val view: WebView) : 
     private var confirmation: AlertDialog? = null
 
     fun install() {
-        if (BuildConfig.FLAVOR == "ops") return
+        if (BuildConfig.FLAVOR == "ops" || BuildConfig.FLAVOR == "shop") return
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) return
         WebViewCompat.addWebMessageListener(view, "ROVIQObd", origins) { _, message, origin, mainFrame, reply ->
             if (!mainFrame || origin.toString() !in origins) return@addWebMessageListener
