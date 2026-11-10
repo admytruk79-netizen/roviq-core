@@ -29,7 +29,7 @@ concurrency:
 
 jobs:
   browser-acceptance:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # Playwright 1.55 cannot install Chromium deps on ubuntu-latest (26.04)
     timeout-minutes: 35
     env:
       EDGE_URL: https://roviq-core.admytruk79.workers.dev

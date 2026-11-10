@@ -98,7 +98,7 @@ jobs:
             "/status" \
             "/api/parts/me/orders"
 
-          wait_for_markers "https://roviq-service.pages.dev/ops/" \
+          wait_for_markers "https://roviq-ops.pages.dev/" \
             "/api/admin/transport" \
             "/select-provider" \
             "/api/admin/parts-orders/" \
