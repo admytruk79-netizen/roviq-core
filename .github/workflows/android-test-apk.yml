@@ -1,6 +1,6 @@
 name: Android test APKs
 
-# Installable test builds of Customer, Actor and Ops apps for a phone, without Google Play. Debug builds are signed
+# Installable test builds of Customer, Actor, Ops and Shop OS apps for a phone, without Google Play. Debug builds are signed
 # with Gradle's debug key, so Android installs them after "Install unknown apps" is allowed for
 # the browser. They open the same production web origins as the Play builds. Each run replaces
 # the APKs on the "test-apk" prerelease, so the download link stays the same.
@@ -43,9 +43,9 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
-      - name: Build Customer, Actor and Ops APKs
+      - name: Build Customer, Actor, Ops and Shop OS APKs
         working-directory: android-app
-        run: gradle --no-daemon :app:assembleCustomerDebug :app:assembleActorDebug :app:assembleOpsDebug
+        run: gradle --no-daemon :app:assembleCustomerDebug :app:assembleActorDebug :app:assembleOpsDebug :app:assembleShopDebug
 
       - name: Collect APKs
         shell: bash
@@ -55,6 +55,7 @@ jobs:
           cp android-app/app/build/outputs/apk/customer/debug/app-customer-debug.apk dist-apk/roviq-customer-test.apk
           cp android-app/app/build/outputs/apk/actor/debug/app-actor-debug.apk dist-apk/roviq-actor-test.apk
           cp android-app/app/build/outputs/apk/ops/debug/app-ops-debug.apk dist-apk/roviq-ops-test.apk
+          cp android-app/app/build/outputs/apk/shop/debug/app-shop-debug.apk dist-apk/roviq-shop-test.apk
           ls -l dist-apk
 
       - name: Verify signed APKs and separate package identities
@@ -62,7 +63,7 @@ jobs:
         run: |
           set -euo pipefail
           tools_dir="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
-          for product in customer actor ops; do
+          for product in customer actor ops shop; do
             apk="dist-apk/roviq-${product}-test.apk"
             "$tools_dir/apksigner" verify --verbose "$apk"
             "$tools_dir/aapt" dump badging "$apk" > "dist-apk/${product}-manifest.txt"
@@ -72,6 +73,9 @@ jobs:
           grep -q "package: name='com.roviq.ops'" dist-apk/ops-manifest.txt
           grep -q "application-label:'ROVIQ Ops'" dist-apk/ops-manifest.txt
           grep -q "launchable-activity:" dist-apk/ops-manifest.txt
+          grep -q "package: name='com.roviq.shop'" dist-apk/shop-manifest.txt
+          grep -q "application-label:'ROVIQ Shop OS'" dist-apk/shop-manifest.txt
+          grep -q "launchable-activity:" dist-apk/shop-manifest.txt
           (cd dist-apk && sha256sum *.apk > SHA256SUMS.txt)
 
       - uses: actions/upload-artifact@v4
@@ -88,10 +92,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          notes="Test builds from ${GITHUB_SHA::7} (run ${GITHUB_RUN_NUMBER}). On the phone: download, open, allow installing from this source. Customer = ROVIQ Customer, Actor = ROVIQ Actor (technicians, tow, shops, parts, mobility). Ops = separate admin app. Not for Google Play."
+          notes="Test builds from ${GITHUB_SHA::7} (run ${GITHUB_RUN_NUMBER}). On the phone: download, open, allow installing from this source. Customer = ROVIQ Customer, Actor = ROVIQ Actor (technicians, tow, shops, parts, mobility). Ops = separate admin app. Shop OS = standalone shop management app. Not for Google Play."
           if gh release view test-apk >/dev/null 2>&1; then
             gh release edit test-apk --prerelease --title "ROVIQ test APKs" --notes "$notes" --target "$GITHUB_SHA"
           else
             gh release create test-apk --prerelease --title "ROVIQ test APKs" --notes "$notes" --target "$GITHUB_SHA"
           fi
-          gh release upload test-apk dist-apk/roviq-customer-test.apk dist-apk/roviq-actor-test.apk dist-apk/roviq-ops-test.apk dist-apk/SHA256SUMS.txt --clobber
+          gh release upload test-apk dist-apk/roviq-customer-test.apk dist-apk/roviq-actor-test.apk dist-apk/roviq-ops-test.apk dist-apk/roviq-shop-test.apk dist-apk/SHA256SUMS.txt --clobber
